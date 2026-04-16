@@ -1,0 +1,33 @@
+# Header Briefing Skill
+
+> A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that fetches intelligence briefings from [Header](https://joinheader.com) and surfaces recommendations relevant to the current project. Public briefings work with no authentication; API-key workflows enable custom project-specific topics.
+
+Header is a continuous-learning platform that synthesizes curated RSS, YouTube, newsletter, and Reddit sources into focused briefings — turning information into behavior change rather than aggregating more content. Core concepts: **Topics** group sources and goals, **Goals** define what to learn, **Source Groups** are collections of content feeds, and **Briefings** are the synthesized digests produced by analyzing recent content against a goal.
+
+This skill is a thin, declarative wrapper: a single `SKILL.md` drives Claude Code to call Header's public API, read the current workspace, and propose actionable changes. No runtime, no build step, no dependencies — just markdown.
+
+## Skill files
+
+- [header-briefing/SKILL.md](https://raw.githubusercontent.com/Header-inc/Header-skill/main/header-briefing/SKILL.md): The skill definition. Contains the default agentic-coding briefing flow, public topic browsing, custom-briefing (API key) workflow, and full response-field reference.
+- [README.md](https://raw.githubusercontent.com/Header-inc/Header-skill/main/README.md): Installation (quick-install curl, git clone, project-local), usage, and configuration.
+- [LICENSE](https://raw.githubusercontent.com/Header-inc/Header-skill/main/LICENSE): MIT.
+
+## Header API endpoints used by this skill
+
+- `GET https://joinheader.com/api/v2/topics/public/{topic_id}`: Public topic metadata, including `latest_briefing.id`. Default topic is the "Self Improving Agent" briefing at `1991163f-be9c-4df2-a33c-046a4d1357e1`.
+- `GET https://joinheader.com/api/v2/public/briefings/{briefing_id}`: Full briefing (summary, key_developments, source_articles). No auth required.
+- `GET https://joinheader.com/api/v2/topics/public/catalog`: Browse all public topics.
+- `POST https://joinheader.com/api/v2/topics/`: Create a custom topic (requires `Authorization: Bearer $HEADER_API_KEY`). Default source group `64981a34-3b8b-4064-a391-22f4534c229b` covers AI agent frameworks, MCP, and coding tools.
+- `POST https://joinheader.com/api/v2/goals/{goal_id}/briefings`: Trigger a new briefing for an existing goal (requires API key).
+- `GET https://joinheader.com/api/v2/briefings/{briefing_id}`: Check status of a private briefing (`IN_PROGRESS`, `COMPLETED`, `FAILED`).
+- `PUT https://joinheader.com/api/v2/goals/{goal_id}`: Update goal description and keywords.
+
+## Header product docs
+
+- [Header docs home](https://joinheader.com/docs): Overview of the service, core concepts, and API.
+- [Header dashboard](https://joinheader.com): Sign up, manage topics, and create API keys (`Settings > API Keys`, scope `read`).
+
+## Optional
+
+- [Claude Code skills documentation](https://docs.anthropic.com/en/docs/claude-code/skills): How skills are loaded and invoked.
+- [llms.txt specification](https://llmstxt.org): The format this file follows.
