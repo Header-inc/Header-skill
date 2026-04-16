@@ -8,15 +8,30 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that fetch
 
 ## Installation
 
-### Option 1: Global (available in all projects)
+### Option A: Quick install (global, one command)
 
 ```bash
-git clone https://github.com/Header-inc/Header-skill.git
-mkdir -p ~/.claude/skills/header-briefing
-cp Header-skill/header-briefing/SKILL.md ~/.claude/skills/header-briefing/SKILL.md
+mkdir -p ~/.claude/skills/header-briefing && curl -sL https://raw.githubusercontent.com/Header-inc/Header-skill/main/header-briefing/SKILL.md -o ~/.claude/skills/header-briefing/SKILL.md
 ```
 
-### Option 2: Project-local (available only in one project)
+### Option B: Clone the repo (global, easier to update)
+
+This skill is in beta and under active development. Keeping a local clone makes it easy to pull updates:
+
+```bash
+git clone https://github.com/Header-inc/Header-skill.git ~/Header-skill
+mkdir -p ~/.claude/skills/header-briefing
+cp ~/Header-skill/header-briefing/SKILL.md ~/.claude/skills/header-briefing/SKILL.md
+```
+
+To update later:
+
+```bash
+cd ~/Header-skill && git pull
+cp header-briefing/SKILL.md ~/.claude/skills/header-briefing/SKILL.md
+```
+
+### Option C: Project-local (available only in one project)
 
 ```bash
 git clone https://github.com/Header-inc/Header-skill.git
@@ -25,6 +40,8 @@ cp Header-skill/header-briefing/SKILL.md .claude/skills/header-briefing/SKILL.md
 ```
 
 Start a new Claude Code session (or restart your current one) to pick up the skill.
+
+> **Note:** If you install both globally and in a project, the global version takes precedence and the project-local copy is silently ignored. Pick one method per skill name.
 
 ## Usage
 
