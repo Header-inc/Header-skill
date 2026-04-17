@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that fetches intelligence briefings from [Header](https://joinheader.com) and surfaces recommendations relevant to your current project.
+A skill for agentic coding tools that fetches intelligence briefings from [Header](https://joinheader.com) and surfaces recommendations relevant to your current project. Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), but works in any agent with shell access (Cursor, Aider, OpenAI Codex CLI, Goose, and others) — the skill uses plain `curl` under the hood.
 
 [Header](https://joinheader.com) generates intelligence briefings from curated RSS and YouTube sources covering AI agent frameworks, MCP, coding tools, and related topics.
 
@@ -42,6 +42,16 @@ cp Header-skill/header-briefing/SKILL.md .claude/skills/header-briefing/SKILL.md
 Start a new Claude Code session (or restart your current one) to pick up the skill.
 
 > **Note:** If you install both globally and in a project, the global version takes precedence and the project-local copy is silently ignored. Pick one method per skill name.
+
+### Using with other harnesses (Cursor, Aider, Codex CLI, etc.)
+
+The skill lives in a single Markdown file — `header-briefing/SKILL.md` — and all API calls are plain `curl`. To use it outside Claude Code, point your agent at that file as a rules / conventions / system-prompt fragment:
+
+- **Cursor**: add `header-briefing/SKILL.md` as a project rule.
+- **Aider**: `aider --read header-briefing/SKILL.md` (or add to `CONVENTIONS.md`).
+- **OpenAI Codex CLI / Goose / Cline / other**: paste or reference the file contents in your agent's instructions.
+
+The frontmatter (`name`, `description`, `allowed-tools`) is Claude-Code-specific and is safely ignored by other harnesses.
 
 ## Usage
 

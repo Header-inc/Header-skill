@@ -1,12 +1,14 @@
 ---
 name: header-briefing
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
-allowed-tools: WebFetch
+allowed-tools: Bash
 ---
 
 # Header Briefing Reader
 
 [Header](https://joinheader.com) generates intelligence briefings from curated RSS and YouTube sources. This skill fetches briefings and analyzes them for relevance to the current project. The default workflow requires no authentication.
+
+> This skill uses `curl` so it runs in any agent with shell access (Claude Code, Cursor, Aider, OpenAI Codex CLI, Goose, etc.). Claude Code users may substitute `WebFetch` for the read-only GETs if they prefer.
 
 ## Default: Agentic Coding Briefing
 
@@ -14,19 +16,19 @@ Fetch the latest "Self Improving Agent" briefing and check for suggestions relev
 
 ### Step 1 — Get the latest briefing ID
 
-Use the WebFetch tool:
+```bash
+curl -s https://joinheader.com/api/v2/topics/public/1991163f-be9c-4df2-a33c-046a4d1357e1
+```
 
-- **URL**: `https://joinheader.com/api/v2/topics/public/1991163f-be9c-4df2-a33c-046a4d1357e1`
-- **Prompt**: `Return the JSON object. I need the latest_briefing.id value.`
-
-Extract the `latest_briefing.id` from the response — this is the briefing ID for Step 2.
+Extract the `latest_briefing.id` from the JSON response — this is the briefing ID for Step 2.
 
 ### Step 2 — Fetch the full briefing
 
-Use the WebFetch tool with the briefing ID from Step 1:
+```bash
+curl -s https://joinheader.com/api/v2/public/briefings/{briefing_id}
+```
 
-- **URL**: `https://joinheader.com/api/v2/public/briefings/{briefing_id}`
-- **Prompt**: `Return the full JSON response. I need: summary, key_developments, source_articles (title and url for each), and generated_at.`
+From the JSON response, pull out: `summary`, `key_developments`, `source_articles` (title and url for each), and `generated_at`.
 
 Note: `key_developments` is a JSON-encoded string — parse it from the string into a structured list.
 
@@ -48,8 +50,11 @@ After presenting recommendations, ask the user which (if any) they'd like to imp
 
 If the default topic returns 404, browse the public catalog to find a relevant topic:
 
-- **URL**: `https://joinheader.com/api/v2/topics/public/catalog`
-- **Prompt**: `Return all topics with their id, name, description, and subscriber_count.`
+```bash
+curl -s https://joinheader.com/api/v2/topics/public/catalog
+```
+
+Pick a topic from the returned list (each entry has `id`, `name`, `description`, `subscriber_count`) and use its `id` in place of the default topic ID above.
 
 ---
 
@@ -57,17 +62,21 @@ Want a briefing tailored to this specific project? Sign up at [joinheader.com](h
 
 ## Browse Public Topics
 
-List all public topics using WebFetch:
+List all public topics:
 
-- **URL**: `https://joinheader.com/api/v2/topics/public/catalog`
-- **Prompt**: `Return all topics with their id, name, description, and subscriber_count.`
+```bash
+curl -s https://joinheader.com/api/v2/topics/public/catalog
+```
+
+Each entry in the response has `id`, `name`, `description`, and `subscriber_count`.
 
 Get details for a specific topic (includes latest briefing summary):
 
-- **URL**: `https://joinheader.com/api/v2/topics/public/{topic_id}`
-- **Prompt**: `Return the topic name, description, and latest_briefing details.`
+```bash
+curl -s https://joinheader.com/api/v2/topics/public/{topic_id}
+```
 
-Then fetch the full briefing using the `latest_briefing.id` via the public briefing endpoint (same as Default Step 2).
+The response includes the topic `name`, `description`, and `latest_briefing` details. Then fetch the full briefing using the `latest_briefing.id` via the public briefing endpoint (same as Default Step 2).
 
 ## Custom Briefings (API Key Required)
 
@@ -83,7 +92,7 @@ export HEADER_API_KEY="hdr_sk_..."
 
 ### Create a custom topic
 
-Use the Bash tool to POST to the Header API. This creates a topic with a default goal and auto-triggers the first briefing:
+POST to the Header API to create a topic with a default goal and auto-trigger the first briefing:
 
 ```bash
 curl -s -X POST https://joinheader.com/api/v2/topics/ \
@@ -102,19 +111,12 @@ The response includes `first_briefing_id` — generation runs asynchronously.
 
 ### Check briefing status
 
-Use the WebFetch tool:
-
-- **URL**: `https://joinheader.com/api/v2/briefings/{briefing_id}`
-- **Prompt**: `Return the status and summary fields from this JSON response.`
-
-Note: this endpoint requires the `Authorization: Bearer $HEADER_API_KEY` header for private briefings. If WebFetch cannot set headers, use Bash with curl instead:
-
 ```bash
 curl -s -H "Authorization: Bearer $HEADER_API_KEY" \
   https://joinheader.com/api/v2/briefings/{briefing_id}
 ```
 
-Status is `IN_PROGRESS` while generating, `COMPLETED` when ready, or `FAILED` on error.
+Read the `status` and `summary` fields from the response. Status is `IN_PROGRESS` while generating, `COMPLETED` when ready, or `FAILED` on error.
 
 ### Generate a new briefing
 

@@ -1,10 +1,10 @@
 # Header Briefing Skill
 
-> A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that fetches intelligence briefings from [Header](https://joinheader.com) and surfaces recommendations relevant to the current project. Public briefings work with no authentication; API-key workflows enable custom project-specific topics.
+> A skill for agentic coding tools that fetches intelligence briefings from [Header](https://joinheader.com) and surfaces recommendations relevant to the current project. Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) but works in any agent with shell access (Cursor, Aider, OpenAI Codex CLI, Goose). Public briefings work with no authentication; API-key workflows enable custom project-specific topics.
 
 Header is a continuous-learning platform that synthesizes curated RSS, YouTube, newsletter, and Reddit sources into focused briefings — turning information into behavior change rather than aggregating more content. Core concepts: **Topics** group sources and goals, **Goals** define what to learn, **Source Groups** are collections of content feeds, and **Briefings** are the synthesized digests produced by analyzing recent content against a goal.
 
-This skill is a thin, declarative wrapper: a single `SKILL.md` drives Claude Code to call Header's public API, read the current workspace, and propose actionable changes. No runtime, no build step, no dependencies — just markdown.
+This skill is a thin, declarative wrapper: a single `SKILL.md` drives the agent to call Header's public API via `curl`, read the current workspace, and propose actionable changes. No runtime, no build step, no dependencies beyond `curl` — just markdown.
 
 ## Skill files
 
