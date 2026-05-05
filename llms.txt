@@ -15,12 +15,13 @@ This skill is a thin, declarative wrapper: a single `SKILL.md` drives the agent 
 ## Header API endpoints used by this skill
 
 - `GET https://joinheader.com/api/v2/topics/public/{topic_id}`: Public topic metadata, including `latest_briefing.id`. Default topic is the "Self Improving Agent" briefing at `1991163f-be9c-4df2-a33c-046a4d1357e1`.
-- `GET https://joinheader.com/api/v2/public/briefings/{briefing_id}`: Full briefing (summary, key_developments, source_articles). No auth required.
+- `GET https://joinheader.com/api/v2/public/briefings/{briefing_id}`: Full briefing (summary, key_developments, source_articles). No auth required. JSON only — `Accept: text/markdown` is not honored on this endpoint.
 - `GET https://joinheader.com/api/v2/topics/public/catalog`: Browse all public topics.
 - `POST https://joinheader.com/api/v2/topics/`: Create a custom topic (requires `Authorization: Bearer $HEADER_API_KEY`). Default source group `64981a34-3b8b-4064-a391-22f4534c229b` covers AI agent frameworks, MCP, and coding tools.
 - `POST https://joinheader.com/api/v2/goals/{goal_id}/briefings`: Trigger a new briefing for an existing goal (requires API key).
-- `GET https://joinheader.com/api/v2/briefings/{briefing_id}`: Check status of a private briefing (`IN_PROGRESS`, `COMPLETED`, `FAILED`).
-- `PUT https://joinheader.com/api/v2/goals/{goal_id}`: Update goal description and keywords.
+- `GET https://joinheader.com/api/v2/briefings/{briefing_id}`: Check status of a private briefing (`IN_PROGRESS`, `COMPLETED`, `FAILED`). Honors `Accept: text/markdown` for a pre-rendered markdown response.
+- `PUT https://joinheader.com/api/v2/goals/{goal_id}`: Update goal description, keywords, or `memory_enabled` (kicks off async Forge provisioning; poll `memory_state` until `enabled`/`error`).
+- `GET https://joinheader.com/api/v2/topics/dashboard?since=<iso8601>`: Agent-shaped dashboard — returns topics with status changes since the timestamp, plus a server-computed `next_action` enum (`briefing_ready` / `briefing_failed` / `briefing_in_progress` / `nothing`) for cron / scheduled runs.
 
 ## Header product docs
 
