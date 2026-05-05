@@ -51,7 +51,7 @@ The skill lives in a single Markdown file — `header-briefing/SKILL.md` — and
 - **Aider**: `aider --read header-briefing/SKILL.md` (or add to `CONVENTIONS.md`).
 - **OpenAI Codex CLI / Goose / Cline / other**: paste or reference the file contents in your agent's instructions.
 
-The frontmatter (`name`, `description`, `allowed-tools`) is Claude-Code-specific and is safely ignored by other harnesses.
+The frontmatter (`name`, `description`, `when_to_use`, `argument-hint`, `allowed-tools`) is Claude-Code-specific and is safely ignored by other harnesses. Body sections occasionally use a `**Claude Code only:**` callout for behaviors that depend on Claude Code features (like `$ARGUMENTS` substitution); other harnesses can read past those callouts safely.
 
 ## Usage
 
@@ -104,6 +104,8 @@ With an API key, you can:
 |----------|----------|-------------|
 | `HEADER_API_KEY` | No | Header API key (`hdr_sk_...`) for authenticated workflows. Only needed for custom topics and on-demand briefing generation. |
 | `HEADER_LANGUAGE` _(Beta)_ | No | Language for output rendering (e.g. `Turkish`, `Spanish`). Defaults to English. The agent translates the presentation; API content stays English. **Beta:** translation quality varies by language; proper nouns, code identifiers, and URLs are kept verbatim. |
+| `HEADER_DEFAULT_TOPIC` | No | Topic UUID used when no argument is passed. Defaults to the "Self Improving Agent" public topic. |
+| `HEADER_STALENESS_DAYS` | No | Maximum briefing age (in days) before warning that content may be stale. Defaults to 7. |
 
 ## License
 
