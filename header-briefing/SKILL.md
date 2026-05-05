@@ -177,18 +177,56 @@ The response includes `first_briefing_id` — generation runs asynchronously.
 ### Check briefing status
 
 ```bash
-curl -s -H "Authorization: Bearer $HEADER_API_KEY" \
+curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
   https://joinheader.com/api/v2/briefings/{briefing_id}
 ```
 
 Read the `status` and `summary` fields from the response. Status is `IN_PROGRESS` while generating, `COMPLETED` when ready, or `FAILED` on error.
+
+**Markdown rendering:** the authenticated briefing endpoint honors content negotiation. Add `-H "Accept: text/markdown"` to receive a pre-rendered markdown document instead of JSON — no client-side parsing needed:
+
+```bash
+curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
+  -H "Accept: text/markdown" \
+  https://joinheader.com/api/v2/briefings/{briefing_id}
+```
+
+(Note: the public briefing endpoint `/api/v2/public/briefings/{id}` returns JSON only; markdown content negotiation is authenticated-path only.)
+
+### Polling IN_PROGRESS briefings
+
+Initial briefings for a fresh topic typically take 1–3 minutes; some take longer. Don't poll in a tight loop.
+
+**Cadence:** check at 30s, then 60s, then 120s, then every 120s. Give up after 10 minutes total and tell the user the briefing is taking longer than expected.
+
+**Blocking pattern** — when the user is waiting on the result:
+
+```bash
+for delay in 30 60 120 120 120 120; do
+  sleep "$delay"
+  status=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
+    https://joinheader.com/api/v2/briefings/{briefing_id} | jq -r .status)
+  case "$status" in
+    COMPLETED) break ;;
+    FAILED) echo "Briefing failed"; exit 1 ;;
+  esac
+done
+```
+
+**Non-blocking pattern** — when the user has other work to do:
+
+1. Tell the user the briefing is generating; record the `briefing_id`.
+2. Return control. The user re-invokes the skill (or asks for the briefing) later.
+3. On the next invocation, fetch by ID and present.
+
+**Claude Code only:** non-blocking can be automated with `ScheduleWakeup` so the agent reminds the user when the briefing is ready, without busy-waiting in the foreground.
 
 ### Generate a new briefing
 
 For an existing goal (use `default_goal_id` from your topic):
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer $HEADER_API_KEY" \
+curl -sS -w "\n%{http_code}" -X POST -H "Authorization: Bearer $HEADER_API_KEY" \
   https://joinheader.com/api/v2/goals/{goal_id}/briefings
 ```
 
@@ -197,11 +235,58 @@ curl -s -X POST -H "Authorization: Bearer $HEADER_API_KEY" \
 Refine the goal description or keywords based on what's most useful:
 
 ```bash
-curl -s -X PUT https://joinheader.com/api/v2/goals/{goal_id} \
+curl -sS -w "\n%{http_code}" -X PUT https://joinheader.com/api/v2/goals/{goal_id} \
   -H "Authorization: Bearer $HEADER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"description": "Updated focus areas...", "keywords": ["MCP", "agent memory"]}'
 ```
+
+### Memory provisioning
+
+Goals can be promoted to "memory-enabled" so future briefings retain context across runs (Forge-backed). Memory provisioning is asynchronous; poll the goal's `memory_state` until it reaches a terminal state.
+
+Enable memory:
+
+```bash
+curl -sS -w "\n%{http_code}" -X PUT https://joinheader.com/api/v2/goals/{goal_id} \
+  -H "Authorization: Bearer $HEADER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"memory_enabled": true}'
+```
+
+Poll `memory_state`:
+
+```bash
+curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
+  https://joinheader.com/api/v2/goals/{goal_id} | jq -r .memory_state
+```
+
+| `memory_state` | Meaning | Action |
+|---|---|---|
+| `disabled` | Memory not enabled. | PUT with `memory_enabled: true` if desired. |
+| `provisioning` | Forge is provisioning. | Poll every 30s; expect ~1–2 min. |
+| `enabled` | Ready. Future briefings benefit from memory. | Terminal — proceed. |
+| `error` | Provisioning failed. | Tell the user; retry the PUT or contact support. |
+
+### Scheduled / agent loop
+
+For agents running on a cron or scheduled trigger (e.g., a daily check-in), use `GET /api/v2/topics/dashboard` with `?since=<iso8601>` to get only topics whose latest briefing changed after the timestamp. The response includes a server-computed `next_action` enum so the agent knows whether to surface a new briefing without re-deriving it client-side.
+
+```bash
+curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
+  "https://joinheader.com/api/v2/topics/dashboard?since=2026-05-01T00:00:00Z"
+```
+
+Per-topic `next_action` values:
+
+| `next_action` | Meaning | Suggested behavior |
+|---|---|---|
+| `briefing_ready` | A new completed briefing is available. | Fetch `latest_briefing.id`, present to the user. |
+| `briefing_failed` | The most recent generation failed. | Tell the user; suggest re-trigger via `POST /goals/{id}/briefings`. |
+| `briefing_in_progress` | A briefing is still generating. | Apply the polling cadence above. |
+| `nothing` | No change since `?since`. | Skip. |
+
+Pass the timestamp from the previous run as `?since` so each tick only surfaces what's new.
 
 For full API documentation, see [joinheader.com/docs](https://joinheader.com/docs).
 
