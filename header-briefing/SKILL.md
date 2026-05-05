@@ -64,13 +64,13 @@ The audit happens locally — no project data is sent to Header. The shape of th
 
 2. **Find what the team already knows is broken, missing, or pending.** Look for learnings, post-mortems, runbooks, retrospectives, architecture/decision records, changelogs, roadmaps, backlogs/TODO docs, and incident reports — at the repo root and in any conventional documentation directory. Also do a quick scan for in-code `TODO`/`FIXME`/`HACK` markers as a density signal. Cite source files when you reference an item.
 
-3. **Build the audit summary** using exactly this structure:
+3. **Build the audit summary.** This is the structured input to Step 4 — its job is to make the comparison between the briefing's content and the project's actual state explicit, so recommendations are grounded in observed reality rather than generic best-practice. Populate each row with items relevant to the briefing topic, not an exhaustive inventory:
 
-   - **Stack** — languages, frameworks, runtime versions
-   - **Tooling** — package manager, build/test/CI tooling, agent-related deps (MCP servers, AI SDKs, etc.)
-   - **Known issues / pain points** — themes drawn from step 2; group similar items; cite the source file for each.
-   - **Mentioned in briefing** — items from the briefing's `key_developments` or `summary` that relate to anything in Stack, Tooling, or Known issues
-   - **Gaps** — patterns/tools the briefing endorses that this project does not yet use
+   - **Stack** — languages, frameworks, runtime versions. The topic-relevance filter: items here scope which parts of the briefing apply at all (a React pattern doesn't help a Go shop).
+   - **Tooling** — package manager, build/test/CI tooling, agent-related deps (MCP servers, AI SDKs, etc.). The layer where briefings about new tools, runners, and workflows usually land.
+   - **Known issues / pain points** — themes drawn from step 2; group similar items and cite the source file. The highest-leverage row: a briefing item that addresses a named pain point jumps the queue in step 4.
+   - **Mentioned in briefing** — items from the briefing's `key_developments` or `summary` that overlap anything in Stack, Tooling, or Known issues. The first-pass relevance filter.
+   - **Gaps** — patterns the briefing endorses that this project doesn't yet use, including cases where the project's current approach is now considered legacy or superseded.
 
 4. **Surface recommendations** drawn from **Mentioned in briefing**, **Gaps**, and especially anything that addresses an entry in **Known issues / pain points**. Prioritize the last group — the team has already named these as problems, so a briefing-backed remediation is more actionable than a greenfield suggestion. Each recommendation gets one sentence of rationale tying it to a specific item from the audit, citing the source file when it maps to a known issue.
 
