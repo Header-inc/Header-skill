@@ -1,8 +1,12 @@
 ---
 name: header-briefing
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
+when_to_use: Use when the user asks for the morning briefing, what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
+argument-hint: "[topic-name-or-uuid]"
 allowed-tools: Bash
 ---
+
+*The `when_to_use`, `argument-hint`, and `allowed-tools` frontmatter fields are honored by Claude Code; other harnesses ignore them safely.*
 
 # Header Briefing Reader
 
@@ -18,16 +22,30 @@ All configuration is via environment variables. None are required for the defaul
 |---|---|---|
 | `HEADER_API_KEY` | — | API key (`hdr_sk_...`) for authenticated workflows (custom topics, on-demand generation). |
 | `HEADER_LANGUAGE` _(Beta)_ | `English` | Language for output rendering. API content stays English; the agent translates the presentation. Set to `Turkish`, `Spanish`, etc. **Beta:** translation quality varies by language; proper nouns, identifiers, and URLs are kept verbatim. Report issues at [joinheader.com](https://joinheader.com). |
+| `HEADER_DEFAULT_TOPIC` | `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent) | Topic UUID used when no argument is passed. |
+| `HEADER_STALENESS_DAYS` | `7` | Maximum briefing age in days before warning the user the content may be stale. |
 
 ## Default: Agentic Coding Briefing
 
-Fetch the latest "Self Improving Agent" briefing and check for suggestions relevant to this project.
+Fetch the latest briefing for the resolved topic (default: "Self Improving Agent") and check for suggestions relevant to this project.
+
+### Step 0 — Resolve the topic
+
+Determine the topic UUID using this fallback chain (first match wins):
+
+1. **Explicit argument** — if the user passed a topic identifier:
+   - UUID format → use directly as the topic ID.
+   - Anything else → search `/api/v2/topics/public/catalog` for a case-insensitive substring match on `name`. If exactly one matches, use its `id`. If multiple match, ask the user to disambiguate. If none match, fall through.
+2. **`HEADER_DEFAULT_TOPIC`** env var → use as the topic ID.
+3. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
+
+**Claude Code only:** the explicit argument is delivered as `$ARGUMENTS` when invoked via `/header-briefing <topic>`. Other harnesses: extract the topic identifier from the user's message text.
 
 ### Step 1 — Get the latest briefing ID
 
 ```bash
 curl -sS --retry 1 -w "\n%{http_code}" \
-  https://joinheader.com/api/v2/topics/public/1991163f-be9c-4df2-a33c-046a4d1357e1
+  https://joinheader.com/api/v2/topics/public/{topic_id}
 ```
 
 Extract the `latest_briefing.id` from the JSON response — this is the briefing ID for Step 2.
@@ -42,6 +60,8 @@ curl -sS --retry 1 -w "\n%{http_code}" \
 From the JSON response, pull out: `summary`, `key_developments`, `source_articles` (title and url for each), and `generated_at`.
 
 Note: `key_developments` is a JSON-encoded string — parse it from the string into a structured list.
+
+**Staleness check:** Compare `generated_at` against the current date. If the difference exceeds `${HEADER_STALENESS_DAYS:-7}` days, prepend a one-line warning to the output (e.g., "⚠ This briefing is 12 days old — the latest developments may not be reflected"). With an API key, suggest re-triggering generation via `POST /api/v2/goals/{goal_id}/briefings` (see Custom Briefings).
 
 ### Error handling
 
@@ -78,7 +98,18 @@ The audit happens locally — no project data is sent to Header. The shape of th
 
 After presenting recommendations, ask the user which (if any) they'd like to implement. If the user selects one or more, proceed with implementation in the current project.
 
+**Output format:** Detect modifiers in the user's invocation and adjust depth before presenting:
+
+| User says | Show |
+|---|---|
+| "summary", "tl;dr", "short" | Just the briefing `summary` (no audit, no recommendations). |
+| "key developments", "highlights" | The parsed `key_developments` list with one-line takes. |
+| "sources", "links" | Just `source_articles` (title + url). |
+| _none of the above_ (default) | Full output: summary + audit + recommendations. |
+
 **Output language:** Render all user-facing output in `${HEADER_LANGUAGE:-English}`. Translate prose, headings, and rationale; keep proper nouns, ticker symbols, code identifiers, and URLs untouched. API request/response content remains English on the wire.
+
+**Caching within a session:** After fetching a briefing, hold its `briefing_id` and `generated_at` in conversation context. If the skill is re-invoked for the same topic in the same session, reuse the cached briefing instead of re-fetching — unless the user says "refresh", "latest", "new", or asks for a fresh briefing.
 
 ### Fallback
 
