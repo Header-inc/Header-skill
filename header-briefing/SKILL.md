@@ -2,7 +2,7 @@
 name: header-briefing
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
 when_to_use: Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
-argument-hint: "[topic-name-or-uuid]"
+argument-hint: "[topic-name-or-uuid-or-briefing-url]"
 allowed-tools: Bash
 ---
 
@@ -33,8 +33,9 @@ Fetch the latest briefing for the resolved topic (default: "Self Improving Agent
 
 Determine the topic UUID using this fallback chain (first match wins):
 
-1. **Explicit argument** — if the user passed a topic identifier:
-   - UUID format → use directly as the topic ID.
+1. **Explicit argument** — if the user passed an identifier:
+   - URL containing `/briefings/<uuid>` (e.g., `https://joinheader.com/briefings/<uuid>`) → extract the UUID, treat it as a **briefing ID**, skip Step 1 entirely, and go straight to Step 2 (`/api/v2/public/briefings/<uuid>`).
+   - URL containing `/topics/<uuid>` or a bare UUID → use as the **topic ID** and proceed to Step 1.
    - Anything else → search `/api/v2/topics/public/catalog` for a case-insensitive substring match on `name`. If exactly one matches, use its `id`. If multiple match, ask the user to disambiguate. If none match, fall through.
 2. **`HEADER_DEFAULT_TOPIC`** env var → use as the topic ID.
 3. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
@@ -42,6 +43,8 @@ Determine the topic UUID using this fallback chain (first match wins):
 **Claude Code only:** the explicit argument is delivered as `$ARGUMENTS` when invoked via `/header-briefing <topic>`. Other harnesses: extract the topic identifier from the user's message text.
 
 ### Step 1 — Get the latest briefing ID
+
+*Skip this step if Step 0 resolved a briefing ID directly (i.e., a `/briefings/<uuid>` URL was passed) — go straight to Step 2 with that ID.*
 
 ```bash
 curl -sS --retry 1 -w "\n%{http_code}" \
