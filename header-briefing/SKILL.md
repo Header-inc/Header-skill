@@ -17,7 +17,7 @@ All configuration is via environment variables. None are required for the defaul
 | Variable | Default | Description |
 |---|---|---|
 | `HEADER_API_KEY` | — | API key (`hdr_sk_...`) for authenticated workflows (custom topics, on-demand generation). |
-| `HEADER_LANGUAGE` | `English` | Language for output rendering. API content stays English; the agent translates the presentation. Set to `Turkish`, `Spanish`, etc. |
+| `HEADER_LANGUAGE` _(Beta)_ | `English` | Language for output rendering. API content stays English; the agent translates the presentation. Set to `Turkish`, `Spanish`, etc. **Beta:** translation quality varies by language; proper nouns, identifiers, and URLs are kept verbatim. Report issues at [joinheader.com](https://joinheader.com). |
 
 ## Default: Agentic Coding Briefing
 
@@ -58,25 +58,21 @@ Apply to every Header API call. Don't auto-retry blindly; inform the user before
 
 ### Step 3 — Audit the workspace and analyze relevance
 
-After fetching the briefing (not before — the audit happens locally and no project data is sent to Header):
+The audit happens locally — no project data is sent to Header. The shape of the audit is fixed; the inputs vary by project. Use your normal repo-exploration tools (directory listings, file reads) to find relevant artifacts; do not rely on a hardcoded file list.
 
-1. **Inventory the project.** Run a single shell pass that prints whichever of the following exist (skip silently if missing):
+1. **Identify the project's stack and tooling** from whatever metadata the project happens to use — package manifests, lockfiles, language version files, build/test/CI configs, container or infrastructure definitions, agent/skill definitions. Read `CLAUDE.md` and the project README if present for stated context and conventions.
 
-   ```bash
-   for f in CLAUDE.md README.md package.json pyproject.toml go.mod Cargo.toml \
-            Gemfile .tool-versions docker-compose.yml; do
-     [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
-   done
-   ```
+2. **Find what the team already knows is broken, missing, or pending.** Look for learnings, post-mortems, runbooks, retrospectives, architecture/decision records, changelogs, roadmaps, backlogs/TODO docs, and incident reports — at the repo root and in any conventional documentation directory. Also do a quick scan for in-code `TODO`/`FIXME`/`HACK` markers as a density signal. Cite source files when you reference an item.
 
-2. **Build the audit summary** using exactly this structure:
+3. **Build the audit summary** using exactly this structure:
 
    - **Stack** — languages, frameworks, runtime versions
    - **Tooling** — package manager, build/test/CI tooling, agent-related deps (MCP servers, AI SDKs, etc.)
-   - **Mentioned in briefing** — items from the briefing's `key_developments` or `summary` that relate to anything in Stack/Tooling
+   - **Known issues / pain points** — themes drawn from step 2; group similar items; cite the source file for each.
+   - **Mentioned in briefing** — items from the briefing's `key_developments` or `summary` that relate to anything in Stack, Tooling, or Known issues
    - **Gaps** — patterns/tools the briefing endorses that this project does not yet use
 
-3. **Surface recommendations** drawn from the **Mentioned in briefing** and **Gaps** rows only. Each recommendation gets one sentence of rationale tying it to a specific item from the audit.
+4. **Surface recommendations** drawn from **Mentioned in briefing**, **Gaps**, and especially anything that addresses an entry in **Known issues / pain points**. Prioritize the last group — the team has already named these as problems, so a briefing-backed remediation is more actionable than a greenfield suggestion. Each recommendation gets one sentence of rationale tying it to a specific item from the audit, citing the source file when it maps to a known issue.
 
 ### Step 4 — Offer to implement
 
