@@ -195,31 +195,40 @@ curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
 
 ### Polling IN_PROGRESS briefings
 
-Initial briefings for a fresh topic typically take 1–3 minutes; some take longer. Don't poll in a tight loop.
+The briefing-creation response (and any subsequent GET while the briefing is still in progress) includes a server-computed `estimated_duration_seconds` based on the number of sources assigned to the goal, plus `source_count`. Use the ETA for cadence — don't hardcode wait times.
 
-**Cadence:** check at 30s, then 60s, then 120s, then every 120s. Give up after 10 minutes total and tell the user the briefing is taking longer than expected.
+**Cadence:** sleep `estimated_duration_seconds` before the first poll, then poll every 30s. Give up at twice the ETA and tell the user the briefing is taking longer than expected. If the field is missing or null, fall back to 300s (5 min).
 
 **Blocking pattern** — when the user is waiting on the result:
 
 ```bash
-for delay in 30 60 120 120 120 120; do
-  sleep "$delay"
+# Trigger generation and capture the ETA from the create response
+resp=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
+  -X POST https://joinheader.com/api/v2/goals/{goal_id}/briefings)
+briefing_id=$(echo "$resp" | jq -r .id)
+eta=$(echo "$resp" | jq -r '.estimated_duration_seconds // 300')
+
+# Wait the estimated duration, then poll on a 30s interval until 2× the ETA
+sleep "$eta"
+deadline=$(( $(date +%s) + 2 * eta ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
   status=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
-    https://joinheader.com/api/v2/briefings/{briefing_id} | jq -r .status)
+    "https://joinheader.com/api/v2/briefings/$briefing_id" | jq -r .status)
   case "$status" in
     COMPLETED) break ;;
     FAILED) echo "Briefing failed"; exit 1 ;;
   esac
+  sleep 30
 done
 ```
 
 **Non-blocking pattern** — when the user has other work to do:
 
-1. Tell the user the briefing is generating; record the `briefing_id`.
-2. Return control. The user re-invokes the skill (or asks for the briefing) later.
+1. Tell the user the briefing is generating, including the ETA from `estimated_duration_seconds` (e.g., "~5 min for 30 sources").
+2. Record the `briefing_id` and return control.
 3. On the next invocation, fetch by ID and present.
 
-**Claude Code only:** non-blocking can be automated with `ScheduleWakeup` so the agent reminds the user when the briefing is ready, without busy-waiting in the foreground.
+**Claude Code only:** non-blocking can be automated with `ScheduleWakeup` — set the delay to `estimated_duration_seconds` so the agent wakes when the briefing should be ready, without busy-waiting in the foreground.
 
 ### Generate a new briefing
 
@@ -302,7 +311,9 @@ For full API documentation, see [joinheader.com/docs](https://joinheader.com/doc
 | `summary` | string | Full markdown briefing text |
 | `key_developments` | string | JSON-encoded array — parse from string into structured list |
 | `source_articles` | array | Source articles used (title, url, metadata) |
-| `stats` | object | Processing statistics |
+| `estimated_duration_seconds` | int? | Server-computed ETA for generation, populated on the create response. Use it to drive polling cadence. May be null on completed/public briefings. |
+| `source_count` | int? | Number of sources assigned to the goal at briefing time. May be null on completed/public briefings. |
+| `stats` | object | Processing statistics (model, tokens, content window, etc.). |
 | `is_public` | bool | Whether the briefing is publicly accessible |
 | `generated_at` | datetime | When the briefing was generated |
 
