@@ -103,6 +103,7 @@ With an API key, you can:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `HEADER_API_KEY` | No | Header API key (`hdr_sk_...`) for authenticated workflows. Only needed for custom topics and on-demand briefing generation. |
+| `HEADER_LANGUAGE` _(Beta)_ | No | Language for output rendering (e.g. `Turkish`, `Spanish`). Defaults to English. The agent translates the presentation; API content stays English. **Beta:** translation quality varies by language; proper nouns, code identifiers, and URLs are kept verbatim. |
 
 ## License
 

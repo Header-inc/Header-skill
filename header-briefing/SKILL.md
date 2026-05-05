@@ -10,6 +10,15 @@ allowed-tools: Bash
 
 > This skill uses `curl` so it runs in any agent with shell access (Claude Code, Cursor, Aider, OpenAI Codex CLI, Goose, etc.). Claude Code users may substitute `WebFetch` for the read-only GETs if they prefer.
 
+## Configuration
+
+All configuration is via environment variables. None are required for the default public-briefing flow.
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEADER_API_KEY` | — | API key (`hdr_sk_...`) for authenticated workflows (custom topics, on-demand generation). |
+| `HEADER_LANGUAGE` _(Beta)_ | `English` | Language for output rendering. API content stays English; the agent translates the presentation. Set to `Turkish`, `Spanish`, etc. **Beta:** translation quality varies by language; proper nouns, identifiers, and URLs are kept verbatim. Report issues at [joinheader.com](https://joinheader.com). |
+
 ## Default: Agentic Coding Briefing
 
 Fetch the latest "Self Improving Agent" briefing and check for suggestions relevant to this project.
@@ -17,7 +26,8 @@ Fetch the latest "Self Improving Agent" briefing and check for suggestions relev
 ### Step 1 — Get the latest briefing ID
 
 ```bash
-curl -s https://joinheader.com/api/v2/topics/public/1991163f-be9c-4df2-a33c-046a4d1357e1
+curl -sS --retry 1 -w "\n%{http_code}" \
+  https://joinheader.com/api/v2/topics/public/1991163f-be9c-4df2-a33c-046a4d1357e1
 ```
 
 Extract the `latest_briefing.id` from the JSON response — this is the briefing ID for Step 2.
@@ -25,33 +35,57 @@ Extract the `latest_briefing.id` from the JSON response — this is the briefing
 ### Step 2 — Fetch the full briefing
 
 ```bash
-curl -s https://joinheader.com/api/v2/public/briefings/{briefing_id}
+curl -sS --retry 1 -w "\n%{http_code}" \
+  https://joinheader.com/api/v2/public/briefings/{briefing_id}
 ```
 
 From the JSON response, pull out: `summary`, `key_developments`, `source_articles` (title and url for each), and `generated_at`.
 
 Note: `key_developments` is a JSON-encoded string — parse it from the string into a structured list.
 
+### Error handling
+
+Apply to every Header API call. Don't auto-retry blindly; inform the user before retrying.
+
+| Condition | Action |
+|---|---|
+| Network failure / DNS / timeout | The `--retry 1` already handles transient blips. If the second attempt fails, tell the user the API is unreachable and stop. |
+| HTTP `429` Too Many Requests | Read the `Retry-After` response header. Wait that many seconds (or 30s if absent), then retry once. If still 429, tell the user and stop. |
+| HTTP `4xx` (other) | Surface the JSON `detail` or `error.message` field to the user. Do not retry. |
+| HTTP `5xx` | Retry once after 5s. If it fails again, tell the user the Header API is having issues. |
+| Empty body or malformed JSON | Tell the user the response was unparseable; suggest the catalog fallback below. |
+| Briefing `status: FAILED` | Don't auto-retry. Tell the user the briefing failed; if they have an API key, suggest re-triggering via `POST /api/v2/goals/{goal_id}/briefings` (Custom Briefings). |
+
 ### Step 3 — Audit the workspace and analyze relevance
 
-After fetching the briefing (not before — the audit happens locally and no project data is sent to Header):
+The audit happens locally — no project data is sent to Header. The shape of the audit is fixed; the inputs vary by project. Use your normal repo-exploration tools (directory listings, file reads) to find relevant artifacts; do not rely on a hardcoded file list.
 
-1. Read the project's CLAUDE.md, README, package.json, or key config files to understand the tech stack, dependencies, and current priorities
-2. Scan for patterns relevant to the briefing's topics (e.g., if the briefing mentions a new MCP pattern, check if the project uses MCP)
-3. Compare the briefing's key developments and summary against what the project currently does
-4. Surface actionable recommendations — new patterns, tools, deprecations, or techniques that apply here
-5. Present findings as a concise list with brief rationale for each
+1. **Identify the project's stack and tooling** from whatever metadata the project happens to use — package manifests, lockfiles, language version files, build/test/CI configs, container or infrastructure definitions, agent/skill definitions. Read `CLAUDE.md` and the project README if present for stated context and conventions.
+
+2. **Find what the team already knows is broken, missing, or pending.** Look for learnings, post-mortems, runbooks, retrospectives, architecture/decision records, changelogs, roadmaps, backlogs/TODO docs, and incident reports — at the repo root and in any conventional documentation directory. Also do a quick scan for in-code `TODO`/`FIXME`/`HACK` markers as a density signal. Cite source files when you reference an item.
+
+3. **Build the audit summary.** This is the structured input to Step 4 — its job is to make the comparison between the briefing's content and the project's actual state explicit, so recommendations are grounded in observed reality rather than generic best-practice. Populate each row with items relevant to the briefing topic, not an exhaustive inventory:
+
+   - **Stack** — languages, frameworks, runtime versions. The topic-relevance filter: items here scope which parts of the briefing apply at all (a React pattern doesn't help a Go shop).
+   - **Tooling** — package manager, build/test/CI tooling, agent-related deps (MCP servers, AI SDKs, etc.). The layer where briefings about new tools, runners, and workflows usually land.
+   - **Known issues / pain points** — themes drawn from step 2; group similar items and cite the source file. The highest-leverage row: a briefing item that addresses a named pain point jumps the queue in step 4.
+   - **Mentioned in briefing** — items from the briefing's `key_developments` or `summary` that overlap anything in Stack, Tooling, or Known issues. The first-pass relevance filter.
+   - **Gaps** — patterns the briefing endorses that this project doesn't yet use, including cases where the project's current approach is now considered legacy or superseded.
+
+4. **Surface recommendations** drawn from **Mentioned in briefing**, **Gaps**, and especially anything that addresses an entry in **Known issues / pain points**. Prioritize the last group — the team has already named these as problems, so a briefing-backed remediation is more actionable than a greenfield suggestion. Each recommendation gets one sentence of rationale tying it to a specific item from the audit, citing the source file when it maps to a known issue.
 
 ### Step 4 — Offer to implement
 
 After presenting recommendations, ask the user which (if any) they'd like to implement. If the user selects one or more, proceed with implementation in the current project.
+
+**Output language:** Render all user-facing output in `${HEADER_LANGUAGE:-English}`. Translate prose, headings, and rationale; keep proper nouns, ticker symbols, code identifiers, and URLs untouched. API request/response content remains English on the wire.
 
 ### Fallback
 
 If the default topic returns 404, browse the public catalog to find a relevant topic:
 
 ```bash
-curl -s https://joinheader.com/api/v2/topics/public/catalog
+curl -sS -w "\n%{http_code}" https://joinheader.com/api/v2/topics/public/catalog
 ```
 
 Pick a topic from the returned list (each entry has `id`, `name`, `description`, `subscriber_count`) and use its `id` in place of the default topic ID above.
