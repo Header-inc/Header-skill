@@ -1,9 +1,10 @@
 ---
 name: header-briefing
+version: 0.1.0
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
 when_to_use: Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
-allowed-tools: Bash
+allowed-tools: Bash, AskUserQuestion
 ---
 
 *The `when_to_use`, `argument-hint`, and `allowed-tools` frontmatter fields are honored by Claude Code; other harnesses ignore them safely.*
@@ -13,6 +14,183 @@ allowed-tools: Bash
 [Header](https://joinheader.com) generates intelligence briefings from curated RSS and YouTube sources. This skill fetches briefings and analyzes them for relevance to the current project. The default workflow requires no authentication.
 
 > This skill uses `curl` so it runs in any agent with shell access (Claude Code, Cursor, Aider, OpenAI Codex CLI, Goose, etc.). Claude Code users may substitute `WebFetch` for the read-only GETs if they prefer.
+
+## Preamble (run first)
+
+Run this block before anything else. **Claude Code substitutes `{SKILL_DIR}`** with the absolute path of the directory containing this `SKILL.md` (the skill's base directory, provided on invocation). Other agents: replace `{SKILL_DIR}` with the path of the folder you loaded this file from. If you cannot determine it, leave the token — the fallback paths and the classic-mode floor below handle it.
+
+```bash
+# --- Header skill preamble - run before anything else ---
+_HC=""
+for _d in "{SKILL_DIR}" "$HOME/.claude/skills/header-briefing" \
+          ".claude/skills/header-briefing" "$HOME/.codex/skills/header-briefing" \
+          ".agents/skills/header-briefing"; do
+  [ -x "$_d/bin/header-config" ] && { _HC="$_d/bin/header-config"; break; }
+done
+if [ -z "$_HC" ]; then
+  echo "HEADER_MODE: classic"
+  echo "HEADER_NOTICE: classic mode - bin/header-config not found; reinstall the full header-briefing/ folder for config + onboarding"
+else
+  echo "HEADER_MODE: enterprise"
+  echo "HEADER_BIN: $_HC"
+  _HH="${HEADER_HOME:-$HOME/.header}"
+  mkdir -p "$_HH"
+  if [ -n "${CI:-}" ] || [ -n "${HEADER_NONINTERACTIVE:-}" ]; then
+    echo "INTERACTIVE: no"
+  else
+    echo "INTERACTIVE: yes"
+  fi
+  echo "DEFAULT_TOPIC: ${HEADER_DEFAULT_TOPIC:-$("$_HC" get default_topic)}"
+  echo "LANGUAGE: ${HEADER_LANGUAGE:-$("$_HC" get language)}"
+  echo "STALENESS_DAYS: ${HEADER_STALENESS_DAYS:-$("$_HC" get staleness_days)}"
+  echo "WELCOME_SEEN: $([ -f "$_HH/.welcome-seen" ] && echo yes || echo no)"
+  echo "LANGUAGE_PROMPTED: $([ -f "$_HH/.language-prompted" ] && echo yes || echo no)"
+  echo "SIGNUP_STATE: $(cat "$_HH/.signup-state" 2>/dev/null || echo unset)"
+  if [ -n "${HEADER_API_KEY:-}" ] || { [ -f "$_HH/credentials" ] && grep -q '^HEADER_API_KEY=' "$_HH/credentials" 2>/dev/null; }; then
+    echo "HAS_KEY: yes"
+  else
+    echo "HAS_KEY: no"
+  fi
+fi
+# --- end preamble ---
+```
+
+The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
+
+**Classic mode** — `bin/header-config` was not found. Run the briefing workflow below exactly as written, and skip every Preamble-dependent behavior (the first-run welcome and the signup funnel). If a `HEADER_NOTICE:` line was printed, show it to the user once so they know a fuller install is available.
+
+**Enterprise mode** — use the echoed values for the rest of the session:
+
+| Echoed line | Use |
+|---|---|
+| `HEADER_BIN` | Absolute path to `bin/header-config`. Re-substitute it in any later bash call that needs the config CLI — each `Bash` invocation is a fresh shell, so this echo is the simplest way to locate the helper again. |
+| `DEFAULT_TOPIC` | Topic UUID for Step 0. Already resolves env var → config file → empty. |
+| `LANGUAGE` | Render user-facing output in this language. Already resolves env → config → `English`. |
+| `STALENESS_DAYS` | Threshold for the briefing-age check in Step 2. |
+| `INTERACTIVE` | `no` → scheduled / non-interactive run: skip the welcome, the language prompt, and the signup funnel. `yes` → all three are eligible. |
+| `WELCOME_SEEN` | `no` (with `INTERACTIVE: yes`) → show the first-run welcome. |
+| `LANGUAGE_PROMPTED` | `no` (with `INTERACTIVE: yes` and `LANGUAGE: English`) → show the first-run language prompt. |
+| `SIGNUP_STATE` / `HAS_KEY` | Drive the signup funnel — see "First-run onboarding". |
+
+The echoed `DEFAULT_TOPIC` / `LANGUAGE` / `STALENESS_DAYS` already fold in the precedence **env var > `~/.header/config` > built-in default** — use them directly rather than re-reading env vars or the config file later.
+
+## First-run onboarding
+
+Runs **only in enterprise mode with `INTERACTIVE: yes`**. In classic mode, or on a scheduled / non-interactive run (`INTERACTIVE: no`), skip this whole section — print nothing, ask nothing.
+
+**Claude Code only:** the choice below uses the `AskUserQuestion` tool. Other harnesses present the same options as a numbered list and ask the user to reply with a number.
+
+### Welcome — before the briefing
+
+If `WELCOME_SEEN: no`, print this once, then continue to Step 0:
+
+> 👋 **Header briefing skill** — I pull intelligence briefings on agentic coding and check them against your project. Public briefings need no account.
+
+```bash
+touch "${HEADER_HOME:-$HOME/.header}/.welcome-seen"
+```
+
+If `WELCOME_SEEN: yes`, skip the welcome.
+
+### Language — before the briefing
+
+If the preamble echoed `LANGUAGE: English` (the built-in default) **and** `LANGUAGE_PROMPTED: no`, ask **once** before Step 0 which language to render briefings in. If `LANGUAGE` echoed anything other than `English`, the user has already declared a preference (env var or config) — skip the prompt, but still touch the marker so it never fires later.
+
+Ask:
+
+> **Which language should briefings be rendered in?**
+>
+> Briefing content stays English on the wire; the agent translates the presentation for you. Translation quality varies by language; proper nouns, code identifiers, and URLs stay verbatim.
+
+Options (label English as recommended — it's the default):
+
+1. **English** — recommended, keep as default. No translation.
+2. **Spanish** — agent translates the presentation.
+3. **Turkish** — agent translates the presentation.
+4. **Other** — ask the user which language to use.
+
+After the user picks, persist the choice and touch the marker. The preamble echoed `HEADER_BIN: <path>` — substitute that path; each Bash call is a fresh shell so the env-var trick from the preamble doesn't carry over:
+
+```bash
+<HEADER_BIN> set language "Chosen"
+touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
+```
+
+Replace `Chosen` with the user's pick (`English`, `Spanish`, `Turkish`, or the free-form name they typed). Persisting `English` explicitly is harmless — feel free to do it or skip the `set`. Always touch the marker so the prompt never fires again.
+
+Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
+
+### Signup funnel — after the briefing
+
+Run this **after the briefing has been delivered** (end of Step 4), so value lands before any pitch. Trigger only when `HAS_KEY: no` **and** `SIGNUP_STATE` is `unset` or `pending` (if `done` or `public-only`, skip). It also runs at this point if the user asks for an auth-only feature (a custom topic / on-demand generation) without a key.
+
+Ask:
+
+> Briefings tuned to *this* project need a free Header account (free trial, no credit card). Where are you?
+> 1. **New to Header** — walk me through a 30-second signup
+> 2. **I have an account** — point me to my API key
+> 3. **Just public briefings** — no account, don't ask again
+
+**1 — New to Header.** Offer the signup link and to open it:
+
+> Sign up and start the free trial at https://joinheader.com/ — about 30 seconds, no card.
+
+```bash
+URL="https://joinheader.com/"
+if   command -v open     >/dev/null 2>&1; then open "$URL"
+elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL"
+elif command -v start    >/dev/null 2>&1; then start "$URL"
+else echo "Open $URL in your browser."
+fi
+```
+
+Then walk them through: create the account → the free trial starts automatically → open **Settings ▸ API Keys** → create a key with **read + write** access (`hdr_sk_...`; write is required to create custom topics) → paste it here. Go to **Save the key**.
+
+**2 — I have an account.** Point them at **Settings ▸ API Keys** on https://joinheader.com/, ask them to create a key with **read + write** access (write is required to create custom topics) and paste it here. Go to **Save the key**.
+
+**3 — Just public briefings.** Record it and don't ask again:
+
+```bash
+printf 'public-only\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
+```
+
+Tell them public briefings keep working with no account; they can re-run the funnel later by deleting `~/.header/.signup-state`.
+
+**Deferred (picked 1 or 2 but no key pasted now).** Record `pending`:
+
+```bash
+printf 'pending\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
+```
+
+On a later run with `SIGNUP_STATE: pending`, re-offer the funnel **once** more; if the user defers again, write `public-only` so it stops nagging.
+
+### Save the key
+
+When the user pastes a key, offer to save it:
+
+> Save it to `~/.header/credentials` (readable only by you) so you don't re-enter it each session?
+
+If yes — write it under a tight umask, confirm the file is private, and fall back to a manual `export` if the filesystem can't secure it. Replace `PASTED_KEY` with the key the user pasted:
+
+```bash
+_HH="${HEADER_HOME:-$HOME/.header}"; mkdir -p "$_HH"
+( umask 077; printf 'HEADER_API_KEY=%s\n' "PASTED_KEY" > "$_HH/credentials" )
+chmod 600 "$_HH/credentials" 2>/dev/null
+case "$(ls -l "$_HH/credentials" 2>/dev/null)" in
+  -rw-------*) printf 'done\n' > "$_HH/.signup-state"; echo "Saved — custom briefings are ready." ;;
+  *) rm -f "$_HH/credentials"
+     echo "Could not secure the file — not saving the key. Add this to your shell profile instead:"
+     echo "  export HEADER_API_KEY=PASTED_KEY" ;;
+esac
+```
+
+If the user declines saving, tell them to `export HEADER_API_KEY=...` in their shell profile, and record `done` (they have a key for this session):
+
+```bash
+printf 'done\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
+```
+
+The credentials file is **only ever read as data** — the preamble and the authenticated `curl` calls parse the `HEADER_API_KEY=` line with `grep`/`sed`. Nothing sources or executes it.
 
 ## Configuration
 
@@ -37,7 +215,7 @@ Determine the topic UUID using this fallback chain (first match wins):
    - URL containing `/briefings/<uuid>` (e.g., `https://joinheader.com/briefings/<uuid>`) → extract the UUID, treat it as a **briefing ID**, skip Step 1 entirely, and go straight to Step 2 (`/api/v2/public/briefings/<uuid>`).
    - URL containing `/topics/<uuid>` or a bare UUID → use as the **topic ID** and proceed to Step 1.
    - Anything else → search `/api/v2/topics/public/catalog` for a case-insensitive substring match on `name`. If exactly one matches, use its `id`. If multiple match, ask the user to disambiguate. If none match, fall through.
-2. **`HEADER_DEFAULT_TOPIC`** env var → use as the topic ID.
+2. **Resolved default topic** — in enterprise mode, use the preamble's `DEFAULT_TOPIC` value when it is non-empty (it already reflects the `HEADER_DEFAULT_TOPIC` env var, then `~/.header/config`). In classic mode, use the `HEADER_DEFAULT_TOPIC` env var directly.
 3. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
 
 **Claude Code only:** the explicit argument is delivered as `$ARGUMENTS` when invoked via `/header-briefing <topic>`. Other harnesses: extract the topic identifier from the user's message text.
@@ -114,6 +292,8 @@ After presenting recommendations, ask the user which (if any) they'd like to imp
 
 **Caching within a session:** After fetching a briefing, hold its `briefing_id` and `generated_at` in conversation context. If the skill is re-invoked for the same topic in the same session, reuse the cached briefing instead of re-fetching — unless the user says "refresh", "latest", "new", or asks for a fresh briefing.
 
+**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the signup funnel (see the "First-run welcome & signup funnel" section above). Skip it in classic mode or on non-interactive runs.
+
 ### Fallback
 
 If the default topic returns 404, browse the public catalog to find a relevant topic:
@@ -150,9 +330,77 @@ The response includes the topic `name`, `description`, and `latest_briefing` det
 
 For users with a Header account. Create a custom topic with a goal tailored to your project, then generate briefings on demand.
 
+### API key resolution
+
+Every authenticated call in this section needs your API key. The key may be exported as `HEADER_API_KEY`, or saved (via the signup funnel) to `~/.header/credentials`. Because each shell starts fresh, run this **once at the start of any shell that makes an authenticated call**, before the `curl`:
+
+```bash
+[ -n "${HEADER_API_KEY:-}" ] || HEADER_API_KEY="$(sed -n 's/^HEADER_API_KEY=//p' "${HEADER_HOME:-$HOME/.header}/credentials" 2>/dev/null)"
+export HEADER_API_KEY
+```
+
+Env var first, then the credentials file — which is **parsed, never sourced**. The `curl` examples below then use `$HEADER_API_KEY` directly. If it resolves empty, tell the user no key is configured and offer the signup funnel.
+
+### Tier limits and error handling
+
+Authenticated endpoints can return structured error codes when you hit a tier limit. Two suffixes, one per failure mode:
+
+| Suffix | HTTP | Meaning | Recovery |
+|---|---|---|---|
+| `*_FREE` | 403 | The caller is on the free tier; the action is Pro-only. | Ask the user — start the free **trial** (only if the error response includes `can_start_trial: true`) or **upgrade** directly to Pro. **Never auto-pick a path.** On *trial* → `POST /api/v2/billing/trial/start`, then retry the original request. On *upgrade* → `POST /api/v2/billing/create-checkout`, parse the returned URL, open it (portable: `open` / `xdg-open` / `start`), and tell the user to finish checkout in the browser. |
+| `*_QUOTA` | 429 | Paid tier but at the cap (e.g., 10 topics, 7 manual briefings per rolling 24 h). | Tell the user. Suggest: wait for the cap to reset, delete a topic to make room, or email `info@joinheader.com` if the use case justifies a higher cap (no higher public tier exists). |
+
+**Concrete codes you may encounter:**
+
+| Endpoint | Free-tier code | Paid-cap code |
+|---|---|---|
+| `POST /api/v2/topics/` | `TOPIC_LIMIT_FREE` | `TOPIC_LIMIT_QUOTA` |
+| `POST /api/v2/goals/{id}/briefings` | `MANUAL_BRIEFING_FREE` | `MANUAL_BRIEFING_QUOTA` |
+| `PUT /api/v2/topics/{id}` | `EDIT_FREE` | — |
+| `PUT /api/v2/goals/{id}` | `EDIT_FREE` | — |
+
+**`https://joinheader.com/docs` is the canonical source of current error codes and recovery flows.** When an error response carries a code that is not in the table above — or you want to confirm the recovery steps are still current — fetch the docs page and consult it. The table here is a snapshot:
+
+```bash
+curl -sS https://joinheader.com/docs
+```
+
+#### TOPIC_LIMIT_FREE — the most common one
+
+When `POST /api/v2/topics/` returns `403` with `error.code: "TOPIC_LIMIT_FREE"`, the response also includes `can_start_trial`. Ask the user (`AskUserQuestion` on Claude Code, numbered plain text elsewhere):
+
+> Custom topics need a Pro account, and you're on the free tier. Pick one:
+>
+> 1. **Start the free trial now** (recommended — no credit card needed)
+> 2. Upgrade to Pro directly
+
+If they pick the trial (and `can_start_trial: true`):
+
+```bash
+curl -sS -X POST https://joinheader.com/api/v2/billing/trial/start \
+  -H "Authorization: Bearer $HEADER_API_KEY"
+```
+
+Then **retry the original `POST /api/v2/topics/` request** — it should now succeed. If they pick upgrade (or `can_start_trial: false`), kick off checkout and open the returned URL:
+
+```bash
+resp=$(curl -sS -X POST https://joinheader.com/api/v2/billing/create-checkout \
+  -H "Authorization: Bearer $HEADER_API_KEY")
+URL=$(printf '%s' "$resp" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+if [ -n "$URL" ]; then
+  if   command -v open     >/dev/null 2>&1; then open "$URL"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL"
+  elif command -v start    >/dev/null 2>&1; then start "$URL"
+  else echo "Open $URL in your browser to finish checkout."
+  fi
+fi
+```
+
+The same trial-vs-upgrade pattern applies to any `*_FREE` code (`MANUAL_BRIEFING_FREE`, `EDIT_FREE`, …) — when in doubt, curl the docs page above and follow its current recovery instructions.
+
 ### Setup
 
-Create a `read`-scoped API key from **Settings > API Keys** at [joinheader.com](https://joinheader.com):
+Create an API key with **read + write** access from **Settings > API Keys** at [joinheader.com](https://joinheader.com) — write is required to create custom topics:
 
 ```bash
 export HEADER_API_KEY="hdr_sk_..."
@@ -160,7 +408,20 @@ export HEADER_API_KEY="hdr_sk_..."
 
 ### Create a custom topic
 
-POST to the Header API to create a topic with a default goal and auto-trigger the first briefing:
+Before POSTing, **ask the user whether to include any custom sources** on top of the default source group:
+
+> Add custom sources to this briefing topic? You can include additional RSS feeds, YouTube channels, Reddit subs, or existing Header source groups / source IDs alongside the default group (which covers AI agent frameworks, MCP, and coding tools).
+>
+> 1. **No, just the default sources** (recommended — covers AI agent frameworks, MCP, coding tools)
+> 2. Yes — I'll provide them
+
+If they say yes, collect from the user:
+
+- Existing **source group IDs** to add → include in `source_group_ids` alongside the default.
+- Existing **source IDs** → include as a `source_ids` array on the request.
+- Brand-new feeds (raw URLs) → those need to be created as sources first, via a separate API. Consult `https://joinheader.com/docs` for the current source-creation endpoint and request shape. If creating new sources is more work than the user wants, fall back to weaving the URLs into `goal_description` so the briefing's AI focuses on them anyway.
+
+Then POST to the Header API to create the topic — with a default goal, auto-triggering the first briefing, and any extra `source_group_ids` / `source_ids` the user provided in the JSON body:
 
 ```bash
 curl -s -X POST https://joinheader.com/api/v2/topics/ \
@@ -283,6 +544,8 @@ curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
 ### Scheduled / agent loop
 
 For agents running on a cron or scheduled trigger (e.g., a daily check-in), use `GET /api/v2/topics/dashboard` with `?since=<iso8601>` to get only topics whose latest briefing changed after the timestamp. The response includes a server-computed `next_action` enum so the agent knows whether to surface a new briefing without re-deriving it client-side.
+
+**Set `HEADER_NONINTERACTIVE=1`** in the environment of every scheduled / unattended run. The preamble reads it and suppresses the first-run welcome and the signup funnel — an onboarding prompt in an unattended run would block the job. (`CI=1` is treated the same way.)
 
 ```bash
 curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
