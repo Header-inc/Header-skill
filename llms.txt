@@ -4,12 +4,15 @@
 
 Header is a continuous-learning platform that synthesizes curated RSS, YouTube, newsletter, and Reddit sources into focused briefings — turning information into behavior change rather than aggregating more content. Core concepts: **Topics** group sources and goals, **Goals** define what to learn, **Source Groups** are collections of content feeds, and **Briefings** are the synthesized digests produced by analyzing recent content against a goal.
 
-This skill is a thin, declarative wrapper: a single `SKILL.md` drives the agent to call Header's public API via `curl`, read the current workspace, and propose actionable changes. No runtime, no build step, no dependencies beyond `curl` — just markdown.
+This skill is a small, declarative folder: `SKILL.md` drives the agent to call Header's public API via `curl`, read the current workspace, and propose actionable changes; `bin/header-config` persists configuration under `~/.header/`; `install.sh` installs the folder into an agent's skills directory. No runtime, no build step, no dependencies beyond `bash` and `curl`.
 
 ## Skill files
 
-- [header-briefing/SKILL.md](https://raw.githubusercontent.com/Header-inc/Header-skill/main/header-briefing/SKILL.md): The skill definition. Contains the default agentic-coding briefing flow, public topic browsing, custom-briefing (API key) workflow, and full response-field reference.
-- [README.md](https://raw.githubusercontent.com/Header-inc/Header-skill/main/README.md): Installation (quick-install curl, git clone, project-local), usage, and configuration.
+- [header-briefing/SKILL.md](https://raw.githubusercontent.com/Header-inc/Header-skill/main/header-briefing/SKILL.md): The skill definition. Contains the run-first preamble, the default agentic-coding briefing flow, the first-run onboarding (welcome, language preference, signup funnel), public topic browsing, the custom-briefing (API key) workflow, and the full response-field reference.
+- [header-briefing/bin/header-config](https://raw.githubusercontent.com/Header-inc/Header-skill/main/header-briefing/bin/header-config): Reads/writes the persisted config at `~/.header/config` (get/set/list/defaults). Plain bash.
+- [header-briefing/VERSION](https://raw.githubusercontent.com/Header-inc/Header-skill/main/header-briefing/VERSION): The skill version (mirrors the `SKILL.md` frontmatter `version:`).
+- [install.sh](https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh): One-command installer — copies the `header-briefing/` folder into the agent's skills directory.
+- [README.md](https://raw.githubusercontent.com/Header-inc/Header-skill/main/README.md): Installation, usage, and configuration.
 - [LICENSE](https://raw.githubusercontent.com/Header-inc/Header-skill/main/LICENSE): MIT.
 
 ## Header API endpoints used by this skill
