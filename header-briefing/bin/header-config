@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# header-config — read/write the Header skill config file.
+#
+# Usage:
+#   header-config get <key>          read a value (falls back to the built-in default)
+#   header-config set <key> <value>  write a value
+#   header-config list               show the file + active values (incl. defaults)
+#   header-config defaults           show the built-in defaults
+#
+# The config file is a flat list of `key: value` lines — NOT YAML. Nested
+# structures are not supported; only the keys below are recognized.
+#
+# Env:
+#   HEADER_HOME   override the state directory (default: $HOME/.header)
+#
+# Secrets note: this script never reads or writes ~/.header/credentials.
+set -euo pipefail
+
+STATE_DIR="${HEADER_HOME:-$HOME/.header}"
+CONFIG_FILE="$STATE_DIR/config"
+
+# Terse header, written once when the file is first created. Defaults are NOT
+# documented here on purpose — lookup_default() is the single source of truth.
+CONFIG_HEADER='# Header skill config — flat "key: value" lines, edit freely.
+# Run `header-config defaults` to see every key and its default value.
+# Docs: https://github.com/Header-inc/Header-skill
+'
+
+# lookup_default — the single source of truth for default values. `get` returns
+# this when a key is absent from the config file.
+lookup_default() {
+  case "$1" in
+    default_topic)  echo "" ;;        # empty → SKILL.md falls back to its hardcoded UUID
+    language)       echo "English" ;;
+    staleness_days) echo "7" ;;
+    *)              echo "" ;;
+  esac
+}
+
+# Keys recognized by `list` and `defaults`. Phases 2-3 extend this set.
+KNOWN_KEYS="default_topic language staleness_days"
+
+valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
+
+# read_raw <key> — echo the value for <key> from the config file (last wins),
+# or nothing if absent. Strips the `key:` prefix and surrounding whitespace.
+read_raw() {
+  [ -f "$CONFIG_FILE" ] || return 0
+  grep -E "^$1:" "$CONFIG_FILE" 2>/dev/null | tail -1 \
+    | sed -E "s/^$1:[[:space:]]*//; s/[[:space:]]+\$//" || true
+}
+
+case "${1:-}" in
+  get)
+    KEY="${2:?Usage: header-config get <key>}"
+    valid_key "$KEY" || { echo "header-config: invalid key '$KEY' (use [a-zA-Z0-9_])" >&2; exit 1; }
+    VALUE="$(read_raw "$KEY")"
+    [ -n "$VALUE" ] || VALUE="$(lookup_default "$KEY")"
+    printf '%s\n' "$VALUE"
+    ;;
+  set)
+    KEY="${2:?Usage: header-config set <key> <value>}"
+    VALUE="${3:?Usage: header-config set <key> <value>}"
+    valid_key "$KEY" || { echo "header-config: invalid key '$KEY' (use [a-zA-Z0-9_])" >&2; exit 1; }
+    # Keep only the first line — a config value is never multi-line.
+    VALUE="$(printf '%s' "$VALUE" | head -1)"
+    mkdir -p "$STATE_DIR"
+    [ -f "$CONFIG_FILE" ] || printf '%s' "$CONFIG_HEADER" > "$CONFIG_FILE"
+    if grep -qE "^$KEY:" "$CONFIG_FILE" 2>/dev/null; then
+      # Replace in place. Escape sed replacement metacharacters (& / \) in the
+      # value. Write via temp file + mv — portable across GNU/BSD sed (no -i).
+      ESC_VALUE="$(printf '%s' "$VALUE" | sed -e 's/[&/\]/\\&/g')"
+      _tmp="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+      sed "/^$KEY:/s/.*/$KEY: $ESC_VALUE/" "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
+    else
+      printf '%s: %s\n' "$KEY" "$VALUE" >> "$CONFIG_FILE"
+    fi
+    ;;
+  list)
+    [ -f "$CONFIG_FILE" ] && cat "$CONFIG_FILE"
+    echo ""
+    echo "# Active values (config-file value, or built-in default):"
+    for KEY in $KNOWN_KEYS; do
+      VALUE="$(read_raw "$KEY")"
+      SOURCE="default"
+      if [ -n "$VALUE" ]; then SOURCE="set"; else VALUE="$(lookup_default "$KEY")"; fi
+      printf '  %-16s %-14s (%s)\n' "$KEY:" "${VALUE:-(empty)}" "$SOURCE"
+    done
+    ;;
+  defaults)
+    echo "# header-config built-in defaults"
+    for KEY in $KNOWN_KEYS; do
+      printf '  %-16s %s\n' "$KEY:" "$(lookup_default "$KEY")"
+    done
+    ;;
+  *)
+    echo "Usage: header-config {get|set|list|defaults} [key] [value]" >&2
+    exit 1
+    ;;
+esac
