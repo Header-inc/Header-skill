@@ -167,6 +167,12 @@ The skill is plain `bash` — the test suite has no dependencies:
 cd header-briefing && ./test/run.sh
 ```
 
+Enable the pre-commit hook once per clone so the suite runs — and blocks — on every commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.

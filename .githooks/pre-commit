@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Pre-commit hook — run the skill test suite; a failed suite blocks the commit.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass a single commit:  git commit --no-verify
+set -euo pipefail
+"$(git rev-parse --show-toplevel)/header-briefing/test/run.sh"
