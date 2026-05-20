@@ -131,7 +131,7 @@ Configuration comes from three places, highest priority first: **environment var
 ~/.claude/skills/header-briefing/bin/header-config list
 ```
 
-Recognized keys: `default_topic`, `language`, `staleness_days`. Run the helper with `defaults` to see every key and its default value.
+Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`. Run the helper with `defaults` to see every key and its default value.
 
 ### State directory
 
@@ -141,7 +141,23 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 |---|---|
 | `config` | Persisted configuration (flat `key: value`). |
 | `credentials` | Optional — your API key, saved by the onboarding funnel (`chmod 600`; read as data, never executed). |
-| `.welcome-seen`, `.signup-state` | Onboarding markers, so first-run prompts show exactly once. |
+| `.welcome-seen`, `.signup-state`, `.language-prompted` | Onboarding markers, so first-run prompts show exactly once. |
+| `last-update-check`, `update-snoozed`, `version-info.json` | Update-check cache, snooze state, and the last version-endpoint response. |
+
+## Updating
+
+On each run the skill checks for a newer version against Header's version endpoint (cached; 5-second timeout; silent and harmless if the endpoint is unreachable). When a newer version is available it offers to update, and remembers your choice:
+
+- **The prompt** offers Yes / Always / Not now / Never. "Always" sets `auto_update`; "Never" sets `update_check false`.
+- **Auto-update:** `~/.claude/skills/header-briefing/bin/header-config set auto_update true` — future updates install silently.
+- **Disable checks:** `~/.claude/skills/header-briefing/bin/header-config set update_check false`.
+- **Update manually anytime** by re-running the installer:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
+  ```
+
+If Header ships a breaking API change, the version endpoint marks a minimum supported version; a skill older than that says so rather than failing silently. Updates install atomically and roll back on failure.
 
 ## Development
 

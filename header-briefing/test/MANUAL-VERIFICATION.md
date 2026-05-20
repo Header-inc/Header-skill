@@ -160,12 +160,36 @@ Run `/header-briefing`.
 - [ ] The briefing is delivered
 - [ ] **No welcome, no funnel** — onboarding fully suppressed (proves a cron / agent-loop run cannot be blocked by a prompt)
 
+### Scenario F — update available (simulated endpoint)
+
+The version endpoint isn't live yet, so simulate it with `HEADER_VERSION_JSON`. Quickest check is the script alone (no Claude needed):
+
+```bash
+HEADER_HOME=/tmp/h-upd HEADER_VERSION_JSON='{"latest":"99.0.0"}' \
+  ~/.claude/skills/header-briefing/bin/header-update-check
+# → UPDATE_AVAILABLE <your-version> 99.0.0
+```
+
+For the full agent flow, exit Claude and relaunch with the simulated response in the environment:
+
+```bash
+rm -rf ~/header-skill-test/.hdr-state
+HEADER_VERSION_JSON='{"latest":"99.0.0","message":"Test update"}' claude
+```
+
+Run `/header-briefing`.
+
+- [ ] Right after the preamble (before the briefing) the skill reports v99.0.0 is available and offers Yes / Always / Not now / Never
+- [ ] **Not now** → no re-prompt this session; `!cat ~/header-skill-test/.hdr-state/update-snoozed` shows `99.0.0 1 <epoch>`
+- [ ] Relaunch with `HEADER_VERSION_JSON='{"latest":"99.0.0","min_supported":"99.0.0"}'` → the skill reports an update is **required** (non-optional)
+- [ ] With `update_check` set to `false` → no update prompt even with the simulated response
+
 ### Cleanup
 
 ```bash
 rm -rf ~/.claude/skills/header-briefing ~/.codex/skills/header-briefing ~/header-skill-test
-rm -rf /tmp/hdr-verify /tmp/hdr-install
-unset HEADER_HOME
+rm -rf /tmp/hdr-verify /tmp/hdr-install /tmp/h-upd
+unset HEADER_HOME HEADER_VERSION_JSON
 ```
 
 ---
