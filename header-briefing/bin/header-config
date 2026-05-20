@@ -33,12 +33,14 @@ lookup_default() {
     default_topic)  echo "" ;;        # empty → SKILL.md falls back to its hardcoded UUID
     language)       echo "English" ;;
     staleness_days) echo "7" ;;
+    auto_update)    echo "false" ;;
+    update_check)   echo "true" ;;
     *)              echo "" ;;
   esac
 }
 
-# Keys recognized by `list` and `defaults`. Phases 2-3 extend this set.
-KNOWN_KEYS="default_topic language staleness_days"
+# Keys recognized by `list` and `defaults`. Phase 3 (telemetry) extends this set further.
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 
