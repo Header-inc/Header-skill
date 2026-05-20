@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.1.0
+version: 0.2.0
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
 when_to_use: Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -51,6 +51,8 @@ else
   else
     echo "HAS_KEY: no"
   fi
+  _UPD="$("$(dirname "$_HC")/header-update-check" 2>/dev/null || true)"
+  case "$_UPD" in UPDATE_*) echo "UPDATE_CHECK: $_UPD" ;; esac
 fi
 # --- end preamble ---
 ```
@@ -71,6 +73,7 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 | `WELCOME_SEEN` | `no` (with `INTERACTIVE: yes`) → show the first-run welcome. |
 | `LANGUAGE_PROMPTED` | `no` (with `INTERACTIVE: yes` and `LANGUAGE: English`) → show the first-run language prompt. |
 | `SIGNUP_STATE` / `HAS_KEY` | Drive the signup funnel — see "First-run onboarding". |
+| `UPDATE_CHECK` | `UPDATE_AVAILABLE old new` or `UPDATE_REQUIRED old min` → run the update flow (see "Staying up to date"). Absent when up to date, snoozed, or disabled. |
 
 The echoed `DEFAULT_TOPIC` / `LANGUAGE` / `STALENESS_DAYS` already fold in the precedence **env var > `~/.header/config` > built-in default** — use them directly rather than re-reading env vars or the config file later.
 
@@ -191,6 +194,75 @@ printf 'done\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
 ```
 
 The credentials file is **only ever read as data** — the preamble and the authenticated `curl` calls parse the `HEADER_API_KEY=` line with `grep`/`sed`. Nothing sources or executes it.
+
+## Staying up to date
+
+Driven by the preamble's `UPDATE_CHECK` line. Handle it **right after the preamble, before the briefing** — an out-of-date skill may not work against the API. If there was no `UPDATE_CHECK` line, skip this section. Both branches use `<HEADER_BIN>` (the path the preamble echoed as `HEADER_BIN:`).
+
+### UPDATE_REQUIRED — non-optional
+
+`UPDATE_CHECK: UPDATE_REQUIRED <old> <min>` means the installed skill is older than the minimum version the Header API still supports; briefings may fail until it's updated.
+
+- **Interactive** (`INTERACTIVE: yes`): tell the user plainly and offer to update now — go to **Run the update**. If they decline, warn that briefings may fail, then continue.
+- **Non-interactive** (`INTERACTIVE: no`): do not prompt. Print one warning line ("Header skill v{old} is below the supported minimum v{min} — update soon") and continue. Never block a scheduled run.
+
+### UPDATE_AVAILABLE — optional
+
+`UPDATE_CHECK: UPDATE_AVAILABLE <old> <new>`. Skip entirely if `INTERACTIVE: no`.
+
+If `<HEADER_BIN> get auto_update` returns `true`: skip the prompt, say "Updating the Header skill v{old} → v{new}…", and go to **Run the update**.
+
+Otherwise ask (`AskUserQuestion` on Claude Code; numbered plain text elsewhere):
+
+> Header skill v{new} is available (you're on v{old}). Update now?
+>
+> 1. **Yes, update now** (recommended)
+> 2. Always keep me up to date
+> 3. Not now
+> 4. Never ask again
+
+- **Yes** → **Run the update**.
+- **Always** → `<HEADER_BIN> set auto_update true`, then **Run the update**.
+- **Not now** → write an escalating snooze (next reminder: level 1 = 24h, 2 = 48h, 3+ = 1 week) and continue without mentioning it again:
+
+```bash
+_HH="${HEADER_HOME:-$HOME/.header}"; _NEW="<new>"; _LVL=1
+if [ -f "$_HH/update-snoozed" ]; then
+  read -r _v _l _ < "$_HH/update-snoozed" 2>/dev/null || true
+  if [ "${_v:-}" = "$_NEW" ]; then
+    case "${_l:-}" in [0-9]*) _LVL=$((_l + 1)); [ "$_LVL" -gt 3 ] && _LVL=3 ;; esac
+  fi
+fi
+printf '%s %s %s\n' "$_NEW" "$_LVL" "$(date +%s)" > "$_HH/update-snoozed"
+```
+
+- **Never ask again** → `<HEADER_BIN> set update_check false`; mention they can re-enable with `header-config set update_check true`.
+
+### Run the update
+
+1. Read "what's new" from the cached release info (both fields optional):
+
+```bash
+cat "${HEADER_HOME:-$HOME/.header}/version-info.json" 2>/dev/null
+```
+
+2. Re-run the installer — it fetches the latest, swaps the install atomically, and rolls back on failure:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
+```
+
+(Working from a git clone? `git pull --ff-only && ./install.sh` instead. A project-local copy updates by re-copying the `header-briefing/` folder.)
+
+3. Clear the update cache so the next run re-checks cleanly:
+
+```bash
+rm -f "${HEADER_HOME:-$HOME/.header}/last-update-check" "${HEADER_HOME:-$HOME/.header}/update-snoozed"
+```
+
+4. Tell the user "Updated to v{new}" plus the `message` (and `notes_url` if present), then continue with the briefing. If the installer reported a failure it restored the previous version — say so and suggest retrying.
+
+The update takes effect on the **next** `/header-briefing` — the current session keeps the already-loaded `SKILL.md` in context until then.
 
 ## Configuration
 

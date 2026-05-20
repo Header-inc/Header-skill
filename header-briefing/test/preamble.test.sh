@@ -93,4 +93,17 @@ printf 'HEADER_API_KEY=hdr_sk_x\necho PWNED_BY_SOURCE\n' > "$sb/.header/credenti
 assert_not_contains "$(run_preamble "$SKILL_DIR" "$sb")" "PWNED" \
   "credentials file is read as data — never sourced or executed"
 
+# ── update check surfaces actionable states (injected endpoint) ─
+sb="$(make_sandbox)"
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_VERSION_JSON='{"latest":"99.0.0"}')" \
+  "UPDATE_CHECK: UPDATE_AVAILABLE" "preamble surfaces an available update"
+sb="$(make_sandbox)"
+_lv="$(tr -d '[:space:]' < "$SKILL_DIR/VERSION")"
+assert_not_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_VERSION_JSON="{\"latest\":\"$_lv\"}")" \
+  "UPDATE_CHECK:" "preamble stays quiet when up to date"
+sb="$(make_sandbox)"
+HEADER_HOME="$sb/.header" "$SKILL_DIR/bin/header-config" set update_check false
+assert_not_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_VERSION_JSON='{"latest":"99.0.0"}')" \
+  "UPDATE_CHECK:" "update_check=false → preamble surfaces nothing"
+
 t_done
