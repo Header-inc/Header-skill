@@ -58,15 +58,32 @@ fi
 # ── Install ───────────────────────────────────────────────────
 for base in $TARGETS; do
   dest="$base/$SKILL_NAME"
-  verb="Installed"
-  [ -d "$dest" ] && verb="Updated"
   mkdir -p "$base"
-  rm -rf "$dest"
-  cp -R "$SRC" "$dest"
-  rm -rf "$dest/.git"
-  chmod +x "$dest/bin/"* 2>/dev/null || true
-  [ -f "$dest/test/run.sh" ] && chmod +x "$dest/test/run.sh" 2>/dev/null || true
-  log "$verb -> $dest"
+  # Stage into a sibling dir, then swap atomically — a failed copy must never
+  # leave a half-installed skill.
+  staging="$dest.new.$$"
+  rm -rf "$staging"
+  cp -R "$SRC" "$staging"
+  rm -rf "$staging/.git"
+  chmod +x "$staging/bin/"* 2>/dev/null || true
+  [ -f "$staging/test/run.sh" ] && chmod +x "$staging/test/run.sh" 2>/dev/null || true
+  if [ -d "$dest" ]; then
+    backup="$dest.bak.$$"
+    rm -rf "$backup"
+    mv "$dest" "$backup"
+    if mv "$staging" "$dest"; then
+      rm -rf "$backup"
+      log "Updated -> $dest"
+    else
+      mv "$backup" "$dest"          # roll back
+      rm -rf "$staging"
+      echo "install.sh: update failed; restored the previous install at $dest" >&2
+      exit 1
+    fi
+  else
+    mv "$staging" "$dest"
+    log "Installed -> $dest"
+  fi
 done
 
 [ -n "$CLEANUP" ] && rm -rf "$CLEANUP"

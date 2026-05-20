@@ -31,5 +31,7 @@ env -i PATH="$PATH" HOME="$sb" sh "$INSTALLER" >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "install.sh re-run exits 0 (idempotent)"
 assert_eq "yes" "$([ -f "$dest/SKILL.md" ] && echo yes || echo no)" \
   "skill still present and intact after re-run"
+assert_eq "" "$(ls -d "$dest".* 2>/dev/null)" \
+  "no .new/.bak staging dirs left behind after the atomic swap"
 
 t_done
