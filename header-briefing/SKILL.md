@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.3.0
+version: 0.3.1
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
 when_to_use: Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -547,13 +547,12 @@ Before POSTing, **ask the user whether to include any custom sources** on top of
 > 1. **No, just the default sources** (recommended — covers AI agent frameworks, MCP, coding tools)
 > 2. Yes — I'll provide them
 
-If they say yes, collect from the user:
+If they say yes, collect from the user. Topics link **source groups**, not individual sources (the create body takes `source_group_ids`, min 1):
 
-- Existing **source group IDs** to add → include in `source_group_ids` alongside the default.
-- Existing **source IDs** → include as a `source_ids` array on the request.
-- Brand-new feeds (raw URLs) → those need to be created as sources first, via a separate API. Consult `https://joinheader.com/docs` for the current source-creation endpoint and request shape. If creating new sources is more work than the user wants, fall back to weaving the URLs into `goal_description` so the briefing's AI focuses on them anyway.
+- Existing **source group IDs** → add to `source_group_ids` alongside the default.
+- Individual **source IDs** or **new feed URLs** → put them in a group first (see "Add a source"), then include that group's id in `source_group_ids`. Or let Header propose a tailored group: `POST /api/v2/sources/recommend` (`topic_name`, `goal_description`) → `POST /api/v2/sources/recommend/commit` (returns a new `group_id`).
 
-Then POST to the Header API to create the topic — with a default goal, auto-triggering the first briefing, and any extra `source_group_ids` / `source_ids` the user provided in the JSON body:
+Then POST to the Header API to create the topic — with a default goal, auto-triggering the first briefing, and any extra `source_group_ids` the user provided in the JSON body:
 
 ```bash
 curl -s -X POST https://joinheader.com/api/v2/topics/ \
@@ -576,11 +575,28 @@ When a key is present but the user has no custom topic yet (`INTERACTIVE: yes`, 
 
 > Want briefings tuned to *this* project? I'll create a topic focused on <one-line summary of the detected stack and priorities> — no typing needed.
 
-On yes, POST it (reuse "Create a custom topic", filling `goal_description` from the detected stack and any named pain points). On a `TOPIC_LIMIT_FREE` response, run the trial/upgrade flow ("Tier limits and error handling"). Always `touch "${HEADER_HOME:-$HOME/.header}/.topic-offered"` so it asks only once.
+On yes, POST it (reuse "Create a custom topic", filling `goal_description` from the detected stack and any named pain points). For a sharper fit, first let Header propose sources for that goal — `POST /api/v2/sources/recommend` → `POST /api/v2/sources/recommend/commit` returns a `group_id` to create the topic with. On a `TOPIC_LIMIT_FREE` response, run the trial/upgrade flow ("Tier limits and error handling"). Always `touch "${HEADER_HOME:-$HOME/.header}/.topic-offered"` so it asks only once.
 
 ### Add a source
 
-`/header-briefing add-source <url>` (or "add this source: <url>") drops an RSS / YouTube / Reddit / blog URL into the user's topic so it feeds future briefings. Requires a key. If the user has one custom topic, target it; if several, ask which. Use the current source-creation request shape from `https://joinheader.com/docs` (the canonical source for the exact endpoint and fields), then confirm what was added. Best-effort: if the URL can't be added, say why and point at **Settings** on joinheader.com.
+`/header-briefing add-source <url>` (or "add this source: <url>") feeds a URL into the user's topic. Requires a key. Topics draw from **source groups**, so the flow is preview → create → add to a group the goal already uses:
+
+```bash
+# 1. Preview (detect type, verify the URL)
+curl -sS -X POST https://joinheader.com/api/v2/sources/preview \
+  -H "Authorization: Bearer $HEADER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"<url>"}'
+# 2. Create the source (type from the preview: rss|youtube|reddit|newsletter|web)
+curl -sS -X POST https://joinheader.com/api/v2/sources/ \
+  -H "Authorization: Bearer $HEADER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"<name>","type":"<type>","url":"<url>"}'   # → returns the source id
+# 3. Add it to a source group the topic's goal already references
+curl -sS -X POST https://joinheader.com/api/v2/source-groups/{group_id}/members \
+  -H "Authorization: Bearer $HEADER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"member_id":"<source_id>"}'
+```
+
+Get the goal's `source_group_ids` from the topic and pick one the user owns. If none is editable, create a group (`POST /api/v2/source-groups/`), add the source as a member, then `PUT /api/v2/goals/{goal_id}` with `source_group_ids` including the new group. If the user has several topics, ask which. Confirm what was added; on a `*_FREE` tier error, run the trial/upgrade flow ("Tier limits and error handling").
 
 ### Check briefing status
 

@@ -3,6 +3,15 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.3.1 — Source API wiring
+
+- `add-source` and the custom-sources prompt now use the real source API:
+  preview (`POST /sources/preview`) → create (`POST /sources/`) → attach via
+  `POST /source-groups/{id}/members`. Topics link by `source_group_ids` (not
+  `source_ids`).
+- Auto-create can build a tailored source group via `sources/recommend` →
+  `/recommend/commit`.
+
 ## 0.3.0 — Close the loop
 
 - **Recommendation ledger** (`bin/header-ledger`): local, append-only record of
