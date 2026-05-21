@@ -36,12 +36,13 @@ lookup_default() {
     auto_update)    echo "false" ;;
     update_check)   echo "true" ;;
     ledger)         echo "true" ;;
+    telemetry)      echo "off" ;;
     *)              echo "" ;;
   esac
 }
 
 # Keys recognized by `list` and `defaults`. Phase 3 (telemetry) extends this set further.
-KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger"
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 
@@ -67,6 +68,10 @@ case "${1:-}" in
     valid_key "$KEY" || { echo "header-config: invalid key '$KEY' (use [a-zA-Z0-9_])" >&2; exit 1; }
     # Keep only the first line — a config value is never multi-line.
     VALUE="$(printf '%s' "$VALUE" | head -1)"
+    # Whitelist closed-domain keys.
+    if [ "$KEY" = "telemetry" ]; then
+      case "$VALUE" in off|anonymous|full) ;; *) echo "header-config: telemetry must be off|anonymous|full; using off" >&2; VALUE="off" ;; esac
+    fi
     mkdir -p "$STATE_DIR"
     [ -f "$CONFIG_FILE" ] || printf '%s' "$CONFIG_HEADER" > "$CONFIG_FILE"
     if grep -qE "^$KEY:" "$CONFIG_FILE" 2>/dev/null; then
