@@ -37,12 +37,13 @@ lookup_default() {
     update_check)   echo "true" ;;
     ledger)         echo "true" ;;
     telemetry)      echo "off" ;;
+    auto_tune)      echo "false" ;;
     *)              echo "" ;;
   esac
 }
 
 # Keys recognized by `list` and `defaults`. Phase 3 (telemetry) extends this set further.
-KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry"
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 

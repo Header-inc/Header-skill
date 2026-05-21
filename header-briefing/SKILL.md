@@ -645,6 +645,23 @@ curl -sS -w "\n%{http_code}" -X PUT https://joinheader.com/api/v2/goals/{goal_id
   -d '{"description": "Updated focus areas...", "keywords": ["MCP", "agent memory"]}'
 ```
 
+### Goal auto-tuning
+
+Closes the loop: feed what the user applies / dismisses (the recommendation ledger) back into the topic's goal so future briefings sharpen. Requires an API key and a custom goal, **enterprise mode**, and is **opt-in** via `auto_tune`. `<LEDGER>` / `<HEADER_BIN>` are the helpers next to the preamble's echoed `HEADER_BIN`.
+
+**Offer it once** when the ledger shows real signal — `<LEDGER> list --action applied --since-days 90` has 3+ entries — `auto_tune` is not already set, and no `~/.header/.autotune-offered` marker exists:
+
+> You've applied several recommendations. Want Header to auto-tune this topic's focus from what you act on, so future briefings get sharper?
+
+On yes → `<HEADER_BIN> set auto_tune true`. Always `touch "${HEADER_HOME:-$HOME/.header}/.autotune-offered"`.
+
+**When `auto_tune` is `true`** (and a key + custom goal exist), after delivering a briefing, refine the goal from the ledger:
+- Applied keys/titles (`<LEDGER> list --action applied --since-days 90`) = themes that resonate → add/emphasize their keywords.
+- Dismissed keys (`<LEDGER> list --action dismissed --since-days 90`) = noise → de-emphasize those themes.
+- Apply with one `PUT /api/v2/goals/{goal_id}` (see "Update a goal"), **merging** into the existing `keywords` / `description` — don't replace wholesale.
+
+Best-effort: skip silently if there's no key, no custom goal, or no new signal. When you do tune, say so ("tuned your topic toward retrieval, away from X"). Tuning never blocks the briefing.
+
 ### Memory provisioning
 
 Goals can be promoted to "memory-enabled" so future briefings retain context across runs (Forge-backed). Memory provisioning is asynchronous; poll the goal's `memory_state` until it reaches a terminal state.
