@@ -62,6 +62,25 @@ ls /tmp/hdr-install/.claude/skills/header-briefing        # SKILL.md  VERSION  b
 
 ---
 
+### Ledger & telemetry (scripts)
+
+```bash
+cd /home/workplace/Header-skill/header-briefing
+export HEADER_HOME=/tmp/hdr-verify
+
+bin/header-ledger record applied mcp-streaming --repo demo --title "MCP streaming"
+bin/header-ledger status mcp-streaming --repo demo          # → applied
+bin/header-ledger record dismissed mcp-streaming --repo demo
+bin/header-ledger status mcp-streaming --repo demo          # → dismissed (latest wins)
+
+bin/header-config set telemetry anonymous
+bin/header-telemetry log skill_run --outcome success --recs-surfaced 2 --recs-applied 1
+bin/header-telemetry sync --dry-run                          # the batch that WOULD be sent
+```
+
+- [ ] ledger `status` reflects the latest action (applied → dismissed)
+- [ ] telemetry `sync --dry-run` shows the event but **no** `_repo` / `_branch`, and no `installation_id` (anonymous tier)
+
 ## Part 3 — Live test in Claude Code
 
 ### Setup

@@ -131,7 +131,7 @@ Configuration comes from three places, highest priority first: **environment var
 ~/.claude/skills/header-briefing/bin/header-config list
 ```
 
-Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`. Run the helper with `defaults` to see every key and its default value.
+Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`. Run the helper with `defaults` to see every key and its default value.
 
 ### State directory
 
@@ -143,6 +143,8 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 | `credentials` | Optional — your API key, saved by the onboarding funnel (`chmod 600`; read as data, never executed). |
 | `.welcome-seen`, `.signup-state`, `.language-prompted` | Onboarding markers, so first-run prompts show exactly once. |
 | `last-update-check`, `update-snoozed`, `version-info.json` | Update-check cache, snooze state, and the last version-endpoint response. |
+| `ledger.jsonl` | Recommendation ledger (applied/dismissed/snoozed) — local-only, never sent. |
+| `telemetry.jsonl` | Local usage events — only written if you opt into telemetry. |
 
 ## Updating
 

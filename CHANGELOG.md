@@ -3,6 +3,22 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.3.0 — Close the loop
+
+- **Recommendation ledger** (`bin/header-ledger`): local, append-only record of
+  applied / dismissed / snoozed recommendations. The briefing skips dismissed
+  items and follows up on applied ones. Local-only; `ledger` config key.
+- **Source provenance:** each recommendation links the source article behind it.
+- **Diff-aware relevance:** the audit weights recommendations toward recently
+  changed code (recent git activity).
+- **Telemetry** (opt-in, consent-gated; `bin/header-telemetry`): off / anonymous /
+  full tiers. Usage metadata only — workspace content, repo and branch names are
+  never sent. `telemetry` config key.
+- **Goal auto-tuning** (opt-in): feed the ledger back into the topic goal via
+  `PUT /goals` so future briefings sharpen. `auto_tune` config key.
+- **New modes:** auto-create a topic from the project audit, `add-source <url>`,
+  and a since-last digest (`dashboard?since=`) with automatic `.last-run` tracking.
+
 ## 0.2.0 — Auto-update
 
 - Backend-driven update checks: the preamble runs `bin/header-update-check`, which
