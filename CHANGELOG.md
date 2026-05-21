@@ -3,6 +3,15 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.5.1 — Fix SKILL.md frontmatter YAML
+
+- Quote the `description` and `when_to_use` frontmatter values. They contained
+  `: ` (colon-space), which strict YAML parsers (e.g. Codex) reject as an
+  invalid nested mapping — Codex skipped loading the skill entirely ("mapping
+  values are not allowed in this context"). Claude Code's lenient parser had
+  masked this. A new test guards the whole frontmatter block against unquoted
+  colon-space values (and parses it with a real YAML loader when available).
+
 ## 0.5.0 — Audit mode (beta)
 
 - **`audit` mode** (`bin/header-audit`) — a local, no-account scan of the agent
