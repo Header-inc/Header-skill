@@ -421,6 +421,7 @@ In enterprise mode, after delivering the briefing, log one usage event. `<TELEME
 
 ```bash
 <TELEMETRY> log skill_run --outcome "<success|error>" --path "<default|catalog|custom>" --recs-surfaced <N> --recs-applied <N>
+date -u +%Y-%m-%dT%H:%M:%SZ > "${HEADER_HOME:-$HOME/.header}/.last-run" 2>/dev/null || true
 ```
 
 It records nothing unless the user opted into telemetry, and only ever sends usage metadata — never workspace content (see "Telemetry consent"). Best-effort; never block the briefing.
@@ -569,6 +570,18 @@ The default source group (`64981a34-...`) covers AI agent frameworks, MCP, codin
 
 The response includes `first_briefing_id` — generation runs asynchronously.
 
+### Auto-create a topic from your project
+
+When a key is present but the user has no custom topic yet (`INTERACTIVE: yes`, no `~/.header/.topic-offered` marker), offer to create one tailored to this repo — the Step 3 audit already inferred the stack, so draft the goal for them:
+
+> Want briefings tuned to *this* project? I'll create a topic focused on <one-line summary of the detected stack and priorities> — no typing needed.
+
+On yes, POST it (reuse "Create a custom topic", filling `goal_description` from the detected stack and any named pain points). On a `TOPIC_LIMIT_FREE` response, run the trial/upgrade flow ("Tier limits and error handling"). Always `touch "${HEADER_HOME:-$HOME/.header}/.topic-offered"` so it asks only once.
+
+### Add a source
+
+`/header-briefing add-source <url>` (or "add this source: <url>") drops an RSS / YouTube / Reddit / blog URL into the user's topic so it feeds future briefings. Requires a key. If the user has one custom topic, target it; if several, ask which. Use the current source-creation request shape from `https://joinheader.com/docs` (the canonical source for the exact endpoint and fields), then confirm what was added. Best-effort: if the URL can't be added, say why and point at **Settings** on joinheader.com.
+
 ### Check briefing status
 
 ```bash
@@ -688,6 +701,20 @@ curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
 | `provisioning` | Forge is provisioning. | Poll every 30s; expect ~1–2 min. |
 | `enabled` | Ready. Future briefings benefit from memory. | Terminal — proceed. |
 | `error` | Provisioning failed. | Tell the user; retry the PUT or contact support. |
+
+### Since-last digest
+
+For "what's new since I last checked" (and the recommended shape for cron / `ScheduleWakeup`): pass the last-run timestamp to the dashboard so you only surface changes.
+
+```bash
+_HH="${HEADER_HOME:-$HOME/.header}"; _SINCE="$(cat "$_HH/.last-run" 2>/dev/null || echo)"
+curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
+  "https://joinheader.com/api/v2/topics/dashboard${_SINCE:+?since=$_SINCE}"
+```
+
+Surface only topics whose `next_action` is `briefing_ready` (see the table below); if nothing changed, say "nothing new since &lt;time&gt;" and stop. The skill writes `.last-run` after each briefing (see "Usage logging"), so the window manages itself.
+
+**Session nudge (opt-in):** with `.last-run` tracking in place, a `SessionStart` hook or a scheduled `/header-briefing since-last` gives a quiet "a new briefing dropped on &lt;topic&gt;" at session start without a full fetch. Gate it behind a key so no-account users never see it.
 
 ### Scheduled / agent loop
 
