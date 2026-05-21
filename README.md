@@ -80,6 +80,19 @@ This will:
 
 Your project data never leaves your machine — the workspace audit happens locally after the briefing is fetched.
 
+### Audit your agent setup (beta)
+
+```
+/header-briefing audit
+```
+
+A local, no-account scan of your **agent harness** — surfaced proactively during onboarding, or on request. Two checks:
+
+- **Prompt/config debt** — reads `CLAUDE.md`, `AGENTS.md`, Claude Code settings/commands/subagents, and MCP config; reports their size and per-turn token cost; flags stale "cargo-cult" prompt patterns (e.g. `think step by step`, role puffery, "don't hallucinate", JSON-format nagging) that newer models make redundant, so you can prune them.
+- **Dependency & supply-chain** — detects your package ecosystems and recommends an install-cooldown gate (`min-release-age` for npm, `--uploaded-prior-to` for pip; needs npm ≥ 11.10 / pip ≥ 26.1, locally and in CI) that refuses packages published in the last N days — blocking freshly-compromised releases before they're caught and pulled.
+
+Everything is read locally; nothing leaves your machine. Findings split into **apply-now** fixes (deletions, the supply-chain gate, security patches) and changes worth **proving with an experiment** — experiment execution is *coming soon* (not yet supported); for now the skill records which experiments you want so they're prioritized.
+
 ### Browse Public Topics
 
 You can also ask the skill to browse Header's public topic catalog instead of using the default topic. Public topics span a variety of technology areas and each has its own curated source list and briefing history.
@@ -147,7 +160,7 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 |---|---|
 | `config` | Persisted configuration (flat `key: value`). |
 | `credentials` | Optional — your API key, saved by the onboarding funnel (`chmod 600`; read as data, never executed). |
-| `.welcome-seen`, `.signup-state`, `.language-prompted` | Onboarding markers, so first-run prompts show exactly once. |
+| `.welcome-seen`, `.signup-state`, `.language-prompted`, `.audit-offered` | Onboarding markers, so first-run prompts show exactly once. |
 | `last-update-check`, `update-snoozed`, `version-info.json` | Update-check cache, snooze state, and the last version-endpoint response. |
 | `ledger.jsonl` | Recommendation ledger (applied/dismissed/snoozed) — local-only, never sent. |
 | `telemetry.jsonl` | Local usage events — only written if you opt into telemetry. |

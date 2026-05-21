@@ -3,6 +3,26 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.5.0 — Audit mode (beta)
+
+- **`audit` mode** (`bin/header-audit`) — a local, no-account scan of the agent
+  *harness*, surfaced proactively in onboarding (not just on request):
+  - **Prompt/config debt:** locates `CLAUDE.md`, `AGENTS.md`, settings, commands,
+    subagents, MCP config; reports per-file size + token estimate; flags known
+    cargo-cult prompt patterns (think-step-by-step, role puffery, "don't
+    hallucinate", JSON-format nagging, …) so they can be pruned.
+  - **Dependency & supply-chain:** detects ecosystems and tool versions, and
+    whether an install-cooldown gate is in place; recommends a
+    `min-release-age` / `--uploaded-prior-to` cooldown (npm ≥ 11.10, pip ≥ 26.1,
+    locally and in CI) to block freshly-compromised packages.
+- **Recommendation → hypothesis → experiment:** findings split into apply-now
+  (deletions, gates, patches) and `[Experiment · coming soon]` (model/major
+  upgrades). Experiments aren't supported yet; the skill captures **demand**
+  instead — a new `wanted` ledger action records which experiments users want,
+  and (consent-gated) telemetry aggregates the counts.
+- Onboarding now plants the optimization vision and offers the audit once after
+  the first briefing (`.audit-offered` marker).
+
 ## 0.4.0 — Per-repo topic memory
 
 - **Repo → topic memory** (`bin/header-repo`): when you create a custom topic

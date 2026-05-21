@@ -5,8 +5,10 @@
 # on applied ones. Phase 3 telemetry can aggregate it (with consent).
 #
 # Usage:
-#   header-ledger record <surfaced|applied|dismissed|snoozed> <key> \
+#   header-ledger record <surfaced|applied|dismissed|snoozed|wanted> <key> \
 #       [--title T] [--briefing B] [--topic TP] [--source URL] [--repo R]
+#       ("wanted" = the user asked for the experiment behind a hypothesis —
+#        captures demand for the experimentation platform, still local-only.)
 #   header-ledger status <key> [--repo R]            latest action for <key>, or "none"
 #   header-ledger list [--action A] [--since-days N] [--repo R]
 #       latest-disposition rows: <action>\t<key>\t<title>
@@ -29,8 +31,8 @@ case "$cmd" in
     action="${1:-}"; key="${2:-}"
     shift 2 2>/dev/null || true
     case "$action" in
-      surfaced|applied|dismissed|snoozed) ;;
-      *) echo "header-ledger: action must be surfaced|applied|dismissed|snoozed" >&2; exit 1 ;;
+      surfaced|applied|dismissed|snoozed|wanted) ;;
+      *) echo "header-ledger: action must be surfaced|applied|dismissed|snoozed|wanted" >&2; exit 1 ;;
     esac
     [ -n "$key" ] || { echo "header-ledger: <key> required" >&2; exit 1; }
     # Respect the ledger toggle — local recording can be turned off.

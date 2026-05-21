@@ -33,6 +33,13 @@ assert_contains "$applied_list" "tool-x" "list --action applied includes a still
 assert_not_contains "$applied_list" "mcp-streaming" \
   "list --action applied excludes a key whose latest action is dismissed"
 
+# ── wanted action (experiment demand) records + lists ─────────
+HEADER_HOME="$HH" "$LG" record wanted exp-model-upgrade --repo r1 --title "Test opus upgrade"
+assert_eq "wanted" "$(HEADER_HOME="$HH" "$LG" status exp-model-upgrade --repo r1)" \
+  "record wanted → status wanted (captures experiment demand)"
+assert_contains "$(HEADER_HOME="$HH" "$LG" list --action wanted --repo r1)" "exp-model-upgrade" \
+  "list --action wanted surfaces demanded experiments"
+
 # ── invalid action → exit 1 ───────────────────────────────────
 HEADER_HOME="$HH" "$LG" record bogus k --repo r1 >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "invalid action → exit 1"

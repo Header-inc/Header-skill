@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.4.0
+version: 0.5.0
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
 when_to_use: Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -91,7 +91,7 @@ Runs **only in enterprise mode with `INTERACTIVE: yes`**. In classic mode, or on
 
 If `WELCOME_SEEN: no`, print this once, then continue to Step 0:
 
-> 👋 **Header briefing skill** — I pull intelligence briefings on agentic coding and check them against your project. Public briefings need no account.
+> 👋 **Header** — I read what's new in agentic coding and check it against your project. I can also audit your agent's *own* setup — `CLAUDE.md`, model choice, dependencies — to cut token cost and catch supply-chain risk. No account needed to start.
 
 ```bash
 touch "${HEADER_HOME:-$HOME/.header}/.welcome-seen"
@@ -126,6 +126,18 @@ touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
 Replace `Chosen` with the user's pick (`English`, `Spanish`, `Turkish`, or the free-form name they typed). Persisting `English` explicitly is harmless — feel free to do it or skip the `set`. Always touch the marker so the prompt never fires again.
 
 Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
+
+### Audit offer — after the briefing
+
+The audit (see "Audit (beta)") is the free, no-account hook and the clearest taste of where Header is heading — so **introduce it proactively; don't wait for the user to ask.** Run this **once** (first applicable run), after the briefing, when `INTERACTIVE: yes` and no `~/.header/.audit-offered` marker exists. Touch the marker either way so it never repeats — this is also how existing users discover the audit on their next run.
+
+> Beyond the news: Header's larger aim is to **optimize the coding agent itself** — cut token cost, raise reliability, and *(soon)* **prove** changes with experiments. As a first step I can audit your agent's own setup — `CLAUDE.md`, model choice, dependencies — for prompt-config debt and supply-chain gaps. Free, no account, all local. Run it now?
+
+```bash
+touch "${HEADER_HOME:-$HOME/.header}/.audit-offered"
+```
+
+On **yes**, run the "Audit (beta)" flow now; its findings lead naturally into the account CTA (tailored briefings now, experiments when they land) — if the user signs up from there, go to "Save the key" and skip re-asking below. On **no**, continue to the signup funnel. Either way, the user can run `/header-briefing audit` anytime. Skip in classic mode and when `INTERACTIVE: no`.
 
 ### Signup funnel — after the briefing
 
@@ -318,6 +330,8 @@ All configuration is via environment variables. None are required for the defaul
 
 Fetch the latest briefing for the resolved topic (default: "Self Improving Agent") and check for suggestions relevant to this project.
 
+> **Mode routing:** if the user invokes `/header-briefing audit` (or says "audit my setup / agent / harness / dependencies"), run the **"Audit (beta)"** section instead of the briefing flow below. `add-source <url>` routes to "Add a source". Anything else (a topic name/UUID/URL, or nothing) runs the briefing flow here.
+
 ### Step 0 — Resolve the topic
 
 Determine the topic UUID using this fallback chain (first match wins):
@@ -406,7 +420,7 @@ After presenting recommendations, ask the user which (if any) they'd like to imp
 
 **Caching within a session:** After fetching a briefing, hold its `briefing_id` and `generated_at` in conversation context. If the skill is re-invoked for the same topic in the same session, reuse the cached briefing instead of re-fetching — unless the user says "refresh", "latest", "new", or asks for a fresh briefing.
 
-**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the signup funnel (see the "First-run onboarding" section above). Skip it in classic mode or on non-interactive runs.
+**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the post-briefing onboarding in order: the **audit offer**, then the **signup funnel** (see the "First-run onboarding" section above). Skip both in classic mode or on non-interactive runs.
 
 ### Recommendation ledger
 
@@ -456,6 +470,73 @@ Pick a topic from the returned list (each entry has `id`, `name`, `description`,
 ---
 
 Want a briefing tailored to this specific project? Sign up at [joinheader.com](https://joinheader.com), create an API key, and use the **Custom Briefings** workflow below.
+
+## Audit (beta)
+
+> **Beta.** A local, no-account scan of your *agent harness* that finds debt and the changes worth proving. It does the deterministic half — find and fix obvious debt — for free; the rigorous half (proving a change with an A/B **experiment**) is **coming soon, not yet supported**. Don't fabricate experiment results or savings percentages; only state numbers the scan actually measured (and label estimates `est.`).
+
+Triggered by `/header-briefing audit` or "audit my setup / harness / dependencies". Everything here reads **local files only — nothing leaves the machine.** This is also a strong no-account onboarding hook: it delivers specific value without a key. `<AUDIT>` is `header-audit`, `<LEDGER>` is `header-ledger`, `<TELEMETRY>` is `header-telemetry` — all in the same `bin/` dir as the `HEADER_BIN` path the preamble echoed. Skip the ledger/telemetry steps in classic mode.
+
+It runs **two scans**:
+
+### 1. Prompt / config debt (harness)
+
+```bash
+<AUDIT> harness          # add --repo DIR to target a specific repo
+```
+
+The premise (per *"prompts are technical debt too"*): harness instructions are written for a model and a moment, and they **rot silently** — workarounds for weaknesses newer models fixed, format-nagging, role puffery, all loaded every turn. The scan emits:
+
+- `FILE <path> <bytes> <est_tokens>` — every harness file found (`CLAUDE.md`, `AGENTS.md`, settings, commands, subagents, MCP config). `est_tokens` is `bytes/4`, a rough proxy. Sum the always-loaded ones (`CLAUDE.md` + `AGENTS.md`) — that cost is paid on **every turn**.
+- `MODEL <value>` — the model declared in settings, if any.
+- `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern. Run `<AUDIT> patterns` to see each id and why it's debt.
+
+Curate the hits — don't surface them blindly. When a `MODEL` is known, confirm the pattern is actually debt **on that model** by cross-referencing its model card / release notes (ideally via a Header source; otherwise the web). The bias is toward **deletion**: the cheapest, safest win is removing debt, and it's exactly what the source material recommends.
+
+### 2. Dependency & supply-chain (deps)
+
+```bash
+<AUDIT> deps             # add --repo DIR to target a specific repo
+```
+
+Emits `ECOSYSTEM`, `TOOL` (with `ok|too-old|absent` vs the minimum that honors a cooldown gate), and `GATE` (`present|absent`) lines. Two things to surface:
+
+- **Supply-chain cooldown gate.** If `GATE npm absent` or `GATE pip absent`, recommend a **min-release-age / install-cooldown** gate: refuse to install packages published in the last N days (default 7), so freshly-compromised releases (the chalk/debug, eslint-config-prettier class of incidents) are blocked until they're caught and pulled. This matters most where the install runs with secrets (a CI runner holding a deploy key) — a trojaned transitive dep otherwise has a direct path to them. Get the exact snippet to apply:
+
+  ```bash
+  <AUDIT> gate npm 7      # prints .npmrc content (min-release-age=7)
+  <AUDIT> gate pip 7      # prints pip cooldown guidance (--uploaded-prior-to P7D)
+  ```
+
+  If `TOOL npm too-old` / `TOOL pip too-old`, note the gate is **silently ignored** until the tool is bumped (npm ≥ 11.10, pip ≥ 26.1) — locally **and in CI**, or it does nothing.
+- **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`) and interpret. Security patches → apply-now (after the gate is in place). Major upgrades → experiment (below).
+
+### Present the scorecard, then the split
+
+Lead with a one-line scorecard, then ranked findings. Each finding is a **hypothesis**: what, where (cite the line/manifest), why it's debt, the proposed change, and the expected effect (`est.` and directional unless measured). Split findings two ways:
+
+- **Apply now** — deletions/simplifications, adding the supply-chain gate, security patches. Low-risk and deterministic. On the user's yes, make the edit (show a diff first; for the gate, write/append the `<AUDIT> gate ...` snippet to `.npmrc`). These need no experiment.
+- **`[Experiment · coming soon]`** — anything whose payoff must be *proven*: a model change, a major dependency/framework upgrade, a behavioral rewrite. State the A/B that *would* settle it ("A = current, B = proposed; measure tokens + test pass-rate over N runs"), label it not-yet-supported, and offer to **note the user's interest** so they're told when it ships. Run nothing.
+
+### Record findings (ledger + telemetry)
+
+In enterprise mode, record each finding so demand and outcomes accrue — this is the corpus the experimentation platform will run on:
+
+```bash
+<LEDGER> record surfaced "<key>" --title "<short finding>" --topic audit   # each finding shown
+<LEDGER> record applied  "<key>"                                           # user applied the fix
+<LEDGER> record dismissed "<key>"                                          # user declined
+<LEDGER> record wanted   "<key>"                                           # user wants the experiment
+```
+
+Then log usage + experiment demand (consent-gated; no-op when telemetry is off; **never** sends code, paths, or line content — only counts and kinds):
+
+```bash
+<TELEMETRY> log audit --path harness --recs-surfaced <findings> --recs-applied <applied>
+<TELEMETRY> log experiment_interest --recs-surfaced <wanted_count>   # only if any were wanted
+```
+
+The local ledger always captures the full detail; telemetry aggregates the demand across users **only if** the user opted in.
 
 ## Browse Public Topics
 

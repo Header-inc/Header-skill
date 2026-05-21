@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# header-audit — BETA. Deterministic scan behind the skill's `audit` mode. It
+# does NOT judge or rewrite anything; it locates files, measures them, and flags
+# known patterns, then the agent (via SKILL.md) curates findings, proposes fixes,
+# and records them. Two scans:
+#
+#   header-audit harness [--repo DIR]
+#       Agent-harness / prompt-config debt. Locates CLAUDE.md, AGENTS.md, Claude
+#       Code settings/commands/agents, MCP config, etc.; reports each file's size
+#       and a rough token estimate; greps for known cargo-cult prompt patterns.
+#       Output lines (tab-separated):
+#         FILE  <path>  <bytes>  <est_tokens>
+#         MODEL <value>                         (from settings, if found)
+#         HIT   <path>  <lineno>  <pattern_id>  <excerpt>
+#
+#   header-audit deps [--repo DIR]
+#       Dependency / supply-chain posture. Detects ecosystems, tool versions, and
+#       whether an install-cooldown gate is in place. Output lines:
+#         ECOSYSTEM <name>  <manifest>
+#         TOOL      <name>  <version|->  <ok|too-old|absent>
+#         GATE      <name>  <present|absent>  <path|->
+#
+#   header-audit patterns          list the built-in prompt-debt patterns
+#   header-audit gate <npm|pip> [days]
+#                                  print the recommended supply-chain snippet
+#
+# Reads only (harness/deps never write). Nothing leaves the machine.
+# Env: HEADER_HOME (unused here), HOME (for user-global config). Token estimate
+# is bytes/4 — a rough proxy, not a tokenizer.
+set -uo pipefail
+
+TAB="$(printf '\t')"
+
+# ── built-in prompt-debt patterns ─────────────────────────────
+# id <TAB> extended-regex (grep -iE) <TAB> why-it's-debt
+_patterns() {
+  cat <<EOF
+step-by-step${TAB}think step.?by.?step|step.?by.?step|reason step by step${TAB}Modern models reason by default; explicit "step by step" is usually a no-op or bloats output.
+deep-breath${TAB}take a deep breath${TAB}Cargo-cult motivation prompt with no measured effect on current models.
+role-puffery${TAB}you are an? (expert|skilled|senior|world.?class|professional|brilliant|10x)${TAB}Role puffery rarely changes current-model behavior; it just costs tokens every turn.
+helpful-assistant${TAB}you are a helpful (assistant|ai)${TAB}Default persona boilerplate — redundant on modern assistants.
+tip-bribe${TAB}tip you|i will tip|\\\$[0-9]+ (tip|bonus|reward)|reward you${TAB}Tip/reward bribery was a quirk of older models; no effect now.
+no-hallucinate${TAB}do(n.?t| not) hallucinate|never hallucinate${TAB}"Don't hallucinate" does not reduce hallucination; it's noise.
+json-nag${TAB}respond only (in|with) json|output only json|must (respond|reply) with (valid )?json|only valid json${TAB}Newer models honor structured-output natively; repeated format nagging is debt.
+ai-language-model${TAB}as an ai language model${TAB}Stale phrasing copied from old completions; remove.
+think-first${TAB}before (you )?(answer|respond)[, ]+think|let.?s think${TAB}Redundant with native reasoning on current models.
+EOF
+}
+
+# ── version compare: ver_ge HAVE WANT → "ge" | "lt" ───────────
+ver_ge() {
+  awk -v a="${1:-0}" -v b="${2:-0}" 'BEGIN{
+    na=split(a,A,"."); nb=split(b,B,"."); n=(na>nb)?na:nb
+    for(i=1;i<=n;i++){x=(i<=na)?A[i]+0:0; y=(i<=nb)?B[i]+0:0
+      if(x>y){print "ge"; exit} if(x<y){print "lt"; exit}}
+    print "ge"
+  }'
+}
+
+# parse optional --repo
+REPO=""
+sub="${1:-}"; shift 2>/dev/null || true
+args_rest=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) REPO="${2:-}"; shift 2 ;;
+    *) args_rest="$args_rest $1"; shift ;;
+  esac
+done
+[ -n "$REPO" ] || REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+scan_file() {
+  f="$1"
+  [ -f "$f" ] || return 0
+  bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; [ -n "$bytes" ] || bytes=0
+  printf 'FILE\t%s\t%s\t%s\n' "$f" "$bytes" "$(( bytes / 4 ))"
+  _patterns | while IFS="$TAB" read -r id rx why; do
+    [ -n "${id:-}" ] || continue
+    grep -niE "$rx" "$f" 2>/dev/null | while IFS=: read -r ln rest; do
+      ex="$(printf '%s' "$rest" | tr '\t\r' '  ' | sed 's/^[[:space:]]*//' | cut -c1-70)"
+      printf 'HIT\t%s\t%s\t%s\t%s\n' "$f" "$ln" "$id" "$ex"
+    done
+  done
+}
+
+case "$sub" in
+  patterns)
+    _patterns | while IFS="$TAB" read -r id rx why; do
+      [ -n "${id:-}" ] || continue
+      printf '%-18s %s\n' "$id" "$why"
+    done
+    ;;
+
+  harness)
+    # Model, if declared in Claude Code settings.
+    for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json"; do
+      [ -f "$s" ] || continue
+      m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
+      [ -n "$m" ] && { printf 'MODEL\t%s\n' "$m"; break; }
+    done
+    # Fixed harness files.
+    for f in \
+      "$REPO/CLAUDE.md" "$REPO/AGENTS.md" \
+      "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
+      "$REPO/.mcp.json" "$REPO/.cursorrules" \
+      "$REPO/.github/copilot-instructions.md" \
+      "$HOME/.claude/CLAUDE.md"; do
+      scan_file "$f"
+    done
+    # Globbed harness files (commands, subagents). Guard each — no nullglob in sh.
+    for f in "$REPO"/.claude/commands/*.md "$REPO"/.claude/agents/*.md; do
+      [ -f "$f" ] && scan_file "$f"
+    done
+    ;;
+
+  deps)
+    # Ecosystems.
+    [ -f "$REPO/package.json" ] && printf 'ECOSYSTEM\tnpm\t%s\n' "$REPO/package.json"
+    for p in requirements.txt pyproject.toml setup.cfg setup.py Pipfile; do
+      [ -f "$REPO/$p" ] && { printf 'ECOSYSTEM\tpython\t%s\n' "$REPO/$p"; break; }
+    done
+    [ -f "$REPO/go.mod" ]     && printf 'ECOSYSTEM\tgo\t%s\n' "$REPO/go.mod"
+    [ -f "$REPO/Cargo.toml" ] && printf 'ECOSYSTEM\tcargo\t%s\n' "$REPO/Cargo.toml"
+    [ -f "$REPO/Gemfile" ]    && printf 'ECOSYSTEM\tbundler\t%s\n' "$REPO/Gemfile"
+
+    # Tooling versions vs the minimum that honors a cooldown gate.
+    if command -v npm >/dev/null 2>&1; then
+      nv="$(npm --version 2>/dev/null)"
+      st="ok"; [ "$(ver_ge "$nv" 11.10)" = "ge" ] || st="too-old"
+      printf 'TOOL\tnpm\t%s\t%s\n' "${nv:--}" "$st"
+    else
+      printf 'TOOL\tnpm\t-\tabsent\n'
+    fi
+    pv=""
+    if command -v pip >/dev/null 2>&1; then pv="$(pip --version 2>/dev/null | awk '{print $2}')"
+    elif command -v pip3 >/dev/null 2>&1; then pv="$(pip3 --version 2>/dev/null | awk '{print $2}')"
+    elif command -v python3 >/dev/null 2>&1; then pv="$(python3 -m pip --version 2>/dev/null | awk '{print $2}')"; fi
+    if [ -n "$pv" ]; then
+      st="ok"; [ "$(ver_ge "$pv" 26.1)" = "ge" ] || st="too-old"
+      printf 'TOOL\tpip\t%s\t%s\n' "$pv" "$st"
+    else
+      printf 'TOOL\tpip\t-\tabsent\n'
+    fi
+
+    # Cooldown gate present?
+    npmrc=""
+    for r in "$REPO/.npmrc" "$REPO/frontend/.npmrc" "$HOME/.npmrc"; do
+      [ -f "$r" ] && grep -qiE '^[[:space:]]*min-release-age[[:space:]]*=' "$r" 2>/dev/null && { npmrc="$r"; break; }
+    done
+    [ -n "$npmrc" ] && printf 'GATE\tnpm\tpresent\t%s\n' "$npmrc" || printf 'GATE\tnpm\tabsent\t-\n'
+
+    pipgate=""
+    for c in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml \
+             "$REPO/pip.conf" "$REPO/pip.ini" "$HOME/.config/pip/pip.conf"; do
+      [ -f "$c" ] && grep -qiE 'uploaded-prior-to' "$c" 2>/dev/null && { pipgate="$c"; break; }
+    done
+    [ -n "$pipgate" ] && printf 'GATE\tpip\tpresent\t%s\n' "$pipgate" || printf 'GATE\tpip\tabsent\t-\n'
+    ;;
+
+  gate)
+    eco="$(printf '%s' "$args_rest" | awk '{print $1}')"
+    days="$(printf '%s' "$args_rest" | awk '{print $2}')"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
+    case "$eco" in
+      npm)
+        cat <<EOF
+# Supply-chain defense: refuse to install packages published in the last $days days.
+# Most malicious publishes are caught and removed within hours-to-days, so this
+# window blocks fresh compromises (recent chalk/debug, eslint-config-prettier,
+# etc.) while letting normal releases through after the dust settles.
+#
+# Requires npm >= 11.10. Silently ignored on older npm — so bump npm locally
+# (\`npm install -g npm@latest\`) and in CI for this to actually take effect.
+min-release-age=$days
+EOF
+        ;;
+      pip)
+        cat <<EOF
+# Supply-chain defense: refuse to install packages published in the last $days days.
+# pip >= 26.1 honors --uploaded-prior-to with ISO 8601 durations.
+#   Local:  pip install --upgrade 'pip>=26.1'
+#           pip install --uploaded-prior-to P${days}D <targets>
+#   CI:     bump pip the same way before installing deps.
+# The runner that installs your deps may hold prod secrets; a trojaned transitive
+# dep would otherwise have a path to them. The cooldown blocks fresh compromises.
+EOF
+        ;;
+      *) echo "header-audit: gate <npm|pip> [days]" >&2; exit 1 ;;
+    esac
+    ;;
+
+  *)
+    echo "Usage: header-audit {harness|deps|patterns|gate} [--repo DIR] ..." >&2
+    exit 1
+    ;;
+esac
