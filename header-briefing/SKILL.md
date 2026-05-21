@@ -333,6 +333,8 @@ Apply to every Header API call. Don't auto-retry blindly; inform the user before
 
 The audit happens locally — no project data is sent to Header. The shape of the audit is fixed; the inputs vary by project. Use your normal repo-exploration tools (directory listings, file reads) to find relevant artifacts; do not rely on a hardcoded file list.
 
+**Recent activity (diff-aware):** before building the audit, glance at what the project has been working on lately — recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`). Weight recommendations toward areas with recent activity: a briefing item that touches code the user changed this week is far more actionable than one about a dormant corner. Name the connection when you surface it ("you just added a retrieval pipeline — this chunking technique applies directly"). In a non-git project, skip this and weight by the stack instead.
+
 1. **Identify the project's stack and tooling** from whatever metadata the project happens to use — package manifests, lockfiles, language version files, build/test/CI configs, container or infrastructure definitions, agent/skill definitions. Read `CLAUDE.md` and the project README if present for stated context and conventions.
 
 2. **Find what the team already knows is broken, missing, or pending.** Look for learnings, post-mortems, runbooks, retrospectives, architecture/decision records, changelogs, roadmaps, backlogs/TODO docs, and incident reports — at the repo root and in any conventional documentation directory. Also do a quick scan for in-code `TODO`/`FIXME`/`HACK` markers as a density signal. Cite source files when you reference an item.
