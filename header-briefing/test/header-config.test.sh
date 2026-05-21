@@ -16,6 +16,8 @@ assert_eq "true" "$(HEADER_HOME="$sb/.header" "$HC" get update_check)" \
   "get update_check on missing file → default true"
 assert_eq "false" "$(HEADER_HOME="$sb/.header" "$HC" get auto_update)" \
   "get auto_update on missing file → default false"
+assert_eq "true" "$(HEADER_HOME="$sb/.header" "$HC" get ledger)" \
+  "get ledger on missing file → default true"
 
 # ── set then get; header written on first create ──────────────
 HEADER_HOME="$sb/.header" "$HC" set language Turkish
@@ -74,6 +76,7 @@ assert_contains "$def_out" "staleness_days:" "defaults lists staleness_days"
 assert_contains "$def_out" "default_topic:"  "defaults lists default_topic"
 assert_contains "$def_out" "auto_update:"    "defaults lists auto_update"
 assert_contains "$def_out" "update_check:"   "defaults lists update_check"
+assert_contains "$def_out" "ledger:"         "defaults lists ledger"
 
 # ── unknown / missing subcommand → exit 1 ─────────────────────
 "$HC" bogus >/dev/null 2>&1; rc=$?
