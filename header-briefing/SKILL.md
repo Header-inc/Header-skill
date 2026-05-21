@@ -131,9 +131,13 @@ Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
 
 Run this **after the briefing has been delivered** (end of Step 4), so value lands before any pitch. Trigger only when `HAS_KEY: no` **and** `SIGNUP_STATE` is `unset` or `pending` (if `done` or `public-only`, skip). It also runs at this point if the user asks for an auth-only feature (a custom topic / on-demand generation) without a key.
 
-Ask:
+Lead with the value the user already got — the public flow is genuinely useful — then offer the upgrade. Don't imply the briefing was generic-and-useless:
 
-> Briefings tuned to *this* project need a free Header account (free trial, no credit card). Where are you?
+> The recommendations above came with no account: the briefing itself is Header's **general** agentic-coding briefing (the same sources for everyone), but I analyzed *this* repo locally and surfaced only what applies to your stack and open issues.
+>
+> A **custom topic** goes further — it tailors the briefing's **sources and focus** to your project from the start, so the raw material is about your stack instead of a shared feed filtered after the fact. That needs a free Header account (free trial, no credit card).
+>
+> Where are you?
 > 1. **New to Header** — walk me through a 30-second signup
 > 2. **I have an account** — point me to my API key
 > 3. **Just public briefings** — no account, don't ask again
@@ -198,6 +202,16 @@ printf 'done\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
 ```
 
 The credentials file is **only ever read as data** — the preamble and the authenticated `curl` calls parse the `HEADER_API_KEY=` line with `grep`/`sed`. Nothing sources or executes it.
+
+### First-run handoff — build the repo-tailored topic now
+
+When the funnel just produced a usable key (`SIGNUP_STATE` is now `done`) and you're still `INTERACTIVE: yes`, **don't stop at "ready."** Continue, in this same session, straight into **"Auto-create a topic from your project"** (below) — this is the whole reason the user signed up, so close the loop now instead of waiting for the next run:
+
+> Now let me make a briefing that's actually about **this repo** — tailored to <one-line summary of the detected stack and priorities>, not the shared feed. Sound good?
+
+This prompt stands in for Auto-create's own offer — don't ask twice. On yes, run the Auto-create *steps*: draft the goal from the Step 3 audit, create the topic, then **offer to remember it for this repo and offer a schedule** (see "Remember the topic for this repo" and "Bound repos — freshness & schedule"). That ends the first run with a briefing that's tailored, bound to the repo, and (optionally) auto-refreshing.
+
+The key was added mid-session, so the preamble's `HAS_KEY: no` echo is stale — proceed anyway; the authenticated `curl` calls resolve the key from the credentials file you just wrote. The `.topic-offered` marker still gates Auto-create, so this won't double-ask on later runs.
 
 ### Telemetry consent
 
