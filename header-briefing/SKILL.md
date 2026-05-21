@@ -834,6 +834,8 @@ For full API documentation, see [joinheader.com/docs](https://joinheader.com/doc
 
 ## Response Reference
 
+> **Source of truth:** the field names, types, endpoints, and error codes documented throughout this skill are a point-in-time snapshot. If the live API ever disagrees with what's written here — a field is missing, renamed, or a different type; an endpoint moved; a response doesn't match — **trust the API and fetch the latest contract from [joinheader.com/docs](https://joinheader.com/docs)** (e.g. `curl -sS https://joinheader.com/docs`, or the OpenAPI spec at `https://joinheader.com/api/v2/openapi.json`). Adapt to what the docs say; don't force the call to fit this snapshot.
+
 ### BriefingResponse
 
 | Field | Type | Notes |
