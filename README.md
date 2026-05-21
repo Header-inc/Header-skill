@@ -107,6 +107,12 @@ With an API key, you can:
 - **Update goals** to refine focus areas and keywords over time
 - **Check briefing status** for async generation (`IN_PROGRESS`, `COMPLETED`, `FAILED`)
 
+### Per-repo topic memory
+
+When you create a custom topic while working in a repository, the skill offers to **remember it for that repo**. After that, running `/header-briefing` in the same repo automatically uses your topic instead of the public default — no argument needed. Bindings live in a local registry (`~/.header/repos.jsonl`) keyed by the repo's git remote (with a path fallback); nothing is written inside your repo and nothing is sent. New sessions also check whether a newer briefing has appeared and surface it. Disable with `header-config set repo_memory false`; forget one repo with `header-repo clear`.
+
+You can also put a repo's topic on a **schedule** (every 3 / 7 / 14 / 30 days). Header then regenerates the briefing server-side on that cadence, so a fresh one is waiting the next time you open a session — even if you never trigger it manually.
+
 ## Configuration
 
 Configuration comes from three places, highest priority first: **environment variable › `~/.header/config` › built-in default**. Environment variables always win.
@@ -131,7 +137,7 @@ Configuration comes from three places, highest priority first: **environment var
 ~/.claude/skills/header-briefing/bin/header-config list
 ```
 
-Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`. Run the helper with `defaults` to see every key and its default value.
+Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`, `repo_memory`. Run the helper with `defaults` to see every key and its default value.
 
 ### State directory
 
@@ -145,6 +151,8 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 | `last-update-check`, `update-snoozed`, `version-info.json` | Update-check cache, snooze state, and the last version-endpoint response. |
 | `ledger.jsonl` | Recommendation ledger (applied/dismissed/snoozed) — local-only, never sent. |
 | `telemetry.jsonl` | Local usage events — only written if you opt into telemetry. |
+| `repos.jsonl` | Repo → topic bindings (which custom topic each repository uses) — local-only, never sent. |
+| `repo-seen/` | Per-repo "last briefing seen" markers, for the session-start freshness check. |
 
 ## Updating
 

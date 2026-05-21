@@ -38,12 +38,13 @@ lookup_default() {
     ledger)         echo "true" ;;
     telemetry)      echo "off" ;;
     auto_tune)      echo "false" ;;
+    repo_memory)    echo "true" ;;   # remember a repo's bound topic across sessions
     *)              echo "" ;;
   esac
 }
 
 # Keys recognized by `list` and `defaults`. Phase 3 (telemetry) extends this set further.
-KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune"
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 

@@ -62,6 +62,14 @@ assert_contains "$out" "STALENESS_DAYS: 7" "STALENESS_DAYS echoed — default 7"
 out="$(run_preamble "$SKILL_DIR" "$sb" HEADER_LANGUAGE=Klingon)"
 assert_contains "$out" "LANGUAGE: Klingon" "HEADER_LANGUAGE env overrides the default"
 
+# ── REPO_TOPIC (per-repo binding) ─────────────────────────────
+sb="$(make_sandbox)"; mkdir -p "$sb/.header"
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb")" "REPO_TOPIC:" \
+  "REPO_TOPIC echoed (empty when this repo has no binding)"
+printf '{"key":"k1","topic":"bound-xyz","name":"X"}\n' > "$sb/.header/repos.jsonl"
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_REPO_KEY=k1)" "REPO_TOPIC: bound-xyz" \
+  "REPO_TOPIC echoes the topic bound to this repo"
+
 # ── markers ───────────────────────────────────────────────────
 sb="$(make_sandbox)"; mkdir -p "$sb/.header"
 out="$(run_preamble "$SKILL_DIR" "$sb")"

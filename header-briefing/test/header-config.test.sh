@@ -22,6 +22,8 @@ assert_eq "off" "$(HEADER_HOME="$sb/.header" "$HC" get telemetry)" \
   "get telemetry on missing file → default off"
 assert_eq "false" "$(HEADER_HOME="$sb/.header" "$HC" get auto_tune)" \
   "get auto_tune on missing file → default false"
+assert_eq "true" "$(HEADER_HOME="$sb/.header" "$HC" get repo_memory)" \
+  "get repo_memory on missing file → default true"
 
 # ── set then get; header written on first create ──────────────
 HEADER_HOME="$sb/.header" "$HC" set language Turkish
@@ -83,6 +85,7 @@ assert_contains "$def_out" "update_check:"   "defaults lists update_check"
 assert_contains "$def_out" "ledger:"         "defaults lists ledger"
 assert_contains "$def_out" "telemetry:"      "defaults lists telemetry"
 assert_contains "$def_out" "auto_tune:"      "defaults lists auto_tune"
+assert_contains "$def_out" "repo_memory:"    "defaults lists repo_memory"
 
 # ── unknown / missing subcommand → exit 1 ─────────────────────
 "$HC" bogus >/dev/null 2>&1; rc=$?

@@ -3,6 +3,22 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.4.0 — Per-repo topic memory
+
+- **Repo → topic memory** (`bin/header-repo`): when you create a custom topic
+  while working in a repo, the skill offers to remember it for that repo. New
+  sessions there resolve the bound topic automatically (Step 0, above the global
+  default) instead of falling back to the public topic. Stored in a local global
+  registry (`~/.header/repos.jsonl`) keyed by git remote (path fallback) — never
+  written inside the repo, never sent. New `repo_memory` config key (default true).
+- **Session-start freshness:** in a bound repo with a key, the skill fetches the
+  topic's latest briefing and surfaces it when it's newer than what you last saw
+  (per-repo `seen` marker).
+- **Scheduled briefings:** offers to put the repo's goal on a 3 / 7 / 14 / 30-day
+  schedule via `PUT /api/v2/goals/{id}` (`schedule_enabled`,
+  `schedule_frequency_days`). Header regenerates briefings server-side on that
+  cadence — they're waiting next time you open a session.
+
 ## 0.3.2 — Telemetry client hardening
 
 - Each telemetry event carries an `event_id` (idempotency key for safe

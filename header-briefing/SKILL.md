@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.3.2
+version: 0.4.0
 description: Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key).
 when_to_use: Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used.
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -41,6 +41,7 @@ else
     echo "INTERACTIVE: yes"
   fi
   echo "DEFAULT_TOPIC: ${HEADER_DEFAULT_TOPIC:-$("$_HC" get default_topic)}"
+  echo "REPO_TOPIC: $("$(dirname "$_HC")/header-repo" get 2>/dev/null || true)"
   echo "LANGUAGE: ${HEADER_LANGUAGE:-$("$_HC" get language)}"
   echo "STALENESS_DAYS: ${HEADER_STALENESS_DAYS:-$("$_HC" get staleness_days)}"
   echo "WELCOME_SEEN: $([ -f "$_HH/.welcome-seen" ] && echo yes || echo no)"
@@ -68,6 +69,7 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 |---|---|
 | `HEADER_BIN` | Absolute path to `bin/header-config`. Re-substitute it in any later bash call that needs the config CLI — each `Bash` invocation is a fresh shell, so this echo is the simplest way to locate the helper again. |
 | `DEFAULT_TOPIC` | Topic UUID for Step 0. Already resolves env var → config file → empty. |
+| `REPO_TOPIC` | Topic UUID this repository is bound to (a custom topic the user created here), or empty. When non-empty **and** a key is available, it wins over `DEFAULT_TOPIC` in Step 0 — see "Bound repos — freshness & schedule". Empty → not a bound repo (or `repo_memory` is off). |
 | `LANGUAGE` | Render user-facing output in this language. Already resolves env → config → `English`. |
 | `STALENESS_DAYS` | Threshold for the briefing-age check in Step 2. |
 | `INTERACTIVE` | `no` → scheduled / non-interactive run: skip the welcome, the language prompt, and the signup funnel. `yes` → all three are eligible. |
@@ -310,8 +312,9 @@ Determine the topic UUID using this fallback chain (first match wins):
    - URL containing `/briefings/<uuid>` (e.g., `https://joinheader.com/briefings/<uuid>`) → extract the UUID, treat it as a **briefing ID**, skip Step 1 entirely, and go straight to Step 2 (`/api/v2/public/briefings/<uuid>`).
    - URL containing `/topics/<uuid>` or a bare UUID → use as the **topic ID** and proceed to Step 1.
    - Anything else → search `/api/v2/topics/public/catalog` for a case-insensitive substring match on `name`. If exactly one matches, use its `id`. If multiple match, ask the user to disambiguate. If none match, fall through.
-2. **Resolved default topic** — in enterprise mode, use the preamble's `DEFAULT_TOPIC` value when it is non-empty (it already reflects the `HEADER_DEFAULT_TOPIC` env var, then `~/.header/config`). In classic mode, use the `HEADER_DEFAULT_TOPIC` env var directly.
-3. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
+2. **Remembered topic for this repo** — in enterprise mode, if the preamble echoed a non-empty `REPO_TOPIC` **and** a key is available (`HAS_KEY: yes`), use it. This is a custom topic the user bound to this repository, so it is private: fetch it via the **authenticated** endpoints, and run the session-start freshness check first — see "Bound repos — freshness & schedule". If `REPO_TOPIC` is set but no key is available (key was removed), skip it and fall through. A `404` on fetch means the topic was deleted server-side — treat the binding as stale (offer `header-repo clear`) and fall through.
+3. **Resolved default topic** — in enterprise mode, use the preamble's `DEFAULT_TOPIC` value when it is non-empty (it already reflects the `HEADER_DEFAULT_TOPIC` env var, then `~/.header/config`). In classic mode, use the `HEADER_DEFAULT_TOPIC` env var directly.
+4. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
 
 **Claude Code only:** the explicit argument is delivered as `$ARGUMENTS` when invoked via `/header-briefing <topic>`. Other harnesses: extract the topic identifier from the user's message text.
 
@@ -576,6 +579,79 @@ When a key is present but the user has no custom topic yet (`INTERACTIVE: yes`, 
 > Want briefings tuned to *this* project? I'll create a topic focused on <one-line summary of the detected stack and priorities> — no typing needed.
 
 On yes, POST it (reuse "Create a custom topic", filling `goal_description` from the detected stack and any named pain points). For a sharper fit, first let Header propose sources for that goal — `POST /api/v2/sources/recommend` → `POST /api/v2/sources/recommend/commit` returns a `group_id` to create the topic with. On a `TOPIC_LIMIT_FREE` response, run the trial/upgrade flow ("Tier limits and error handling"). Always `touch "${HEADER_HOME:-$HOME/.header}/.topic-offered"` so it asks only once.
+
+### Remember the topic for this repo
+
+Right after a topic is created — whether via "Create a custom topic" or "Auto-create" — in **enterprise mode** with `INTERACTIVE: yes`, offer to bind it to the current repository so future sessions here reuse it automatically. Offer; don't write silently.
+
+> Remember this topic for **this repo**? New `/header-briefing` runs here will use it instead of the public default. (Stored locally in `~/.header/repos.jsonl` — never inside your repo, never sent.)
+
+On yes, record the binding. `<REPO>` is `header-repo`, in the same `bin/` dir as the `HEADER_BIN` path the preamble echoed:
+
+```bash
+"<REPO>" bind <new_topic_id> "<topic name>"
+```
+
+The next session's preamble echoes it as `REPO_TOPIC`, and Step 0 picks it up above the global default. Then immediately offer a schedule (next section). To forget it later, run `header-repo clear` from inside the repo.
+
+### Bound repos — freshness & schedule
+
+This runs at session start **only** when the preamble echoed a non-empty `REPO_TOPIC` and a key is available (`HAS_KEY: yes`). It replaces the public Step 1 fetch for bound repos: the bound topic is private, so use the authenticated endpoints. `<REPO>` is `header-repo`; `_HK` is the resolved key (env var or `~/.header/credentials`, as in the other authenticated calls).
+
+**1. Fetch the bound topic and check freshness.**
+
+```bash
+curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $_HK" \
+  https://joinheader.com/api/v2/topics/{REPO_TOPIC}
+```
+
+- `404` → the topic was deleted server-side. Tell the user, run `"<REPO>" clear`, and fall back to the default topic (Step 0 step 3).
+- Otherwise read `default_goal_id` and `latest_briefing.generated_at`. Compare `generated_at` to the last-seen marker:
+
+```bash
+_SEEN="$("<REPO>" seen)"
+```
+
+If `generated_at` is newer than `_SEEN` (or `_SEEN` is empty), there's a **new briefing since the user last visited this repo** — say so ("📰 New briefing for this repo, generated <date>"), then deliver it via Step 2 using `latest_briefing` (fetch the full briefing by id with the authenticated endpoint + `Accept: text/markdown`). After delivering, record what was shown:
+
+```bash
+"<REPO>" seen "<generated_at of the briefing just delivered>"
+```
+
+If `generated_at` equals `_SEEN`, there's nothing new — deliver the existing briefing as usual but skip the "new" banner.
+
+**2. Offer / report the schedule.** Header generates scheduled briefings server-side on the goal, so they appear even when the user never opens a session. Fetch the goal to see the current schedule:
+
+```bash
+curl -sS -H "Authorization: Bearer $_HK" \
+  https://joinheader.com/api/v2/goals/{default_goal_id}
+```
+
+Read `schedule_enabled`, `schedule_frequency_days`, `next_scheduled_generation`, `last_briefing_at`.
+
+- **Not scheduled** (`schedule_enabled: false`) and `INTERACTIVE: yes` — offer once (track with a `~/.header/.schedule-offered` marker so it doesn't nag). Use `AskUserQuestion` on Claude Code, numbered plain text elsewhere:
+
+  > Keep this repo's briefing fresh automatically? Header can regenerate it on a schedule.
+  >
+  > 1. Every 3 days
+  > 2. Every 7 days (recommended)
+  > 3. Every 14 days
+  > 4. Every 30 days
+  > 5. No thanks
+
+  On a cadence choice, enable it on the goal:
+
+  ```bash
+  curl -sS -w "\n%{http_code}" -X PUT https://joinheader.com/api/v2/goals/{default_goal_id} \
+    -H "Authorization: Bearer $_HK" -H "Content-Type: application/json" \
+    -d '{"schedule_enabled": true, "schedule_frequency_days": 7}'
+  ```
+
+  Confirm ("✓ This repo's briefing will refresh every 7 days"). Always `touch "${HEADER_HOME:-$HOME/.header}/.schedule-offered"`.
+
+- **Already scheduled** — don't re-offer. If useful, mention the cadence and `next_scheduled_generation` in one line. To change or stop it, the user can ask; PUT a new `schedule_frequency_days`, or `{"schedule_enabled": false}` to turn it off.
+
+Best-effort throughout: if any call fails, fall back to the normal public flow — freshness and scheduling never block a briefing.
 
 ### Add a source
 
