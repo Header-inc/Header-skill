@@ -3,6 +3,15 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.3.2 — Telemetry client hardening
+
+- Each telemetry event carries an `event_id` (idempotency key for safe
+  server-side dedup under at-least-once retries).
+- Sync batches are capped at 100 events per request; the cursor advances by
+  the number actually sent.
+- On the `full` tier, sends are authenticated with the API key when one is
+  present (ties usage to the account); `anonymous` never attaches a key.
+
 ## 0.3.1 — Source API wiring
 
 - `add-source` and the custom-sources prompt now use the real source API:

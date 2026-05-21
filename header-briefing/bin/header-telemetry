@@ -39,10 +39,13 @@ tier() {
 }
 json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
+gen_uuid() {
+  uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null \
+    || od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n'
+}
 install_id() {
   [ -f "$IDFILE" ] && { cat "$IDFILE"; return; }
-  id="$( uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null \
-        || od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n' )"
+  id="$(gen_uuid)"
   if [ -n "$id" ]; then mkdir -p "$STATE_DIR"; printf '%s' "$id" > "$IDFILE"; fi
   printf '%s' "$id"
 }
@@ -70,10 +73,11 @@ case "$cmd" in
     ver="$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || echo unknown)"
     os="$(uname -s | tr '[:upper:]' '[:lower:]')"
     idfield=""; [ "$T" = "full" ] && idfield="$(install_id)"
+    eid="$(gen_uuid)"
     repo="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo unknown)")"
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-    printf '{"v":1,"ts":"%s","event":"%s","version":"%s","os":"%s","outcome":"%s","path":"%s","duration_s":"%s","recs_surfaced":"%s","recs_applied":"%s","error_class":"%s","installation_id":"%s","_repo":"%s","_branch":"%s"}\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$event")" "$ver" "$os" \
+    printf '{"v":1,"event_id":"%s","ts":"%s","event":"%s","version":"%s","os":"%s","outcome":"%s","path":"%s","duration_s":"%s","recs_surfaced":"%s","recs_applied":"%s","error_class":"%s","installation_id":"%s","_repo":"%s","_branch":"%s"}\n' \
+      "$eid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$event")" "$ver" "$os" \
       "$(json_escape "$outcome")" "$(json_escape "$path")" "$(json_escape "$duration")" \
       "$(json_escape "$rsurf")" "$(json_escape "$rappl")" "$(json_escape "$errcls")" \
       "$(json_escape "$idfield")" "$(json_escape "$repo")" "$(json_escape "$branch")" \
@@ -90,14 +94,21 @@ case "$cmd" in
     cur=0; [ -f "$CURSOR" ] && cur="$(tr -dc 0-9 < "$CURSOR" 2>/dev/null)"; [ -n "$cur" ] || cur=0
     total="$(wc -l < "$LOG" | tr -d ' ')"
     [ "$cur" -ge "$total" ] 2>/dev/null && exit 0
-    # Strip local-only fields; anonymous also strips installation_id.
-    batch="$(tail -n "+$((cur + 1))" "$LOG" | sed -e 's/,"_repo":"[^"]*"//g' -e 's/,"_branch":"[^"]*"//g')"
+    # Up to 100 unsent events; strip local-only fields; anonymous also strips installation_id.
+    unsent="$(tail -n "+$((cur + 1))" "$LOG" | head -n 100)"
+    count="$(printf '%s\n' "$unsent" | grep -c '^{')"
+    [ "${count:-0}" -eq 0 ] 2>/dev/null && exit 0
+    batch="$(printf '%s\n' "$unsent" | sed -e 's/,"_repo":"[^"]*"//g' -e 's/,"_branch":"[^"]*"//g')"
     [ "$T" = "anonymous" ] && batch="$(printf '%s' "$batch" | sed -e 's/,"installation_id":"[^"]*"//g')"
     body="[$(printf '%s' "$batch" | paste -sd, -)]"
     if [ "$dry" -eq 1 ]; then printf '%s\n' "$body"; exit 0; fi
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$TELEMETRY_URL" \
-      -H 'Content-Type: application/json' -d "$body" 2>/dev/null || echo 000)"
-    case "$code" in 2*) echo "$total" > "$CURSOR" ;; esac
+    # full tier authenticates when a key is available; anonymous never attaches one.
+    key=""
+    [ "$T" = "full" ] && key="${HEADER_API_KEY:-$(sed -n 's/^HEADER_API_KEY=//p' "$STATE_DIR/credentials" 2>/dev/null)}"
+    set -- -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$TELEMETRY_URL" -H 'Content-Type: application/json'
+    [ -n "$key" ] && set -- "$@" -H "Authorization: Bearer $key"
+    code="$(curl "$@" -d "$body" 2>/dev/null || echo 000)"
+    case "$code" in 2*) echo "$((cur + count))" > "$CURSOR" ;; esac
     touch "$RATE"
     exit 0
     ;;

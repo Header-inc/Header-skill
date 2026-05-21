@@ -40,4 +40,21 @@ dry="$(HEADER_HOME="$sb/.header" "$TM" sync --dry-run)"
 assert_contains "$dry" 'installation_id' "full batch keeps installation_id"
 assert_not_contains "$dry" '_repo' "full batch still strips _repo"
 
+# ── event_id (idempotency key) on every event ─────────────────
+sb="$(make_sandbox)"
+HEADER_HOME="$sb/.header" "$HC" set telemetry anonymous
+HEADER_HOME="$sb/.header" "$TM" log skill_run --outcome success
+assert_contains "$(cat "$sb/.header/telemetry.jsonl")" '"event_id"' "events carry an event_id locally"
+assert_contains "$(HEADER_HOME="$sb/.header" "$TM" sync --dry-run)" '"event_id"' "event_id is sent in the batch"
+
+# ── batch capped at 100 events ────────────────────────────────
+sb="$(make_sandbox)"; mkdir -p "$sb/.header"
+HEADER_HOME="$sb/.header" "$HC" set telemetry anonymous
+i=0; while [ "$i" -lt 101 ]; do
+  printf '{"v":1,"event_id":"e%s","ts":"t","event":"skill_run","version":"x","os":"x","outcome":"success"}\n' "$i" >> "$sb/.header/telemetry.jsonl"
+  i=$((i + 1))
+done
+n="$(HEADER_HOME="$sb/.header" "$TM" sync --dry-run | grep -o '"event":"skill_run"' | wc -l | tr -d ' ')"
+assert_eq "100" "$n" "sync sends at most 100 events per batch"
+
 t_done

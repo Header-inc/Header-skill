@@ -171,7 +171,7 @@ Telemetry is **off by default** and opt-in. The skill asks once during onboardin
 
 - **off** — nothing recorded or sent.
 - **anonymous** — aggregate usage only, no identifier.
-- **full** — usage plus a random install id (not derived from your identity).
+- **full** — usage plus a random install id (not derived from your identity); if an API key is set, full-tier sends are authenticated so usage ties to your account.
 
 **Sent:** which path ran, outcome, duration, skill version, OS, and how many recommendations you surfaced/applied. **Never sent:** your code, file paths, repo or branch names, or briefing content — the recommendation ledger and the workspace audit stay on your machine. Sends are rate-limited, fail-safe, and stripped of local-only fields before they leave.
 
