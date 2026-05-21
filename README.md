@@ -159,6 +159,20 @@ On each run the skill checks for a newer version against Header's version endpoi
 
 If Header ships a breaking API change, the version endpoint marks a minimum supported version; a skill older than that says so rather than failing silently. Updates install atomically and roll back on failure.
 
+## Telemetry
+
+Telemetry is **off by default** and opt-in. The skill asks once during onboarding; change it any time:
+
+```bash
+~/.claude/skills/header-briefing/bin/header-config set telemetry off|anonymous|full
+```
+
+- **off** — nothing recorded or sent.
+- **anonymous** — aggregate usage only, no identifier.
+- **full** — usage plus a random install id (not derived from your identity).
+
+**Sent:** which path ran, outcome, duration, skill version, OS, and how many recommendations you surfaced/applied. **Never sent:** your code, file paths, repo or branch names, or briefing content — the recommendation ledger and the workspace audit stay on your machine. Sends are rate-limited, fail-safe, and stripped of local-only fields before they leave.
+
 ## Development
 
 The skill is plain `bash` — the test suite has no dependencies:

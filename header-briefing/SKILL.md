@@ -46,6 +46,7 @@ else
   echo "WELCOME_SEEN: $([ -f "$_HH/.welcome-seen" ] && echo yes || echo no)"
   echo "LANGUAGE_PROMPTED: $([ -f "$_HH/.language-prompted" ] && echo yes || echo no)"
   echo "SIGNUP_STATE: $(cat "$_HH/.signup-state" 2>/dev/null || echo unset)"
+  echo "TELEMETRY_PROMPTED: $([ -f "$_HH/.telemetry-prompted" ] && echo yes || echo no)"
   if [ -n "${HEADER_API_KEY:-}" ] || { [ -f "$_HH/credentials" ] && grep -q '^HEADER_API_KEY=' "$_HH/credentials" 2>/dev/null; }; then
     echo "HAS_KEY: yes"
   else
@@ -73,6 +74,7 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 | `WELCOME_SEEN` | `no` (with `INTERACTIVE: yes`) → show the first-run welcome. |
 | `LANGUAGE_PROMPTED` | `no` (with `INTERACTIVE: yes` and `LANGUAGE: English`) → show the first-run language prompt. |
 | `SIGNUP_STATE` / `HAS_KEY` | Drive the signup funnel — see "First-run onboarding". |
+| `TELEMETRY_PROMPTED` | `no` (with `INTERACTIVE: yes`, once the signup funnel is resolved) → ask telemetry consent once — see "Telemetry consent". |
 | `UPDATE_CHECK` | `UPDATE_AVAILABLE old new` or `UPDATE_REQUIRED old min` → run the update flow (see "Staying up to date"). Absent when up to date, snoozed, or disabled. |
 
 The echoed `DEFAULT_TOPIC` / `LANGUAGE` / `STALENESS_DAYS` already fold in the precedence **env var > `~/.header/config` > built-in default** — use them directly rather than re-reading env vars or the config file later.
@@ -194,6 +196,27 @@ printf 'done\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
 ```
 
 The credentials file is **only ever read as data** — the preamble and the authenticated `curl` calls parse the `HEADER_API_KEY=` line with `grep`/`sed`. Nothing sources or executes it.
+
+### Telemetry consent
+
+Ask **once**, only when `INTERACTIVE: yes`, `TELEMETRY_PROMPTED: no`, and the signup funnel is already resolved (`SIGNUP_STATE` is `done` or `public-only`) — so it lands a session or two after first contact, not piled onto the first run. Skip in classic mode.
+
+Ask (`AskUserQuestion` on Claude Code; numbered plain text elsewhere):
+
+> Help improve the Header skill? It can share **usage only** — which path ran, the outcome, and how many recommendations you applied. **Never** your code, file paths, repo names, or briefing content.
+>
+> 1. **Share usage** (recommended) — includes a random install id, not tied to your identity
+> 2. **Anonymous only** — aggregate counts, no id
+> 3. **No thanks**
+
+Map the choice and record that you asked (`<HEADER_BIN>` is the preamble's echoed path):
+
+```bash
+<HEADER_BIN> set telemetry full        # "Share usage"   (or: anonymous / off)
+touch "${HEADER_HOME:-$HOME/.header}/.telemetry-prompted"
+```
+
+Telemetry stays off until the user opts in here; they can change it any time with `header-config set telemetry off|anonymous|full`.
 
 ## Staying up to date
 
@@ -391,6 +414,16 @@ In **enterprise mode**, record the user's disposition of each recommendation so 
 ```
 
 All ledger writes are best-effort, local-only, and never block the briefing — nothing leaves the machine.
+
+### Usage logging (run last)
+
+In enterprise mode, after delivering the briefing, log one usage event. `<TELEMETRY>` is `header-telemetry`, in the same `bin/` dir as the `HEADER_BIN` path the preamble echoed:
+
+```bash
+<TELEMETRY> log skill_run --outcome "<success|error>" --path "<default|catalog|custom>" --recs-surfaced <N> --recs-applied <N>
+```
+
+It records nothing unless the user opted into telemetry, and only ever sends usage metadata — never workspace content (see "Telemetry consent"). Best-effort; never block the briefing.
 
 ### Fallback
 
