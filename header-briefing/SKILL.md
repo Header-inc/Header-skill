@@ -345,7 +345,7 @@ The audit happens locally — no project data is sent to Header. The shape of th
    - **Mentioned in briefing** — items from the briefing's `key_developments` or `summary` that overlap anything in Stack, Tooling, or Known issues. The first-pass relevance filter.
    - **Gaps** — patterns the briefing endorses that this project doesn't yet use, including cases where the project's current approach is now considered legacy or superseded.
 
-4. **Surface recommendations** drawn from **Mentioned in briefing**, **Gaps**, and especially anything that addresses an entry in **Known issues / pain points**. Prioritize the last group — the team has already named these as problems, so a briefing-backed remediation is more actionable than a greenfield suggestion. Each recommendation gets one sentence of rationale tying it to a specific item from the audit, citing the source file when it maps to a known issue.
+4. **Surface recommendations** drawn from **Mentioned in briefing**, **Gaps**, and especially anything that addresses an entry in **Known issues / pain points**. Prioritize the last group — the team has already named these as problems, so a briefing-backed remediation is more actionable than a greenfield suggestion. Each recommendation gets one sentence of rationale tying it to a specific item from the audit, citing the source file when it maps to a known issue. **Provenance:** link the `source_articles` URL behind each recommendation so the user can verify it before acting. In enterprise mode, also apply the recommendation ledger — assign each rec a key, skip ones already dismissed, and follow up on ones already applied (see "Recommendation ledger" below).
 
 ### Step 4 — Offer to implement
 
@@ -364,7 +364,31 @@ After presenting recommendations, ask the user which (if any) they'd like to imp
 
 **Caching within a session:** After fetching a briefing, hold its `briefing_id` and `generated_at` in conversation context. If the skill is re-invoked for the same topic in the same session, reuse the cached briefing instead of re-fetching — unless the user says "refresh", "latest", "new", or asks for a fresh briefing.
 
-**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the signup funnel (see the "First-run welcome & signup funnel" section above). Skip it in classic mode or on non-interactive runs.
+**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the signup funnel (see the "First-run onboarding" section above). Skip it in classic mode or on non-interactive runs.
+
+### Recommendation ledger
+
+In **enterprise mode**, record the user's disposition of each recommendation so future briefings adapt. Skip this whole block in classic mode or when `header-config get ledger` is `false`. `<LEDGER>` below is `header-ledger`, in the same `bin/` directory as the `HEADER_BIN` path the preamble echoed.
+
+**While surfacing recommendations (Step 3):**
+- Give each recommendation a short stable `key` (lowercase, hyphenated, e.g. `mcp-streaming`) — the same idea keeps the same key across briefings.
+- `<LEDGER> status <key>` — if it returns `dismissed`, drop the recommendation (already declined). If `applied`, prefer a follow-up framing over re-recommending.
+- `<LEDGER> list --action applied --since-days 30` — recently-adopted keys to proactively follow up on ("you adopted X — here's a new wrinkle").
+- Record each recommendation you actually show:
+
+```bash
+<LEDGER> record surfaced "<key>" --title "<short title>" --briefing "<briefing_id>" --topic "<topic_id>" --source "<source_url>"
+```
+
+**After the user chooses (Step 4):** record the outcome for each —
+
+```bash
+<LEDGER> record applied   "<key>"    # implemented (or asked you to implement)
+<LEDGER> record dismissed "<key>"    # explicitly rejected
+<LEDGER> record snoozed   "<key>"    # "not now"
+```
+
+All ledger writes are best-effort, local-only, and never block the briefing — nothing leaves the machine.
 
 ### Fallback
 

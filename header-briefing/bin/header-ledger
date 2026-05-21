@@ -33,6 +33,8 @@ case "$cmd" in
       *) echo "header-ledger: action must be surfaced|applied|dismissed|snoozed" >&2; exit 1 ;;
     esac
     [ -n "$key" ] || { echo "header-ledger: <key> required" >&2; exit 1; }
+    # Respect the ledger toggle — local recording can be turned off.
+    [ "$("$(dirname "$0")/header-config" get ledger 2>/dev/null || echo true)" = "false" ] && exit 0
     title=""; briefing=""; topic=""; source=""; repo=""
     while [ $# -gt 0 ]; do
       case "$1" in

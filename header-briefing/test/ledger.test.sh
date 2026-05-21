@@ -54,4 +54,11 @@ HEADER_HOME="$HH" "$LG" record applied weird-key --repo r4 --title 'A & B / C "q
 st="$(HEADER_HOME="$HH" "$LG" status weird-key --repo r4)"
 assert_eq "applied" "$st" "title with metacharacters does not corrupt the record"
 
+# ── ledger:false disables recording ───────────────────────────
+sb2="$(make_sandbox)"
+HEADER_HOME="$sb2/.header" "$SKILL_DIR/bin/header-config" set ledger false
+HEADER_HOME="$sb2/.header" "$LG" record applied off-key --repo r5
+assert_eq "none" "$(HEADER_HOME="$sb2/.header" "$LG" status off-key --repo r5)" \
+  "ledger:false → record is a no-op"
+
 t_done
