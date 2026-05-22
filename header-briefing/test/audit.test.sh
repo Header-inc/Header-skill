@@ -64,6 +64,40 @@ gpip="$(HOME="$sb" "$AU" gate pip 7)"
 assert_contains "$gpip" "uploaded-prior-to P7D" "gate pip emits the ISO-8601 cooldown flag"
 assert_contains "$gpip" "pip>=26.1" "gate pip states the minimum pip version"
 
+# ── bash tool security posture ────────────────────────────────
+sb2="$(make_sandbox)"; r="$sb2/r"; mkdir -p "$r/.claude"
+cat > "$r/.claude/settings.json" <<'J'
+{
+  "permissions": { "defaultMode": "bypassPermissions" }
+}
+J
+assert_contains "$(HOME="$sb2" "$AU" harness --repo "$r")" $'SECURITY\tbash\tbypass' \
+  "bypassPermissions → SECURITY bash bypass (no gating)"
+cat > "$r/.claude/settings.json" <<'J'
+{
+  "permissions": { "deny": [ "Bash(curl:*)", "Bash(rm:*)" ] }
+}
+J
+assert_contains "$(HOME="$sb2" "$AU" harness --repo "$r")" $'SECURITY\tbash\tdenylist' \
+  "a Bash deny-list → denylist (blacklist)"
+cat > "$r/.claude/settings.json" <<'J'
+{
+  "permissions": { "allow": [ "Bash(npm run test:*)" ], "deny": [ "Read(./.env)" ] }
+}
+J
+Hsec="$(HOME="$sb2" "$AU" harness --repo "$r")"
+assert_contains "$Hsec" $'SECURITY\tbash\tallowlist' \
+  "a Bash allow-list → allowlist (whitelist); a non-Bash deny doesn't flip it"
+assert_contains "$Hsec" $'SECURITY-DETAIL\tallow\tBash(npm run test:*)' \
+  "allow-list entry detail is surfaced"
+cat > "$r/.claude/settings.json" <<'J'
+{
+  "permissions": { "allow": [ "Read(./src/**)" ] }
+}
+J
+assert_not_contains "$(HOME="$sb2" "$AU" harness --repo "$r")" $'SECURITY\tbash' \
+  "settings with no Bash rules → no SECURITY line"
+
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "unknown subcommand → exit 1"

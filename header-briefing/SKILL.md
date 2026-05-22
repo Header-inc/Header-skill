@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.5.1
+version: 0.5.2
 description: "Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key)."
 when_to_use: "Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -490,6 +490,11 @@ The premise (per *"prompts are technical debt too"*): harness instructions are w
 - `FILE <path> <bytes> <est_tokens>` — every harness file found (`CLAUDE.md`, `AGENTS.md`, settings, commands, subagents, MCP config). `est_tokens` is `bytes/4`, a rough proxy. Sum the always-loaded ones (`CLAUDE.md` + `AGENTS.md`) — that cost is paid on **every turn**.
 - `MODEL <value>` — the model declared in settings, if any.
 - `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern. Run `<AUDIT> patterns` to see each id and why it's debt.
+- `SECURITY bash <level> <file>` (+ `SECURITY-DETAIL allow|deny <pattern>`) — the Bash-tool permission posture from Claude Code settings. Surface it per the briefing's whitelist-over-blacklist insight:
+  - `bypass` → **no permission gating** (`defaultMode: bypassPermissions`). Highest risk; if the agent can reach any production asset, recommend a command **allow-list**.
+  - `denylist` → a blacklist, which is bypassable (an agent can write a script that sidesteps the blocked command) — recommend moving to an allow-list.
+  - `allowlist` → whitelist-leaning; affirm it, suggest tightening only if there are gaps.
+  - **no `SECURITY` line** → no explicit Bash policy (interactive prompts only); fine for local dev, but recommend an allow-list anywhere the agent can reach production.
 
 Curate the hits — don't surface them blindly. When a `MODEL` is known, confirm the pattern is actually debt **on that model** by cross-referencing its model card / release notes (ideally via a Header source; otherwise the web). The bias is toward **deletion**: the cheapest, safest win is removing debt, and it's exactly what the source material recommends.
 

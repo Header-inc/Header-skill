@@ -83,6 +83,42 @@ scan_file() {
   done
 }
 
+# _bash_security <settings.json> — emit raw Bash-tool permission signals, one per
+# line, by tracking which permissions sub-array each Bash(...) entry sits in:
+#   BYPASS               defaultMode = bypassPermissions (no gating)
+#   allow<TAB>Bash(...)  an allow-list (whitelist) entry
+#   deny<TAB>Bash(...)   a deny-list (blacklist) entry
+# Works on pretty-printed JSON (the usual settings.json shape); no JSON parser.
+_bash_security() {
+  [ -f "$1" ] || return 0
+  # Atomize JSON tokens onto their own lines first (so inline `"allow":[...],
+  # "deny":[...]` is tracked correctly), then walk the stream keeping the
+  # current allow/deny/ask array as context; `]`/`}` close it.
+  awk '
+    { all = all $0 "\n" }
+    END {
+      s = all
+      gsub(/\[/, "\n[\n", s); gsub(/\]/, "\n]\n", s); gsub(/,/, ",\n", s)
+      n = split(s, L, "\n"); st = ""
+      for (i = 1; i <= n; i++) {
+        line = L[i]
+        if (line ~ /"defaultMode"[[:space:]]*:[[:space:]]*"bypassPermissions"/) print "BYPASS"
+        if (line ~ /"allow"[[:space:]]*:/)     st = "allow"
+        else if (line ~ /"deny"[[:space:]]*:/) st = "deny"
+        else if (line ~ /"ask"[[:space:]]*:/)  st = "ask"
+        if (line ~ /^[[:space:]]*[]}]/) { st = ""; continue }
+        if (line ~ /Bash\(/) {
+          t = line
+          while (match(t, /Bash\([^)]*\)/)) {
+            if (st != "") printf "%s\t%s\n", st, substr(t, RSTART, RLENGTH)
+            t = substr(t, RSTART + RLENGTH)
+          }
+        }
+      }
+    }
+  ' "$1"
+}
+
 case "$sub" in
   patterns)
     _patterns | while IFS="$TAB" read -r id rx why; do
@@ -97,6 +133,29 @@ case "$sub" in
       [ -f "$s" ] || continue
       m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
       [ -n "$m" ] && { printf 'MODEL\t%s\n' "$m"; break; }
+    done
+    # Bash tool security posture (whitelist > blacklist; blacklists are
+    # bypassable — see the briefing). Classify each settings file's policy.
+    for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
+             "$HOME/.claude/settings.json"; do
+      sig="$(_bash_security "$s")"
+      [ -n "$sig" ] || continue
+      _by=0; _al=0; _dn=0
+      while IFS="$TAB" read -r tag tok; do
+        [ -n "${tag:-}" ] || continue
+        case "$tag" in
+          BYPASS) _by=1 ;;
+          allow)  _al=1; printf 'SECURITY-DETAIL\tallow\t%s\t%s\n' "$tok" "$s" ;;
+          deny)   _dn=1; printf 'SECURITY-DETAIL\tdeny\t%s\t%s\n' "$tok" "$s" ;;
+        esac
+      done <<SIG
+$sig
+SIG
+      lvl="denylist"
+      [ "$_al" -eq 1 ] && lvl="allowlist"
+      [ "$_al" -eq 1 ] && [ "$_dn" -eq 1 ] && lvl="allowlist+denylist"
+      [ "$_by" -eq 1 ] && lvl="bypass"
+      printf 'SECURITY\tbash\t%s\t%s\n' "$lvl" "$s"
     done
     # Fixed harness files.
     for f in \

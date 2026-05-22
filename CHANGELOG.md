@@ -3,6 +3,15 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.5.2 — Audit: bash tool security posture
+
+- `header-audit harness` now classifies the agent's **Bash-tool permission
+  posture** from Claude Code settings: `bypass` (no gating), `denylist`
+  (blacklist — bypassable), or `allowlist` (whitelist-leaning), with the
+  matching `allow`/`deny` entries. The audit recommends moving toward a command
+  allow-list where the agent can reach production, per the briefing insight that
+  blacklists are bypassable. No new dependencies — pure awk/grep.
+
 ## 0.5.1 — Fix SKILL.md frontmatter YAML
 
 - Quote the `description` and `when_to_use` frontmatter values. They contained
