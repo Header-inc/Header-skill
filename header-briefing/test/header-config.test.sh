@@ -102,4 +102,58 @@ HEADER_HOME="$sbT/.header" "$HC" set telemetry anonymous
 assert_eq "anonymous" "$(HEADER_HOME="$sbT/.header" "$HC" get telemetry)" \
   "set telemetry anonymous → anonymous"
 
+# ── team config: allow-list, block-list, isolation ────────────
+# HEADER_TEAM_DIR pins the committed file to the sandbox so the real repo is
+# never touched (git toplevel would otherwise resolve to this checkout).
+sbt="$(make_sandbox)"; td="$sbt/repo"
+TEAM() { HEADER_HOME="$sbt/.header" HEADER_TEAM_DIR="$td" "$HC" "$@"; }
+
+assert_eq "" "$(TEAM team-get default_topic)" "team-get on a missing team file → empty"
+assert_eq "" "$(TEAM team-path)"              "team-path is empty when no team file exists"
+
+# team-init scaffolds with the topic; a hyphenated UUID is accepted
+TEAM team-init 1991163f-be9c-4df2-a33c-046a4d1357e1 >/dev/null
+assert_eq "1991163f-be9c-4df2-a33c-046a4d1357e1" "$(TEAM team-get default_topic)" \
+  "team-init seeds default_topic (UUID with hyphens accepted)"
+assert_eq "$td/.header/config" "$(TEAM team-path)" \
+  "team-path points at the committed file once it exists"
+
+# team-init refuses to clobber an existing file
+TEAM team-init >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "team-init refuses to overwrite an existing team config"
+
+# allow-listed keys round-trip; integers are validated
+TEAM team-set staleness_days 14 >/dev/null
+assert_eq "14" "$(TEAM team-get staleness_days)" "team-set staleness_days round-trips"
+TEAM team-set staleness_days abc >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "team-set rejects a non-integer staleness_days"
+
+# block-list: consent / code-exec keys are refused on write …
+for bad in telemetry auto_update auto_tune update_check; do
+  TEAM team-set "$bad" x >/dev/null 2>&1; rc=$?
+  assert_exit 1 "$rc" "team-set refuses the personal-only key '$bad'"
+done
+# … and an unrecognized key is refused too
+TEAM team-set bogus x >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "team-set refuses an unrecognized key"
+
+# core security property: even if a committed file SETS a sensitive key by hand,
+# team-get ignores it on read — only the allow-list is honored.
+printf 'telemetry: full\nauto_update: true\nrepo_memory: false\n' >> "$td/.header/config"
+assert_eq "" "$(TEAM team-get telemetry)"   "team-get ignores telemetry from a committed file"
+assert_eq "" "$(TEAM team-get auto_update)" "team-get ignores auto_update from a committed file"
+assert_eq "" "$(TEAM team-get repo_memory)" "team-get ignores a non-shareable key (repo_memory)"
+
+# team-show surfaces honored values and flags the ignored sensitive ones
+show="$(TEAM team-show)"
+assert_contains "$show" "default_topic:"  "team-show lists an honored key"
+assert_contains "$show" "telemetry: full" "team-show flags an ignored sensitive key"
+
+# isolation: the team layer never leaks into the PERSONAL get surface. Personal
+# staleness stays 5 even though the team file says 14 — precedence is resolved by
+# the preamble / Step 0, not by `get`.
+HEADER_HOME="$sbt/.header" "$HC" set staleness_days 5
+assert_eq "5" "$(HEADER_HOME="$sbt/.header" "$HC" get staleness_days)" \
+  "personal get is unaffected by the team config (team layering lives in the preamble)"
+
 t_done

@@ -3,6 +3,36 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.7.0 — Team config layer + auto-refresh cron
+
+- **Committed team config (`<repo>/.header/config`).** A repo can now ship a
+  shared Header policy layer that teammates inherit on clone with zero setup.
+  New `header-config` subcommands — `team-init`, `team-set`, `team-get`,
+  `team-path`, `team-show` — read/write a flat `key: value` file at the repo
+  root. The preamble echoes `TEAM_CONFIG` and `TEAM_TOPIC`; Step 0 slots the
+  team topic **above** the personal/global default but **below** an explicit
+  personal `header-repo` binding and any env var, so a fresh clone inherits the
+  team topic while any developer can still override locally. Precedence overall:
+  **env › team `.header/config` › personal `~/.header/config` › built-in
+  default** (applied to `default_topic`, `staleness_days`, `language`).
+  - **Security:** the committed file is **read as data only** (grep/sed, never
+    sourced), and only an allow-list of team-shareable keys is honored —
+    `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`.
+    Consent/code-execution keys (`telemetry`, `auto_update`, `auto_tune`,
+    `update_check`) are **ignored** in a committed file and surfaced by
+    `team-show`, so a pushed change can't flip a teammate's privacy or run code.
+  - The skill **offers to write + commit `.header/config`** right after a topic
+    is created/bound (recommended for shared repos; optional when solo), gated by
+    a per-repo `team-config-offered` flag.
+- **Auto-refresh on a schedule (cron).** When a server-side schedule (every N
+  days) is enabled for a repo's topic, the skill now offers to set up a
+  persistent local job (`/schedule` routine / durable `CronCreate` on Claude
+  Code; a documented one-liner elsewhere) that runs `/header-briefing
+  since-last` at **N+1 days** — the +1 guarantees the server briefing exists
+  before the pull, and the `?since=` guard makes an early/duplicate run a no-op.
+  `since-last` is now a first-class mode; the offer is gated by a per-repo
+  `cron-offered` flag.
+
 ## 0.6.0 — Recurring audit offer, reliable post-briefing offers, richer triggers
 
 - **The audit offer is now recurring, not one-time.** It's made after **every**

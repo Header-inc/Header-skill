@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.6.0
+version: 0.7.0
 description: "Browse and read Header intelligence briefings, and audit/optimize the agent's own setup. Default fetches the latest agentic-coding briefing and surfaces suggestions relevant to this project; audit mode scans the harness (CLAUDE.md, model, deps) for prompt-config debt and supply-chain gaps. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use for two things. (1) The latest agentic-coding briefing or best practices — triggers include briefing, best practices, get me the latest, latest best practices, what's new in agents/MCP/coding tools, any new patterns to adopt. (2) Auditing and improving the agent's own setup — triggers include audit, audit my setup/agent/harness, dependency upgrade, upgrade dependencies, migration, optimize codebase, reduce token cost, supply-chain risk, CLAUDE.md or prompt debt. Also runs on /header-briefing (optionally /header-briefing audit). Pass a topic name or UUID to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -40,17 +40,26 @@ else
   else
     echo "INTERACTIVE: yes"
   fi
+  _HR="$(dirname "$_HC")/header-repo"
+  _TEAM_CFG="$("$_HC" team-path 2>/dev/null || true)"          # committed <repo>/.header/config
+  _TEAM_TOPIC="$("$_HC" team-get default_topic 2>/dev/null || true)"
+  _TEAM_LANG="$("$_HC" team-get language 2>/dev/null || true)"
+  _TEAM_STALE="$("$_HC" team-get staleness_days 2>/dev/null || true)"
+  echo "TEAM_CONFIG: ${_TEAM_CFG:-none}"
+  echo "TEAM_TOPIC: $_TEAM_TOPIC"
   echo "DEFAULT_TOPIC: ${HEADER_DEFAULT_TOPIC:-$("$_HC" get default_topic)}"
-  echo "REPO_TOPIC: $("$(dirname "$_HC")/header-repo" get 2>/dev/null || true)"
-  echo "LANGUAGE: ${HEADER_LANGUAGE:-$("$_HC" get language)}"
-  echo "STALENESS_DAYS: ${HEADER_STALENESS_DAYS:-$("$_HC" get staleness_days)}"
+  echo "REPO_TOPIC: $("$_HR" get 2>/dev/null || true)"
+  echo "LANGUAGE: ${HEADER_LANGUAGE:-${_TEAM_LANG:-$("$_HC" get language)}}"
+  echo "STALENESS_DAYS: ${HEADER_STALENESS_DAYS:-${_TEAM_STALE:-$("$_HC" get staleness_days)}}"
   echo "WELCOME_SEEN: $([ -f "$_HH/.welcome-seen" ] && echo yes || echo no)"
   echo "LANGUAGE_PROMPTED: $([ -f "$_HH/.language-prompted" ] && echo yes || echo no)"
   echo "SIGNUP_STATE: $(cat "$_HH/.signup-state" 2>/dev/null || echo unset)"
   echo "TELEMETRY_PROMPTED: $([ -f "$_HH/.telemetry-prompted" ] && echo yes || echo no)"
   echo "AUDIT_OFFER: due"   # standing offer — every interactive run, not one-time
-  echo "TOPIC_OFFERED: $("$(dirname "$_HC")/header-repo" flag topic-offered 2>/dev/null || echo no)"
-  echo "SCHEDULE_OFFERED: $("$(dirname "$_HC")/header-repo" flag schedule-offered 2>/dev/null || echo no)"
+  echo "TOPIC_OFFERED: $("$_HR" flag topic-offered 2>/dev/null || echo no)"
+  echo "SCHEDULE_OFFERED: $("$_HR" flag schedule-offered 2>/dev/null || echo no)"
+  echo "CRON_OFFERED: $("$_HR" flag cron-offered 2>/dev/null || echo no)"
+  echo "TEAM_CONFIG_OFFERED: $("$_HR" flag team-config-offered 2>/dev/null || echo no)"
   echo "AUTOTUNE_OFFERED: $([ -f "$_HH/.autotune-offered" ] && echo yes || echo no)"
   if [ -n "${HEADER_API_KEY:-}" ] || { [ -f "$_HH/credentials" ] && grep -q '^HEADER_API_KEY=' "$_HH/credentials" 2>/dev/null; }; then
     echo "HAS_KEY: yes"
@@ -72,10 +81,12 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 | Echoed line | Use |
 |---|---|
 | `HEADER_BIN` | Absolute path to `bin/header-config`. Re-substitute it in any later bash call that needs the config CLI — each `Bash` invocation is a fresh shell, so this echo is the simplest way to locate the helper again. |
-| `DEFAULT_TOPIC` | Topic UUID for Step 0. Already resolves env var → config file → empty. |
-| `REPO_TOPIC` | Topic UUID this repository is bound to (a custom topic the user created here), or empty. When non-empty **and** a key is available, it wins over `DEFAULT_TOPIC` in Step 0 — see "Bound repos — freshness & schedule". Empty → not a bound repo (or `repo_memory` is off). |
-| `LANGUAGE` | Render user-facing output in this language. Already resolves env → config → `English`. |
-| `STALENESS_DAYS` | Threshold for the briefing-age check in Step 2. |
+| `TEAM_CONFIG` | Path to the committed `<repo>/.header/config` (the team layer), or `none`. A path means this repo ships shared Header settings — see "Team config (`.header/config`)". |
+| `TEAM_TOPIC` | Topic UUID pinned by the committed team config (`.header/config` `default_topic`), or empty. When non-empty **and** a key is available it sits **above** `DEFAULT_TOPIC` but **below** a personal `REPO_TOPIC` binding in Step 0 — a fresh clone inherits the team topic, while a teammate's explicit local binding still wins. |
+| `DEFAULT_TOPIC` | Topic UUID for Step 0 (public endpoint). Resolves env var → personal `~/.header/config` → empty. The **personal/global** default — used when no argument, personal binding, or team topic applies. |
+| `REPO_TOPIC` | Topic UUID this repository is **personally** bound to (via `header-repo`, stored under `~/.header/`), or empty. When non-empty **and** a key is available, it wins over both `TEAM_TOPIC` and `DEFAULT_TOPIC` in Step 0 — see "Bound repos — freshness & schedule". Empty → not a bound repo (or `repo_memory` is off). |
+| `LANGUAGE` | Render user-facing output in this language. Resolves env → team config → personal config → `English`. |
+| `STALENESS_DAYS` | Threshold for the briefing-age check in Step 2. Resolves env → team config → personal config → `7`. |
 | `INTERACTIVE` | `no` → scheduled / non-interactive run: skip the welcome, the language prompt, and the signup funnel. `yes` → all three are eligible. |
 | `WELCOME_SEEN` | `no` (with `INTERACTIVE: yes`) → show the first-run welcome. |
 | `LANGUAGE_PROMPTED` | `no` (with `INTERACTIVE: yes` and `LANGUAGE: English`) → show the first-run language prompt. |
@@ -84,6 +95,8 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 | `AUDIT_OFFER` | Always `due` in interactive mode — the audit offer is **not** one-time. Make it after **every** briefing when `INTERACTIVE: yes` (see "Audit offer"). There is no suppression marker; this line is the standing reminder so the offer isn't dropped at the tail of a long flow. |
 | `TOPIC_OFFERED` | **Per-repo** flag. `no` (with `HAS_KEY: yes`, `INTERACTIVE: yes`, and an empty `REPO_TOPIC` — no topic bound to *this* repo yet) → make the custom-topic auto-create offer — see "Auto-create a topic from your project". Once per repo, not once per machine: every repo can get its own tailored topic. |
 | `SCHEDULE_OFFERED` | **Per-repo** flag. `no` (with a bound `REPO_TOPIC` not yet on a schedule, `INTERACTIVE: yes`) → make the schedule offer for *this* repo's topic — see "Bound repos — freshness & schedule". Once per repo. |
+| `CRON_OFFERED` | **Per-repo** flag. `no` (right after a server-side schedule was enabled for this repo's topic, `INTERACTIVE: yes`) → offer a local auto-refresh that pulls the new briefing at **N+1 days** — see "Auto-refresh on a schedule (cron)". Once per repo. |
+| `TEAM_CONFIG_OFFERED` | **Per-repo** flag. `no` (with `TEAM_CONFIG: none`, a team-shareable topic just created or bound, `INTERACTIVE: yes`) → offer to write and commit `.header/config` — see "Team config (`.header/config`)". Once per repo. |
 | `AUTOTUNE_OFFERED` | Global. `no` (with a key, a custom goal, and 3+ applied recs, `INTERACTIVE: yes`) → make the one-time goal auto-tuning offer — see "Goal auto-tuning". Once per machine (it flips the global `auto_tune` config key). |
 | `UPDATE_CHECK` | `UPDATE_AVAILABLE old new` or `UPDATE_REQUIRED old min` → run the update flow (see "Staying up to date"). Absent when up to date, snoozed, or disabled. |
 
@@ -321,7 +334,7 @@ The update takes effect on the **next** `/header-briefing` — the current sessi
 
 ## Configuration
 
-All configuration is via environment variables. None are required for the default public-briefing flow.
+Configuration resolves in this order, highest priority first: **environment variable › committed team config (`<repo>/.header/config`) › personal config (`~/.header/config`) › built-in default**. None are required for the default public-briefing flow. The team layer only honors the shareable keys `default_topic`, `staleness_days`, `schedule_frequency_days`, `language` (see "Team config (`.header/config`)"); consent/update keys are personal-only.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -329,12 +342,13 @@ All configuration is via environment variables. None are required for the defaul
 | `HEADER_LANGUAGE` _(Beta)_ | `English` | Language for output rendering. API content stays English; the agent translates the presentation. Set to `Turkish`, `Spanish`, etc. **Beta:** translation quality varies by language; proper nouns, identifiers, and URLs are kept verbatim. Report issues at [joinheader.com](https://joinheader.com). |
 | `HEADER_DEFAULT_TOPIC` | `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent) | Topic UUID used when no argument is passed. |
 | `HEADER_STALENESS_DAYS` | `7` | Maximum briefing age in days before warning the user the content may be stale. |
+| `HEADER_TEAM_DIR` | git toplevel, else `$PWD` | Directory whose `.header/config` is read as the team layer. Override mainly for testing; normally auto-detected. |
 
 ## Default: Agentic Coding Briefing
 
 Fetch the latest briefing for the resolved topic (default: "Self Improving Agent") and check for suggestions relevant to this project.
 
-> **Mode routing:** if the user invokes `/header-briefing audit` (or says "audit my setup / agent / harness / dependencies"), run the **"Audit (beta)"** section instead of the briefing flow below. `add-source <url>` routes to "Add a source". Anything else (a topic name/UUID/URL, or nothing) runs the briefing flow here.
+> **Mode routing:** if the user invokes `/header-briefing audit` (or says "audit my setup / agent / harness / dependencies"), run the **"Audit (beta)"** section instead of the briefing flow below. `add-source <url>` routes to "Add a source". `since-last` (or "what's new since I last checked") routes to "Since-last digest" — the quiet, key-gated check used by scheduled / cron runs. Anything else (a topic name/UUID/URL, or nothing) runs the briefing flow here.
 
 ### Step 0 — Resolve the topic
 
@@ -344,9 +358,10 @@ Determine the topic UUID using this fallback chain (first match wins):
    - URL containing `/briefings/<uuid>` (e.g., `https://joinheader.com/briefings/<uuid>`) → extract the UUID, treat it as a **briefing ID**, skip Step 1 entirely, and go straight to Step 2 (`/api/v2/public/briefings/<uuid>`).
    - URL containing `/topics/<uuid>` or a bare UUID → use as the **topic ID** and proceed to Step 1.
    - Anything else → search `/api/v2/topics/public/catalog` for a case-insensitive substring match on `name`. If exactly one matches, use its `id`. If multiple match, ask the user to disambiguate. If none match, fall through.
-2. **Remembered topic for this repo** — in enterprise mode, if the preamble echoed a non-empty `REPO_TOPIC` **and** a key is available (`HAS_KEY: yes`), use it. This is a custom topic the user bound to this repository, so it is private: fetch it via the **authenticated** endpoints, and run the session-start freshness check first — see "Bound repos — freshness & schedule". If `REPO_TOPIC` is set but no key is available (key was removed), skip it and fall through. A `404` on fetch means the topic was deleted server-side — treat the binding as stale (offer `header-repo clear`) and fall through.
-3. **Resolved default topic** — in enterprise mode, use the preamble's `DEFAULT_TOPIC` value when it is non-empty (it already reflects the `HEADER_DEFAULT_TOPIC` env var, then `~/.header/config`). In classic mode, use the `HEADER_DEFAULT_TOPIC` env var directly.
-4. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
+2. **Personal binding for this repo** — in enterprise mode, if the preamble echoed a non-empty `REPO_TOPIC` **and** a key is available (`HAS_KEY: yes`), use it (it wins over the team `TEAM_TOPIC` below — an explicit local choice beats the inherited team default). This is a custom topic the user bound to this repository, so it is private: fetch it via the **authenticated** endpoints, and run the session-start freshness check first — see "Bound repos — freshness & schedule". If `REPO_TOPIC` is set but no key is available (key was removed), skip it and fall through. A `404` on fetch means the topic was deleted server-side — treat the binding as stale (offer `header-repo clear`) and fall through.
+3. **Team topic for this repo** — in enterprise mode, if the preamble echoed a non-empty `TEAM_TOPIC` (pinned by the committed `.header/config`) **and** a key is available (`HAS_KEY: yes`), use it. A committed team topic is typically private, so fetch it via the **authenticated** endpoints and run the session-start freshness check, exactly like a personal binding ("Bound repos — freshness & schedule" applies to `TEAM_TOPIC` too). If `TEAM_TOPIC` is set but no key is available, tell the user this repo pins a team topic that needs an API key (offer the signup funnel), then fall through. A `404` means the committed topic was deleted server-side — tell the user to fix `.header/config` (never auto-edit a committed file) and fall through.
+4. **Resolved default topic** — in enterprise mode, use the preamble's `DEFAULT_TOPIC` value when it is non-empty (it already reflects the `HEADER_DEFAULT_TOPIC` env var, then `~/.header/config`). In classic mode, use the `HEADER_DEFAULT_TOPIC` env var directly.
+5. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
 
 **Claude Code only:** the explicit argument is delivered as `$ARGUMENTS` when invoked via `/header-briefing <topic>`. Other harnesses: extract the topic identifier from the user's message text.
 
@@ -700,11 +715,35 @@ On yes, record the binding. `<REPO>` is `header-repo`, in the same `bin/` dir as
 "<REPO>" bind <new_topic_id> "<topic name>"
 ```
 
-The next session's preamble echoes it as `REPO_TOPIC`, and Step 0 picks it up above the global default. Then immediately offer a schedule (next section). To forget it later, run `header-repo clear` from inside the repo.
+The next session's preamble echoes it as `REPO_TOPIC`, and Step 0 picks it up above the global default. Then offer to **share it with the team** ("Team config" below) and a **schedule** ("Bound repos — freshness & schedule"). To forget it later, run `header-repo clear` from inside the repo.
+
+### Team config (`.header/config`) — share a topic with your team
+
+The personal binding above lives under `~/.header/` — it never leaves the machine, so a teammate who clones the repo gets nothing. To make **everyone** on the repo pull the same briefing, commit a `.header/config` at the repo root. This is the team policy layer: the next teammate's preamble reads it as `TEAM_TOPIC` and Step 0 uses it automatically, with zero setup on their end.
+
+**Offer it** in **enterprise mode**, `INTERACTIVE: yes`, right after a topic is created or bound, when there's no team config yet (preamble echoed `TEAM_CONFIG: none`) and `TEAM_CONFIG_OFFERED: no`. **Highly recommend it for any repo with collaborators.** Quick heuristic: a configured `git remote` ⇒ shared repo ⇒ recommend committing it; no remote ⇒ solo/local ⇒ mention once and don't push. `<HEADER_BIN>` / `<REPO>` are the helpers next to the preamble's echoed `HEADER_BIN`.
+
+> Want your whole team to get this briefing? I can drop a `.header/config` in the repo pinning this topic — commit it, and every teammate's `/header-briefing` uses it automatically with no setup. (Recommended for shared repos.)
+
+On yes, write it, then point the user at the commit:
+
+```bash
+"<HEADER_BIN>" team-init <new_topic_id>     # creates ./.header/config with default_topic
+```
+
+`team-init` prints the `git add .header/config && git commit` hint — surface it so the file actually reaches teammates (it does nothing uncommitted). Always mark the per-repo flag so the offer fires once: `"<REPO>" flag team-config-offered set`.
+
+**Team-related settings only — unless you're solo.** Because the file is committed, keep it to settings the *whole team* should share: the pinned `default_topic`, and optionally `staleness_days`, `schedule_frequency_days`, `language`. Personal preferences and **anything consent- or code-related** (`telemetry`, `auto_update`, `auto_tune`, `update_check`) belong in each developer's `~/.header/config` — `header-config` **ignores** those keys in a committed file by design, so a pushed change can never flip a teammate's privacy or run code. Add or change a team key with `header-config team-set <key> <value>` (it refuses non-shareable keys); audit what's honored vs ignored with `header-config team-show`.
+
+> **Solo?** You can still commit it (it travels with the repo and survives a fresh clone), but your personal `~/.header/config` + per-repo binding already cover you, so it's optional — the real win is for teams.
+
+**Precedence.** `TEAM_TOPIC` sits **below** a teammate's explicit personal binding (`REPO_TOPIC`) and **below** any env var, but **above** the personal/global default — so the team default is inherited automatically, yet any developer can still override locally. The topic is usually private, so teammates need their own API key to fetch it (the signup funnel covers that); without a key the skill says so and falls back to the public default. The same env → team → personal → default precedence applies to `staleness_days` and `language`.
+
+**Security.** The committed file is **read as data only** (parsed with `grep`/`sed`, never sourced), and only the allow-listed team keys are honored. Treat a `.header/config` change in a PR like any other config change — `header-config team-show` makes its effective contents auditable at a glance.
 
 ### Bound repos — freshness & schedule
 
-This runs at session start **only** when the preamble echoed a non-empty `REPO_TOPIC` and a key is available (`HAS_KEY: yes`). It replaces the public Step 1 fetch for bound repos: the bound topic is private, so use the authenticated endpoints. `<REPO>` is `header-repo`; `_HK` is the resolved key (env var or `~/.header/credentials`, as in the other authenticated calls).
+This runs at session start **only** when the preamble echoed a non-empty `REPO_TOPIC` **or** `TEAM_TOPIC` and a key is available (`HAS_KEY: yes`). The team topic behaves like a personal binding here — substitute `TEAM_TOPIC` for `{REPO_TOPIC}` below when that's what Step 0 resolved (just don't `header-repo clear` a team topic on `404`; tell the user to fix `.header/config` instead). It replaces the public Step 1 fetch for bound repos: the bound topic is private, so use the authenticated endpoints. `<REPO>` is `header-repo`; `_HK` is the resolved key (env var or `~/.header/credentials`, as in the other authenticated calls).
 
 **1. Fetch the bound topic and check freshness.**
 
@@ -755,11 +794,26 @@ Read `schedule_enabled`, `schedule_frequency_days`, `next_scheduled_generation`,
     -d '{"schedule_enabled": true, "schedule_frequency_days": 7}'
   ```
 
-  Confirm ("✓ This repo's briefing will refresh every 7 days"). Always mark the per-repo flag so it asks only once in this repo: `"<REPO>" flag schedule-offered set`.
+  Confirm ("✓ This repo's briefing will refresh every 7 days"), remember the chosen cadence as **N** days, and mark the per-repo flag so it asks only once in this repo: `"<REPO>" flag schedule-offered set`. Then offer to mirror it locally so the fresh briefing surfaces on its own — see "Auto-refresh on a schedule (cron)".
 
 - **Already scheduled** — don't re-offer. If useful, mention the cadence and `next_scheduled_generation` in one line. To change or stop it, the user can ask; PUT a new `schedule_frequency_days`, or `{"schedule_enabled": false}` to turn it off.
 
 Best-effort throughout: if any call fails, fall back to the normal public flow — freshness and scheduling never block a briefing.
+
+### Auto-refresh on a schedule (cron)
+
+The server-side schedule above regenerates the briefing every **N** days, but nothing *pulls* it into your session — you only see it the next time you happen to run the skill. This step closes that gap with a standing local job that runs `/header-briefing since-last`, so a fresh briefing surfaces on its own. Offer it once per repo, right after a schedule is enabled, when `INTERACTIVE: yes` and the preamble echoed `CRON_OFFERED: no`. Requires a key (it's the since-last digest under the hood).
+
+> Want me to check in automatically when the new briefing lands? I'll set a job to pull it about a day after each refresh — quiet unless there's something new.
+
+Run it at **N+1 days**, not N: the +1 guarantees the server has finished regenerating before the local job looks, so it never races an in-progress briefing. Over-firing is harmless anyway — `since-last` passes `?since=<last-run>` to the dashboard, so an early or duplicate run just reports "nothing new" (see "Since-last digest"). Always set `HEADER_NONINTERACTIVE=1` for the job so onboarding prompts can't block an unattended run.
+
+- **Claude Code** — create a **persistent** scheduled agent: the `/schedule` skill, or `CronCreate` with `durable: true`. Prompt: `/header-briefing since-last`. Cadence: roughly every N+1 days (e.g. day-of-month `*/8` for N=7; pick an off-peak, off-`:00` minute). Tell the user it's removable anytime via `/schedule` (or `CronDelete`). Don't use a plain in-session `CronCreate` recurring job for this — those auto-expire after ~7 days, too short for an N+1-day cadence; the durable `/schedule` routine is the right tool.
+- **Other harnesses** — no portable cron tool, so give the user the one-liner for their own scheduler (cron / `launchd` / systemd timer). The exact `HEADER_NONINTERACTIVE=1 … /header-briefing since-last` shape and the `next_action` handling are in "Scheduled / agent loop".
+
+Then mark the per-repo flag so the offer fires once: `"<REPO>" flag cron-offered set`.
+
+Best-effort: scheduling never blocks a briefing — if the user declines or no cron tool is available, say how to set it up manually and move on.
 
 ### Add a source
 

@@ -124,11 +124,13 @@ With an API key, you can:
 
 When you create a custom topic while working in a repository, the skill offers to **remember it for that repo**. After that, running `/header-briefing` in the same repo automatically uses your topic instead of the public default — no argument needed. Bindings live in a local registry (`~/.header/repos.jsonl`) keyed by the repo's git remote (with a path fallback); nothing is written inside your repo and nothing is sent. New sessions also check whether a newer briefing has appeared and surface it. Disable with `header-config set repo_memory false`; forget one repo with `header-repo clear`.
 
-You can also put a repo's topic on a **schedule** (every 3 / 7 / 14 / 30 days). Header then regenerates the briefing server-side on that cadence, so a fresh one is waiting the next time you open a session — even if you never trigger it manually.
+You can also put a repo's topic on a **schedule** (every 3 / 7 / 14 / 30 days). Header then regenerates the briefing server-side on that cadence, so a fresh one is waiting the next time you open a session — even if you never trigger it manually. After enabling a schedule, the skill can also set up a **local auto-refresh** (a persistent `/schedule` routine on Claude Code) that runs `/header-briefing since-last` about a day after each refresh and surfaces the new briefing on its own — quiet unless there's something new.
+
+The personal binding above stays on your machine. To share a topic with a **whole team**, commit a [`.header/config`](#team-config-headerconfig) — teammates inherit it on clone with no setup.
 
 ## Configuration
 
-Configuration comes from three places, highest priority first: **environment variable › `~/.header/config` › built-in default**. Environment variables always win.
+Configuration comes from four places, highest priority first: **environment variable › committed team config (`<repo>/.header/config`) › personal config (`~/.header/config`) › built-in default**. Environment variables always win; a committed team config lets a whole repo share settings (see [Team config](#team-config-headerconfig)).
 
 ### Environment variables
 
@@ -151,6 +153,19 @@ Configuration comes from three places, highest priority first: **environment var
 ```
 
 Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`, `repo_memory`. Run the helper with `defaults` to see every key and its default value.
+
+### Team config (`.header/config`)
+
+To share a topic (and a couple of settings) with a whole team, **commit a `.header/config` at the repo root**. Every teammate's skill reads it automatically on clone — no per-person setup — and it sits above each developer's personal `~/.header/config` but below their own env vars and explicit per-repo bindings. The skill offers to create and commit it for you right after you make a topic; it's recommended for shared repos and optional when you're solo.
+
+Keep it to **team-relevant settings only**. Only an allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Consent and update keys (`telemetry`, `auto_update`, `auto_tune`, `update_check`) are **ignored** from a committed file by design — they stay personal, so a pushed change can never flip a teammate's privacy or trigger code. The file is read as data only, never sourced.
+
+```bash
+~/.claude/skills/header-briefing/bin/header-config team-init <topic-uuid>   # scaffold ./.header/config
+~/.claude/skills/header-briefing/bin/header-config team-set staleness_days 14
+~/.claude/skills/header-briefing/bin/header-config team-show                 # honored vs ignored keys
+git add .header/config && git commit -m "Add Header team config"
+```
 
 ### State directory
 

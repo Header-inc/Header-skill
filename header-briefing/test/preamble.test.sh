@@ -104,6 +104,32 @@ printf 'HEADER_API_KEY=hdr_sk_x\necho PWNED_BY_SOURCE\n' > "$sb/.header/credenti
 assert_not_contains "$(run_preamble "$SKILL_DIR" "$sb")" "PWNED" \
   "credentials file is read as data — never sourced or executed"
 
+# ── team config layer (committed .header/config) ──────────────
+# All cases pin HEADER_TEAM_DIR so the real checkout's git toplevel is never read.
+sb="$(make_sandbox)"; mkdir -p "$sb/.header"
+out="$(run_preamble "$SKILL_DIR" "$sb" HEADER_TEAM_DIR="$sb/empty")"
+assert_contains "$out" "TEAM_CONFIG: none"        "no committed .header/config → TEAM_CONFIG: none"
+assert_contains "$out" "CRON_OFFERED: no"         "CRON_OFFERED echoed (no by default)"
+assert_contains "$out" "TEAM_CONFIG_OFFERED: no"  "TEAM_CONFIG_OFFERED echoed (no by default)"
+
+# committed team file → topic surfaced; staleness + language folded in
+tr_="$sb/teamrepo"; mkdir -p "$tr_/.header"
+printf 'default_topic: team-uuid-123\nstaleness_days: 21\nlanguage: Spanish\n' > "$tr_/.header/config"
+out="$(run_preamble "$SKILL_DIR" "$sb" HEADER_TEAM_DIR="$tr_")"
+assert_contains "$out" "TEAM_CONFIG: $tr_/.header/config" "TEAM_CONFIG echoes the committed file path"
+assert_contains "$out" "TEAM_TOPIC: team-uuid-123" "TEAM_TOPIC echoes the committed default_topic"
+assert_contains "$out" "STALENESS_DAYS: 21" "team staleness_days folds into STALENESS_DAYS"
+assert_contains "$out" "LANGUAGE: Spanish"  "team language folds into LANGUAGE"
+
+# env var still wins over the team layer
+out="$(run_preamble "$SKILL_DIR" "$sb" HEADER_TEAM_DIR="$tr_" HEADER_STALENESS_DAYS=3)"
+assert_contains "$out" "STALENESS_DAYS: 3" "env HEADER_STALENESS_DAYS overrides the team layer"
+
+# team layer wins over the personal config
+HEADER_HOME="$sb/.header" "$SKILL_DIR/bin/header-config" set staleness_days 5
+out="$(run_preamble "$SKILL_DIR" "$sb" HEADER_TEAM_DIR="$tr_")"
+assert_contains "$out" "STALENESS_DAYS: 21" "team staleness_days wins over personal config"
+
 # ── update check surfaces actionable states (injected endpoint) ─
 sb="$(make_sandbox)"
 assert_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_VERSION_JSON='{"latest":"99.0.0"}')" \
