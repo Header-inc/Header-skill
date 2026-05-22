@@ -1,0 +1,26 @@
+name: tests
+
+# Runs the skill test suite on every commit pushed to main, server-side. If the
+# suite fails the workflow fails, and GitHub emails the commit author (default
+# notification for failed Actions runs). Unlike the local pre-commit hook
+# (.githooks/, opt-in per clone) this can't be forgotten on clone or skipped
+# with --no-verify.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The suite is zero-dependency bash. PyYAML is optional — it activates the
+      # frontmatter "parses as valid YAML" assertion in version.test.sh (the
+      # check that caught the 0.5.1 Codex breakage); skipped gracefully if absent.
+      - name: Install PyYAML (enables frontmatter YAML validity check)
+        run: python3 -m pip install --quiet --user pyyaml || true
+
+      - name: Run skill test suite
+        run: bash header-briefing/test/run.sh

@@ -1,2 +1,5 @@
+# Personal, per-developer overrides — never shared.
 .claude/settings.local.json
-.claude/settings.json
+# Local skill install copy (the canonical source is header-briefing/).
+.claude/skills/
+# Note: .claude/settings.json is intentionally NOT ignored — it's shared team config.
