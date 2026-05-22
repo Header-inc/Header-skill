@@ -1,8 +1,8 @@
 ---
 name: header-briefing
-version: 0.5.2
-description: "Browse and read Header intelligence briefings. Default: fetch the latest agentic coding briefing and surface suggestions relevant to this project. Supports public access (no auth) and authenticated workflows (API key)."
-when_to_use: "Use when the user asks what's new in agents/MCP/coding tools, any new patterns to adopt, or invokes /header-briefing. Pass a topic name or UUID as the argument to fetch a specific topic; otherwise the default agentic-coding briefing is used."
+version: 0.6.0
+description: "Browse and read Header intelligence briefings, and audit/optimize the agent's own setup. Default fetches the latest agentic-coding briefing and surfaces suggestions relevant to this project; audit mode scans the harness (CLAUDE.md, model, deps) for prompt-config debt and supply-chain gaps. Public access needs no auth; authenticated workflows use an API key."
+when_to_use: "Use for two things. (1) The latest agentic-coding briefing or best practices — triggers include briefing, best practices, get me the latest, latest best practices, what's new in agents/MCP/coding tools, any new patterns to adopt. (2) Auditing and improving the agent's own setup — triggers include audit, audit my setup/agent/harness, dependency upgrade, upgrade dependencies, migration, optimize codebase, reduce token cost, supply-chain risk, CLAUDE.md or prompt debt. Also runs on /header-briefing (optionally /header-briefing audit). Pass a topic name or UUID to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
 allowed-tools: Bash, AskUserQuestion
 ---
@@ -48,6 +48,10 @@ else
   echo "LANGUAGE_PROMPTED: $([ -f "$_HH/.language-prompted" ] && echo yes || echo no)"
   echo "SIGNUP_STATE: $(cat "$_HH/.signup-state" 2>/dev/null || echo unset)"
   echo "TELEMETRY_PROMPTED: $([ -f "$_HH/.telemetry-prompted" ] && echo yes || echo no)"
+  echo "AUDIT_OFFER: due"   # standing offer — every interactive run, not one-time
+  echo "TOPIC_OFFERED: $("$(dirname "$_HC")/header-repo" flag topic-offered 2>/dev/null || echo no)"
+  echo "SCHEDULE_OFFERED: $("$(dirname "$_HC")/header-repo" flag schedule-offered 2>/dev/null || echo no)"
+  echo "AUTOTUNE_OFFERED: $([ -f "$_HH/.autotune-offered" ] && echo yes || echo no)"
   if [ -n "${HEADER_API_KEY:-}" ] || { [ -f "$_HH/credentials" ] && grep -q '^HEADER_API_KEY=' "$_HH/credentials" 2>/dev/null; }; then
     echo "HAS_KEY: yes"
   else
@@ -77,6 +81,10 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 | `LANGUAGE_PROMPTED` | `no` (with `INTERACTIVE: yes` and `LANGUAGE: English`) → show the first-run language prompt. |
 | `SIGNUP_STATE` / `HAS_KEY` | Drive the signup funnel — see "First-run onboarding". |
 | `TELEMETRY_PROMPTED` | `no` (with `INTERACTIVE: yes`, once the signup funnel is resolved) → ask telemetry consent once — see "Telemetry consent". |
+| `AUDIT_OFFER` | Always `due` in interactive mode — the audit offer is **not** one-time. Make it after **every** briefing when `INTERACTIVE: yes` (see "Audit offer"). There is no suppression marker; this line is the standing reminder so the offer isn't dropped at the tail of a long flow. |
+| `TOPIC_OFFERED` | **Per-repo** flag. `no` (with `HAS_KEY: yes`, `INTERACTIVE: yes`, and an empty `REPO_TOPIC` — no topic bound to *this* repo yet) → make the custom-topic auto-create offer — see "Auto-create a topic from your project". Once per repo, not once per machine: every repo can get its own tailored topic. |
+| `SCHEDULE_OFFERED` | **Per-repo** flag. `no` (with a bound `REPO_TOPIC` not yet on a schedule, `INTERACTIVE: yes`) → make the schedule offer for *this* repo's topic — see "Bound repos — freshness & schedule". Once per repo. |
+| `AUTOTUNE_OFFERED` | Global. `no` (with a key, a custom goal, and 3+ applied recs, `INTERACTIVE: yes`) → make the one-time goal auto-tuning offer — see "Goal auto-tuning". Once per machine (it flips the global `auto_tune` config key). |
 | `UPDATE_CHECK` | `UPDATE_AVAILABLE old new` or `UPDATE_REQUIRED old min` → run the update flow (see "Staying up to date"). Absent when up to date, snoozed, or disabled. |
 
 The echoed `DEFAULT_TOPIC` / `LANGUAGE` / `STALENESS_DAYS` already fold in the precedence **env var > `~/.header/config` > built-in default** — use them directly rather than re-reading env vars or the config file later.
@@ -127,17 +135,13 @@ Replace `Chosen` with the user's pick (`English`, `Spanish`, `Turkish`, or the f
 
 Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
 
-### Audit offer — after the briefing
+### Audit offer — after every briefing
 
-The audit (see "Audit (beta)") is the free, no-account hook and the clearest taste of where Header is heading — so **introduce it proactively; don't wait for the user to ask.** Run this **once** (first applicable run), after the briefing, when `INTERACTIVE: yes` and no `~/.header/.audit-offered` marker exists. Touch the marker either way so it never repeats — this is also how existing users discover the audit on their next run.
+The audit (see "Audit (beta)") is the free, no-account hook and the clearest taste of where Header is heading — so **introduce it proactively; don't wait for the user to ask.** This is a **standing offer, not a one-time prompt**: make it after **every** briefing when `INTERACTIVE: yes` (the preamble echoes `AUDIT_OFFER: due` as the reminder). There is **no suppression marker** — a codebase shifts between runs, so a fresh harness/deps scan is useful every time, exactly like re-running a linter. The one exception is within a single session: if you already offered (or ran) the audit earlier this session, don't re-ask in the same session.
 
 > Beyond the news: Header's larger aim is to **optimize the coding agent itself** — cut token cost, raise reliability, and *(soon)* **prove** changes with experiments. As a first step I can audit your agent's own setup — `CLAUDE.md`, model choice, dependencies — for prompt-config debt and supply-chain gaps. Free, no account, all local. Run it now?
 
-```bash
-touch "${HEADER_HOME:-$HOME/.header}/.audit-offered"
-```
-
-On **yes**, run the "Audit (beta)" flow now; its findings lead naturally into the account CTA (tailored briefings now, experiments when they land) — if the user signs up from there, go to "Save the key" and skip re-asking below. On **no**, continue to the signup funnel. Either way, the user can run `/header-briefing audit` anytime. Skip in classic mode and when `INTERACTIVE: no`.
+On **yes**, run the "Audit (beta)" flow now; its findings lead naturally into the account CTA (tailored briefings now, experiments when they land) — if the user signs up from there, go to "Save the key" and skip re-asking below. On **no**, continue to the signup funnel. Either way, the user can run `/header-briefing audit` directly anytime. Skip only in classic mode and when `INTERACTIVE: no`.
 
 ### Signup funnel — after the briefing
 
@@ -223,7 +227,7 @@ When the funnel just produced a usable key (`SIGNUP_STATE` is now `done`) and yo
 
 This prompt stands in for Auto-create's own offer — don't ask twice. On yes, run the Auto-create *steps*: draft the goal from the Step 3 audit, create the topic, then **offer to remember it for this repo and offer a schedule** (see "Remember the topic for this repo" and "Bound repos — freshness & schedule"). That ends the first run with a briefing that's tailored, bound to the repo, and (optionally) auto-refreshing.
 
-The key was added mid-session, so the preamble's `HAS_KEY: no` echo is stale — proceed anyway; the authenticated `curl` calls resolve the key from the credentials file you just wrote. The `.topic-offered` marker still gates Auto-create, so this won't double-ask on later runs.
+The key was added mid-session, so the preamble's `HAS_KEY: no` echo is stale — proceed anyway; the authenticated `curl` calls resolve the key from the credentials file you just wrote. The per-repo `topic-offered` flag still gates Auto-create, so this won't double-ask on later runs in this repo.
 
 ### Telemetry consent
 
@@ -420,7 +424,7 @@ After presenting recommendations, ask the user which (if any) they'd like to imp
 
 **Caching within a session:** After fetching a briefing, hold its `briefing_id` and `generated_at` in conversation context. If the skill is re-invoked for the same topic in the same session, reuse the cached briefing instead of re-fetching — unless the user says "refresh", "latest", "new", or asks for a fresh briefing.
 
-**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the post-briefing onboarding in order: the **audit offer**, then the **signup funnel** (see the "First-run onboarding" section above). Skip both in classic mode or on non-interactive runs.
+**After the briefing is delivered** — in enterprise mode with `INTERACTIVE: yes`, run the post-briefing onboarding in order: the **audit offer** (standing — runs every time, surfaced by `AUDIT_OFFER: due`), then the **signup funnel** (first-run, gated by `SIGNUP_STATE`). See the "First-run onboarding" section above. Skip both in classic mode or on non-interactive runs.
 
 ### Recommendation ledger
 
@@ -674,11 +678,15 @@ The response includes `first_briefing_id` — generation runs asynchronously.
 
 ### Auto-create a topic from your project
 
-When a key is present but the user has no custom topic yet (`INTERACTIVE: yes`, no `~/.header/.topic-offered` marker), offer to create one tailored to this repo — the Step 3 audit already inferred the stack, so draft the goal for them:
+When a key is present but **this repo** has no custom topic yet (`INTERACTIVE: yes`, empty `REPO_TOPIC`, and `TOPIC_OFFERED: no`), offer to create one tailored to this repo — the Step 3 audit already inferred the stack, so draft the goal for them. The gate is per-repo, so every repository you work in can get its own tailored topic:
 
 > Want briefings tuned to *this* project? I'll create a topic focused on <one-line summary of the detected stack and priorities> — no typing needed.
 
-On yes, POST it (reuse "Create a custom topic", filling `goal_description` from the detected stack and any named pain points). For a sharper fit, first let Header propose sources for that goal — `POST /api/v2/sources/recommend` → `POST /api/v2/sources/recommend/commit` returns a `group_id` to create the topic with. On a `TOPIC_LIMIT_FREE` response, run the trial/upgrade flow ("Tier limits and error handling"). Always `touch "${HEADER_HOME:-$HOME/.header}/.topic-offered"` so it asks only once.
+On yes, POST it (reuse "Create a custom topic", filling `goal_description` from the detected stack and any named pain points). For a sharper fit, first let Header propose sources for that goal — `POST /api/v2/sources/recommend` → `POST /api/v2/sources/recommend/commit` returns a `group_id` to create the topic with. On a `TOPIC_LIMIT_FREE` response, run the trial/upgrade flow ("Tier limits and error handling"). Always mark the per-repo flag so it asks only once *in this repo* (`<REPO>` is `header-repo`, in the same `bin/` dir as the preamble's `HEADER_BIN`):
+
+```bash
+"<REPO>" flag topic-offered set
+```
 
 ### Remember the topic for this repo
 
@@ -729,7 +737,7 @@ curl -sS -H "Authorization: Bearer $_HK" \
 
 Read `schedule_enabled`, `schedule_frequency_days`, `next_scheduled_generation`, `last_briefing_at`.
 
-- **Not scheduled** (`schedule_enabled: false`) and `INTERACTIVE: yes` — offer once (track with a `~/.header/.schedule-offered` marker so it doesn't nag). Use `AskUserQuestion` on Claude Code, numbered plain text elsewhere:
+- **Not scheduled** (`schedule_enabled: false`) and `INTERACTIVE: yes` — offer once **per repo** (gated by `SCHEDULE_OFFERED`, a per-repo flag, so it doesn't nag here but still fires for other repos). Use `AskUserQuestion` on Claude Code, numbered plain text elsewhere:
 
   > Keep this repo's briefing fresh automatically? Header can regenerate it on a schedule.
   >
@@ -747,7 +755,7 @@ Read `schedule_enabled`, `schedule_frequency_days`, `next_scheduled_generation`,
     -d '{"schedule_enabled": true, "schedule_frequency_days": 7}'
   ```
 
-  Confirm ("✓ This repo's briefing will refresh every 7 days"). Always `touch "${HEADER_HOME:-$HOME/.header}/.schedule-offered"`.
+  Confirm ("✓ This repo's briefing will refresh every 7 days"). Always mark the per-repo flag so it asks only once in this repo: `"<REPO>" flag schedule-offered set`.
 
 - **Already scheduled** — don't re-offer. If useful, mention the cadence and `next_scheduled_generation` in one line. To change or stop it, the user can ask; PUT a new `schedule_frequency_days`, or `{"schedule_enabled": false}` to turn it off.
 

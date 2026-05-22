@@ -160,12 +160,13 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 |---|---|
 | `config` | Persisted configuration (flat `key: value`). |
 | `credentials` | Optional — your API key, saved by the onboarding funnel (`chmod 600`; read as data, never executed). |
-| `.welcome-seen`, `.signup-state`, `.language-prompted`, `.audit-offered` | Onboarding markers, so first-run prompts show exactly once. |
+| `.welcome-seen`, `.signup-state`, `.language-prompted`, `.telemetry-prompted`, `.autotune-offered` | Global onboarding markers, so machine-wide first-run prompts show exactly once. (The audit offer is intentionally **not** marker-gated — it's offered on every interactive run.) |
 | `last-update-check`, `update-snoozed`, `version-info.json` | Update-check cache, snooze state, and the last version-endpoint response. |
 | `ledger.jsonl` | Recommendation ledger (applied/dismissed/snoozed) — local-only, never sent. |
 | `telemetry.jsonl` | Local usage events — only written if you opt into telemetry. |
 | `repos.jsonl` | Repo → topic bindings (which custom topic each repository uses) — local-only, never sent. |
 | `repo-seen/` | Per-repo "last briefing seen" markers, for the session-start freshness check. |
+| `repo-flags/` | Per-repo onboarding flags (e.g. `topic-offered`, `schedule-offered`) so those offers fire once **per repo** — every repo can get its own tailored topic and schedule. |
 
 ## Updating
 

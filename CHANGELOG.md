@@ -3,6 +3,33 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.6.0 — Recurring audit offer, reliable post-briefing offers, richer triggers
+
+- **The audit offer is now recurring, not one-time.** It's made after **every**
+  interactive briefing (like re-running a linter), instead of once behind a
+  `.audit-offered` marker. The marker is gone — a codebase shifts between runs,
+  so a fresh harness/deps scan is useful each time. (Within a single session the
+  skill won't re-ask if it already offered.)
+- **Post-briefing offers are surfaced in the preamble.** It now echoes
+  `AUDIT_OFFER` (always `due` interactively), `TOPIC_OFFERED`, `SCHEDULE_OFFERED`,
+  and `AUTOTUNE_OFFERED` alongside the existing `WELCOME_SEEN` /
+  `TELEMETRY_PROMPTED` flags. These offers were being silently skipped because
+  they relied on inline marker checks buried at the tail of a long flow with no
+  up-front reminder; the enterprise table documents each new line.
+- **Topic and schedule offers are now per-repo, not per-machine.** Both are
+  inherently bound to a repository (each repo can get its own tailored topic and
+  refresh cadence), but the old global `.topic-offered` / `.schedule-offered`
+  markers meant offering once in *any* repo suppressed the offer everywhere else.
+  They're now tracked via a new `header-repo flag <name> [set]` mechanism keyed
+  by git remote (stored in `~/.header/repo-flags/`), so every repo gets the
+  offer exactly once. `AUTOTUNE_OFFERED` stays global — it flips the machine-wide
+  `auto_tune` config key.
+- **Expanded skill triggers.** `when_to_use` and `description` now list
+  audit/optimization triggers (audit, dependency upgrade, migration, optimize
+  codebase, reduce token cost, supply-chain, CLAUDE.md/prompt debt) alongside
+  the briefing triggers (briefing, best practices, latest best practices,
+  what's new in agents/MCP/coding tools).
+
 ## 0.5.2 — Audit: bash tool security posture
 
 - `header-audit harness` now classifies the agent's **Bash-tool permission

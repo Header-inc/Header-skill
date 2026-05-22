@@ -59,6 +59,22 @@ assert_eq "2026-05-21T00:00:00Z" \
 assert_eq "" "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-b" "$RP" seen)" \
   "seen is per-repo — a different key sees nothing"
 
+# ── per-repo onboarding flags (topic-offered, etc.) ───────────
+sb="$(make_sandbox)"
+assert_eq "no" \
+  "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" flag topic-offered)" \
+  "flag is 'no' before it is set"
+HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" flag topic-offered set
+assert_eq "yes" \
+  "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" flag topic-offered)" \
+  "flag is 'yes' after it is set"
+assert_eq "no" \
+  "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-b" "$RP" flag topic-offered)" \
+  "flag is per-repo — a different key is still 'no' (every repo gets its own offer)"
+assert_eq "no" \
+  "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" flag schedule-offered)" \
+  "flags are independent by name — schedule-offered unaffected by topic-offered"
+
 # ── git remote normalization (real git) ───────────────────────
 sb="$(make_sandbox)"; repo="$sb/work"; mkdir -p "$repo"
 git -C "$repo" init -q

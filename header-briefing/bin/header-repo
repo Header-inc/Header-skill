@@ -21,6 +21,10 @@
 #   header-repo list                 every remembered repo → topic (latest wins)
 #   header-repo seen [value]         get, or set, the last-seen briefing marker
 #                                    for this repo (used for freshness checks)
+#   header-repo flag <name> [set]    get (prints yes|no), or set, a per-repo
+#                                    onboarding flag (e.g. topic-offered,
+#                                    schedule-offered) so an offer is made once
+#                                    *per repo* rather than once per machine
 #
 # Env:
 #   HEADER_HOME       override the state directory (default: $HOME/.header)
@@ -30,6 +34,7 @@ set -uo pipefail
 STATE_DIR="${HEADER_HOME:-$HOME/.header}"
 REPOS="$STATE_DIR/repos.jsonl"
 SEEN_DIR="$STATE_DIR/repo-seen"
+FLAGS_DIR="$STATE_DIR/repo-flags"
 
 json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
@@ -65,6 +70,16 @@ seen_file() {
   local h
   h="$(repo_key | cksum | cut -d' ' -f1)"
   printf '%s/%s\n' "$SEEN_DIR" "$h"
+}
+
+# flag_file — per-repo onboarding-flag marker path. <name> is a controlled,
+# hyphenated identifier from the skill (e.g. topic-offered); the repo key is
+# hashed into the filename so any remote/path is safe.
+flag_file() {
+  local name h
+  name="$(printf '%s' "$1" | tr -cd 'a-z0-9-')"
+  h="$(repo_key | cksum | cut -d' ' -f1)"
+  printf '%s/%s.%s\n' "$FLAGS_DIR" "$h" "$name"
 }
 
 cmd="${1:-}"
@@ -136,8 +151,20 @@ case "$cmd" in
     fi
     ;;
 
+  flag)
+    name="${1:-}"; shift 2>/dev/null || true
+    [ -n "$name" ] || { echo "header-repo: flag <name> required" >&2; exit 1; }
+    ff="$(flag_file "$name")"
+    if [ "${1:-}" = "set" ]; then
+      mkdir -p "$FLAGS_DIR"
+      : > "$ff"
+    else
+      [ -f "$ff" ] && echo yes || echo no
+    fi
+    ;;
+
   *)
-    echo "Usage: header-repo {key|bind|get|clear|list|seen} ..." >&2
+    echo "Usage: header-repo {key|bind|get|clear|list|seen|flag} ..." >&2
     exit 1
     ;;
 esac
