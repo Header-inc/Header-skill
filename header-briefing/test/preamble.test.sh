@@ -109,7 +109,6 @@ assert_not_contains "$(run_preamble "$SKILL_DIR" "$sb")" "PWNED" \
 sb="$(make_sandbox)"; mkdir -p "$sb/.header"
 out="$(run_preamble "$SKILL_DIR" "$sb" HEADER_TEAM_DIR="$sb/empty")"
 assert_contains "$out" "TEAM_CONFIG: none"        "no committed .header/config → TEAM_CONFIG: none"
-assert_contains "$out" "CRON_OFFERED: no"         "CRON_OFFERED echoed (no by default)"
 assert_contains "$out" "TEAM_CONFIG_OFFERED: no"  "TEAM_CONFIG_OFFERED echoed (no by default)"
 
 # committed team file → topic surfaced; staleness + language folded in

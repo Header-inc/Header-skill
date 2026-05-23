@@ -332,7 +332,7 @@ Engineering pragmatism and the thesis happen to agree. Each step is the next sen
 5. **Org dashboard + value receipts** — the Pro-tier sell/retain surface: how a 30-engineer team's leader
    sees "saved $X, billed 0.25X" (ROI-positive by construction). Buyer = engineering leaders; tier = team-priced.
 6. **Continuous operation (audit-cron / experiment-cron)** — the "*continuously* generates… executes."
-   Turns the one-shot into the standing optimization layer. Builds on the briefing/audit cron already shipped.
+   Turns the one-shot into the standing optimization layer. Builds on the server-side briefing schedule already shipped.
 
 Distribution stays upstream of all of this: the **briefing reader** (the wedge) keeps feeding hypotheses
 into step 3+ — new models and dep advisories become experiments.

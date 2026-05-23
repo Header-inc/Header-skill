@@ -3,6 +3,63 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.9.2 — `npx skills` as the recommended install
+
+- **New top install option:** `npx skills add Header-inc/Header-skill -g` (the open
+  vercel-labs [`skills`](https://github.com/vercel-labs/skills) CLI). One command
+  installs the `header-briefing` skill across Claude Code, Codex, Cursor, Copilot,
+  Gemini CLI, and 50+ other Agent Skills hosts — no install script piped into a shell.
+  `-g` installs globally; omit for project-local.
+- The `curl | sh` script, clone-and-install, and project-local copy are now Options
+  B–D. Our own version-endpoint updater remains the update path (re-run any installer,
+  or enable `auto_update`).
+- Considered Claude Code's `/plugin` marketplace; **deferred** — third-party
+  marketplaces don't auto-update by default and the marketplace copy would collide
+  with the skill's self-update.
+
+## 0.9.1 — Smarter wait for async briefing generation (static ETA + background check-back)
+
+`POST /api/v2/goals/{id}/briefings` returns `201` with an `estimated_duration_seconds`
+ETA. Clarified how to wait on it without busy-waiting:
+
+- **The ETA is static.** It's fixed at create time and does **not** count down — a
+  later GET returns the same number. Compute the real remaining time from
+  `created_at` (`estimated_duration_seconds - (now - created_at)`) and wait that
+  plus a small buffer, instead of re-sleeping the full estimate on a check-back.
+  Added `created_at` to the BriefingResponse reference; corrected the
+  `estimated_duration_seconds` / `source_count` notes.
+- **Non-blocking check-back on Claude Code.** Time it off the ETA + buffer with a
+  background poll loop (`Bash` `run_in_background`, which re-invokes the agent on
+  exit) or a `ScheduleWakeup` timer — no foreground `sleep`.
+- **Documented the create body.** `max_entries` and `max_age_days` are optional;
+  omit the body for defaults.
+
+## 0.9.0 — Drop the client-side auto-refresh cron (server-side schedule is enough)
+
+Removed the local auto-refresh cron offer added in 0.7.0. On Claude Code it set up
+a `/schedule` routine (or durable `CronCreate`) that ran `/header-briefing
+since-last` about a day after each server-side refresh — but that routine executes
+as a **remote agent in Anthropic's cloud**, where it can't actually work:
+
+- **No API key.** `since-last` is key-gated; `HEADER_API_KEY` lives in the local
+  `~/.header/credentials` / env, which a cloud agent never sees.
+- **No skill.** `header-briefing` is installed under the local `~/.claude/skills/`,
+  not committed to the repo a remote checkout would clone — there is no
+  `/header-briefing` command there to run.
+- **No local state.** The `~/.header/.last-run` marker and the repo→topic binding
+  that `since-last` relies on are local-only.
+
+So the routine would burn a run every N+1 days and error out. The **server-side
+schedule** (`schedule_enabled` on the goal, set via joinheader.com) already
+regenerates briefings on cadence and is enough — a fresh one is waiting the next
+time you open a session.
+
+- Removed the "Auto-refresh on a schedule (cron)" section, the `CRON_OFFERED`
+  preamble line and mode-table row, and the `cron-offered` per-repo flag.
+- The `since-last` digest mode stays — still usable manually ("what's new since I
+  last checked"), from a `SessionStart` hook, or from any scheduler you run
+  yourself on a real machine.
+
 ## 0.8.3 — header-cost: measured-only (no projections), correct cache + legacy pricing
 
 Removed the parts of `header-cost` that were assumptions rather than measurements:

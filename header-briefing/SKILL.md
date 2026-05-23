@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.8.3
+version: 0.9.2
 description: "Browse and read Header intelligence briefings, and audit/optimize the agent's own setup. Default fetches the latest agentic-coding briefing and surfaces suggestions relevant to this project; audit mode scans the harness (CLAUDE.md, model, deps) for prompt-config debt and supply-chain gaps. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use for two things. (1) The latest agentic-coding briefing or best practices — triggers include briefing, best practices, get me the latest, latest best practices, what's new in agents/MCP/coding tools, any new patterns to adopt. (2) Auditing and improving the agent's own setup — triggers include audit, audit my setup/agent/harness, dependency upgrade, upgrade dependencies, migration, optimize codebase, reduce token cost, supply-chain risk, CLAUDE.md or prompt debt. Also runs on /header-briefing (optionally /header-briefing audit). Pass a topic name or UUID to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -58,7 +58,6 @@ else
   echo "AUDIT_OFFER: due"   # standing offer — every interactive run, not one-time
   echo "TOPIC_OFFERED: $("$_HR" flag topic-offered 2>/dev/null || echo no)"
   echo "SCHEDULE_OFFERED: $("$_HR" flag schedule-offered 2>/dev/null || echo no)"
-  echo "CRON_OFFERED: $("$_HR" flag cron-offered 2>/dev/null || echo no)"
   echo "TEAM_CONFIG_OFFERED: $("$_HR" flag team-config-offered 2>/dev/null || echo no)"
   echo "AUTOTUNE_OFFERED: $([ -f "$_HH/.autotune-offered" ] && echo yes || echo no)"
   if [ -n "${HEADER_API_KEY:-}" ] || { [ -f "$_HH/credentials" ] && grep -q '^HEADER_API_KEY=' "$_HH/credentials" 2>/dev/null; }; then
@@ -95,7 +94,6 @@ The block prints either `HEADER_MODE: classic` or `HEADER_MODE: enterprise`.
 | `AUDIT_OFFER` | Always `due` in interactive mode — the audit offer is **not** one-time. Make it after **every** briefing when `INTERACTIVE: yes` (see "Audit offer"). There is no suppression marker; this line is the standing reminder so the offer isn't dropped at the tail of a long flow. |
 | `TOPIC_OFFERED` | **Per-repo** flag. `no` (with `HAS_KEY: yes`, `INTERACTIVE: yes`, and an empty `REPO_TOPIC` — no topic bound to *this* repo yet) → make the custom-topic auto-create offer — see "Auto-create a topic from your project". Once per repo, not once per machine: every repo can get its own tailored topic. |
 | `SCHEDULE_OFFERED` | **Per-repo** flag. `no` (with a bound `REPO_TOPIC` not yet on a schedule, `INTERACTIVE: yes`) → make the schedule offer for *this* repo's topic — see "Bound repos — freshness & schedule". Once per repo. |
-| `CRON_OFFERED` | **Per-repo** flag. `no` (right after a server-side schedule was enabled for this repo's topic, `INTERACTIVE: yes`) → offer a local auto-refresh that pulls the new briefing at **N+1 days** — see "Auto-refresh on a schedule (cron)". Once per repo. |
 | `TEAM_CONFIG_OFFERED` | **Per-repo** flag. `no` (with `TEAM_CONFIG: none`, a team-shareable topic just created or bound, `INTERACTIVE: yes`) → offer to write and commit `.header/config` — see "Team config (`.header/config`)". Once per repo. |
 | `AUTOTUNE_OFFERED` | Global. `no` (with a key, a custom goal, and 3+ applied recs, `INTERACTIVE: yes`) → make the one-time goal auto-tuning offer — see "Goal auto-tuning". Once per machine (it flips the global `auto_tune` config key). |
 | `UPDATE_CHECK` | `UPDATE_AVAILABLE old new` or `UPDATE_REQUIRED old min` → run the update flow (see "Staying up to date"). Absent when up to date, snoozed, or disabled. |
@@ -864,26 +862,11 @@ Read `schedule_enabled`, `schedule_frequency_days`, `next_scheduled_generation`,
     -d '{"schedule_enabled": true, "schedule_frequency_days": 7}'
   ```
 
-  Confirm ("✓ This repo's briefing will refresh every 7 days"), remember the chosen cadence as **N** days, and mark the per-repo flag so it asks only once in this repo: `"<REPO>" flag schedule-offered set`. Then offer to mirror it locally so the fresh briefing surfaces on its own — see "Auto-refresh on a schedule (cron)".
+  Confirm ("✓ This repo's briefing will refresh every 7 days"), remember the chosen cadence as **N** days, and mark the per-repo flag so it asks only once in this repo: `"<REPO>" flag schedule-offered set`.
 
 - **Already scheduled** — don't re-offer. If useful, mention the cadence and `next_scheduled_generation` in one line. To change or stop it, the user can ask; PUT a new `schedule_frequency_days`, or `{"schedule_enabled": false}` to turn it off.
 
 Best-effort throughout: if any call fails, fall back to the normal public flow — freshness and scheduling never block a briefing.
-
-### Auto-refresh on a schedule (cron)
-
-The server-side schedule above regenerates the briefing every **N** days, but nothing *pulls* it into your session — you only see it the next time you happen to run the skill. This step closes that gap with a standing local job that runs `/header-briefing since-last`, so a fresh briefing surfaces on its own. Offer it once per repo, right after a schedule is enabled, when `INTERACTIVE: yes` and the preamble echoed `CRON_OFFERED: no`. Requires a key (it's the since-last digest under the hood).
-
-> Want me to check in automatically when the new briefing lands? I'll set a job to pull it about a day after each refresh — quiet unless there's something new.
-
-Run it at **N+1 days**, not N: the +1 guarantees the server has finished regenerating before the local job looks, so it never races an in-progress briefing. Over-firing is harmless anyway — `since-last` passes `?since=<last-run>` to the dashboard, so an early or duplicate run just reports "nothing new" (see "Since-last digest"). Always set `HEADER_NONINTERACTIVE=1` for the job so onboarding prompts can't block an unattended run.
-
-- **Claude Code** — create a **persistent** scheduled agent: the `/schedule` skill, or `CronCreate` with `durable: true`. Prompt: `/header-briefing since-last`. Cadence: roughly every N+1 days (e.g. day-of-month `*/8` for N=7; pick an off-peak, off-`:00` minute). Tell the user it's removable anytime via `/schedule` (or `CronDelete`). Don't use a plain in-session `CronCreate` recurring job for this — those auto-expire after ~7 days, too short for an N+1-day cadence; the durable `/schedule` routine is the right tool.
-- **Other harnesses** — no portable cron tool, so give the user the one-liner for their own scheduler (cron / `launchd` / systemd timer). The exact `HEADER_NONINTERACTIVE=1 … /header-briefing since-last` shape and the `next_action` handling are in "Scheduled / agent loop".
-
-Then mark the per-repo flag so the offer fires once: `"<REPO>" flag cron-offered set`.
-
-Best-effort: scheduling never blocks a briefing — if the user declines or no cron tool is available, say how to set it up manually and move on.
 
 ### Add a source
 
@@ -927,22 +910,24 @@ curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
 
 ### Polling IN_PROGRESS briefings
 
-The briefing-creation response (and any subsequent GET while the briefing is still in progress) includes a server-computed `estimated_duration_seconds` based on the number of sources assigned to the goal, plus `source_count`. Use the ETA for cadence — don't hardcode wait times.
+The briefing-creation response (`201`) includes a server-computed `estimated_duration_seconds` (ETA) and the `source_count` it was based on. Use the ETA for cadence — don't hardcode wait times.
 
-**Cadence:** sleep `estimated_duration_seconds` before the first poll, then poll every 30s. Give up at twice the ETA and tell the user the briefing is taking longer than expected. If the field is missing or null, fall back to 300s (5 min).
+**The ETA is static** — fixed at create time, it does **not** count down, so a later GET returns the same number. To know how much is actually left, compute it from `created_at`: `remaining = estimated_duration_seconds - (now - created_at)`. Right after the POST `now ≈ created_at`, so `remaining ≈ ETA`; on a later check-back it's smaller (≤ 0 means the briefing is due). Add a small **buffer** so you wake just *after* the estimate, not exactly on it. Both `estimated_duration_seconds` and `source_count` are null on briefings predating the field (and on completed/public briefings) — fall back to 300s (5 min) then.
+
+**Cadence:** sleep `remaining` + buffer before the first poll, then poll every 30s. Give up at ~2× the ETA past `created_at` and tell the user the briefing is taking longer than expected.
 
 **Blocking pattern** — when the user is waiting on the result:
 
 ```bash
-# Trigger generation and capture the ETA from the create response
+# Trigger generation; capture the ETA from the create response
 resp=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
   -X POST https://joinheader.com/api/v2/goals/{goal_id}/briefings)
 briefing_id=$(echo "$resp" | jq -r .id)
 eta=$(echo "$resp" | jq -r '.estimated_duration_seconds // 300')
 
-# Wait the estimated duration, then poll on a 30s interval until 2× the ETA
-sleep "$eta"
-deadline=$(( $(date +%s) + 2 * eta ))
+# Just-created, so remaining ≈ eta. Wait eta + buffer, then poll every 30s.
+sleep "$(( eta + 15 ))"
+deadline=$(( $(date +%s) + eta ))            # ~1× eta elapsed; allow ~1× more
 while [ "$(date +%s)" -lt "$deadline" ]; do
   status=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
     "https://joinheader.com/api/v2/briefings/$briefing_id" | jq -r .status)
@@ -954,22 +939,36 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 ```
 
-**Non-blocking pattern** — when the user has other work to do:
+**Non-blocking pattern** — when the user has other work to do, don't tie up the foreground:
 
-1. Tell the user the briefing is generating, including the ETA from `estimated_duration_seconds` (e.g., "~5 min for 30 sources").
-2. Record the `briefing_id` and return control.
-3. On the next invocation, fetch by ID and present.
+1. Tell the user the briefing is generating, including the ETA (e.g., "~5 min for 30 sources").
+2. Record `briefing_id` and `created_at`.
+3. Check back after the ETA — fetch by ID and present, or surface `FAILED`.
 
-**Claude Code only:** non-blocking can be automated with `ScheduleWakeup` — set the delay to `estimated_duration_seconds` so the agent wakes when the briefing should be ready, without busy-waiting in the foreground.
+**Claude Code** automates step 3 without busy-waiting — either:
+
+- **Background loop:** run the poll loop as a background job (`Bash` with `run_in_background: true`) — it sleeps `remaining` + buffer, polls every 30s until `COMPLETED`/`FAILED`, and re-invokes you on exit. Foreground `sleep` is blocked, so backgrounding is what keeps the wait non-blocking.
+- **Timer:** `ScheduleWakeup` with the delay set to `remaining` + buffer (`estimated_duration_seconds - (now - created_at) + ~15s`). The agent wakes, does one GET, and presents — or reschedules a short delay if it's still `IN_PROGRESS` (the ETA is only an estimate).
+
+Other harnesses: record `briefing_id` and fetch on the next invocation, or block with the pattern above.
 
 ### Generate a new briefing
 
-For an existing goal (use `default_goal_id` from your topic):
+For an existing goal (use `default_goal_id` from your topic). All body fields are optional — omit the body entirely for defaults:
 
 ```bash
 curl -sS -w "\n%{http_code}" -X POST -H "Authorization: Bearer $HEADER_API_KEY" \
-  https://joinheader.com/api/v2/goals/{goal_id}/briefings
+  -H "Content-Type: application/json" \
+  https://joinheader.com/api/v2/goals/{goal_id}/briefings \
+  -d '{"max_entries": 5, "max_age_days": 7}'
 ```
+
+| Body field | Notes |
+|---|---|
+| `max_entries` | optional — cap the number of source entries included |
+| `max_age_days` | optional — only include entries from the last N days |
+
+Returns `201` with `status: IN_PROGRESS` and an `estimated_duration_seconds` ETA — then poll `GET /api/v2/briefings/{id}` until `COMPLETED` (see "Polling IN_PROGRESS briefings").
 
 ### Update a goal
 
@@ -1078,10 +1077,11 @@ For full API documentation, see [joinheader.com/docs](https://joinheader.com/doc
 | `summary` | string | Full markdown briefing text |
 | `key_developments` | string | JSON-encoded array — parse from string into structured list |
 | `source_articles` | array | Source articles used (title, url, metadata) |
-| `estimated_duration_seconds` | int? | Server-computed ETA for generation, populated on the create response. Use it to drive polling cadence. May be null on completed/public briefings. |
-| `source_count` | int? | Number of sources assigned to the goal at briefing time. May be null on completed/public briefings. |
+| `estimated_duration_seconds` | int? | Server-computed ETA (seconds), populated on the create response. **Static — fixed at create time, does not count down**; compute remaining as `estimated_duration_seconds - (now - created_at)`. Drives polling cadence — see "Polling IN_PROGRESS briefings". Null on completed/public briefings and on briefings predating this field. |
+| `source_count` | int? | Number of sources the ETA was based on. Null on completed/public briefings and on briefings predating this field. |
 | `stats` | object | Processing statistics (model, tokens, content window, etc.). |
 | `is_public` | bool | Whether the briefing is publicly accessible |
+| `created_at` | datetime | When generation was requested (the briefing was created). Anchor for the remaining-ETA computation above. |
 | `generated_at` | datetime | When the briefing was generated |
 
 ### TopicCatalogItem

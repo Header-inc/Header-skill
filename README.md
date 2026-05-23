@@ -10,15 +10,25 @@ A skill for agentic coding tools that fetches intelligence briefings from [Heade
 
 The skill is a small folder — `header-briefing/` (`SKILL.md` + `bin/` + `VERSION`) — installed into your agent's skills directory.
 
-### Option A: One-command install (recommended)
+### Option A: `npx skills` (recommended)
+
+One command, and it works in Claude Code, Codex, Cursor, Copilot, Gemini CLI, and [50+ other Agent Skills hosts](https://github.com/vercel-labs/skills) — via the open [`skills`](https://github.com/vercel-labs/skills) CLI, with no install script piped into a shell. Needs Node (for `npx`).
+
+```bash
+npx skills add Header-inc/Header-skill -g
+```
+
+`-g` installs globally for your user (available across all projects) — drop it to scope to the current project. The CLI finds the `header-briefing` skill in this repo and installs just that folder; inside an agent session it installs non-interactively. Add `-a <agent>` to target specific hosts, `--list` to preview, and re-run to update.
+
+### Option B: One-command install script
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
 ```
 
-Installs into `~/.claude/skills/header-briefing/` (and `~/.codex/skills/` if Codex is detected). Re-run any time to update.
+Installs into `~/.claude/skills/header-briefing/` (and `~/.codex/skills/` if Codex is detected). No Node required — just `sh`, plus `git` or `curl`. Re-run any time to update.
 
-### Option B: Clone and install
+### Option C: Clone and install
 
 ```bash
 git clone https://github.com/Header-inc/Header-skill.git
@@ -27,7 +37,7 @@ cd Header-skill && ./install.sh
 
 To update later: `cd Header-skill && git pull && ./install.sh`.
 
-### Option C: Project-local (available only in one project)
+### Option D: Project-local (available only in one project)
 
 ```bash
 git clone https://github.com/Header-inc/Header-skill.git
@@ -41,7 +51,7 @@ Start a new Claude Code session (or restart your current one) to pick up the ski
 
 ### Using with other harnesses (Cursor, Aider, Codex CLI, etc.)
 
-The skill is a folder of plain `bash` + `curl` — no build step, no runtime dependencies. To use it outside Claude Code, install the `header-briefing/` folder where your agent looks for skills, or point your agent at `header-briefing/SKILL.md` directly:
+Most hosts are covered by **Option A** — `npx skills add Header-inc/Header-skill -a <agent>` (e.g. `-a cursor`, `-a codex`). For anything the CLI doesn't cover, the skill is a folder of plain `bash` + `curl` — no build step, no runtime dependencies — so install the `header-briefing/` folder where your agent looks for skills, or point your agent at `header-briefing/SKILL.md` directly:
 
 - **Cursor**: add `header-briefing/SKILL.md` as a project rule.
 - **Aider**: `aider --read header-briefing/SKILL.md` (or add to `CONVENTIONS.md`).
@@ -140,7 +150,7 @@ With an API key, you can:
 
 When you create a custom topic while working in a repository, the skill offers to **remember it for that repo**. After that, running `/header-briefing` in the same repo automatically uses your topic instead of the public default — no argument needed. Bindings live in a local registry (`~/.header/repos.jsonl`) keyed by the repo's git remote (with a path fallback); nothing is written inside your repo and nothing is sent. New sessions also check whether a newer briefing has appeared and surface it. Disable with `header-config set repo_memory false`; forget one repo with `header-repo clear`.
 
-You can also put a repo's topic on a **schedule** (every 3 / 7 / 14 / 30 days). Header then regenerates the briefing server-side on that cadence, so a fresh one is waiting the next time you open a session — even if you never trigger it manually. After enabling a schedule, the skill can also set up a **local auto-refresh** (a persistent `/schedule` routine on Claude Code) that runs `/header-briefing since-last` about a day after each refresh and surfaces the new briefing on its own — quiet unless there's something new.
+You can also put a repo's topic on a **schedule** (every 3 / 7 / 14 / 30 days). Header then regenerates the briefing server-side on that cadence, so a fresh one is waiting the next time you open a session — even if you never trigger it manually.
 
 The personal binding above stays on your machine. To share a topic with a **whole team**, commit a [`.header/config`](#team-config-headerconfig) — teammates inherit it on clone with no setup.
 
@@ -208,7 +218,7 @@ On each run the skill checks for a newer version against Header's version endpoi
 - **The prompt** offers Yes / Always / Not now / Never. "Always" sets `auto_update`; "Never" sets `update_check false`.
 - **Auto-update:** `~/.claude/skills/header-briefing/bin/header-config set auto_update true` — future updates install silently.
 - **Disable checks:** `~/.claude/skills/header-briefing/bin/header-config set update_check false`.
-- **Update manually anytime** by re-running the installer:
+- **Update manually anytime** by re-running your installer — `npx skills add Header-inc/Header-skill -g` (Option A), or the script:
 
   ```bash
   curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
