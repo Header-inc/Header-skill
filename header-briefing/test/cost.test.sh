@@ -15,7 +15,9 @@ assert_eq "30.000000" "$(COST cost claude-opus-4-7 1000000 1000000)" \
 assert_eq "0.500000"  "$(COST cost opus 0 0 1000000 0)" \
   "opus 1M cache_read = 0.50"
 assert_eq "6.250000"  "$(COST cost opus 0 0 0 1000000)" \
-  "opus 1M cache_write (5m) = 6.25"
+  "opus 1M cache_write 5m = 6.25"
+assert_eq "10.000000" "$(COST cost opus 0 0 0 0 1000000)" \
+  "opus 1M cache_write 1h = 10.00 (priced separately from 5m)"
 assert_eq "13.500000" "$(COST cost claude-sonnet-4-6 2000000 500000)" \
   "sonnet 2M in + 0.5M out = 6 + 7.5 = 13.50"
 assert_eq "6.000000"  "$(COST cost claude-haiku-4-5 1000000 1000000)" \
@@ -26,6 +28,18 @@ assert_eq "30.000000" "$(COST cost claude-opus-4-7-20260416 1000000 1000000)" \
   "versioned id 'claude-opus-4-7-20260416' resolves to the opus family"
 assert_eq "$(COST cost claude-opus-4-7 1000000 1000000)" "$(COST cost OPUS 1000000 1000000)" \
   "family match is case-insensitive"
+
+# ── version-aware Opus: current (4.5+) = 5/25, legacy (3.x/4.0/4.1) = 15/75 ─
+assert_eq "30.000000" "$(COST cost claude-opus-4-7 1000000 1000000)" \
+  "Opus 4.7 = current (30 for 1M in/out)"
+assert_eq "90.000000" "$(COST cost claude-opus-4-1-20250805 1000000 1000000)" \
+  "Opus 4.1 = legacy (90)"
+assert_eq "90.000000" "$(COST cost claude-opus-4-20250514 1000000 1000000)" \
+  "Opus 4.0 (bare opus-4 + date) = legacy (90)"
+assert_eq "90.000000" "$(COST cost claude-3-opus-20240229 1000000 1000000)" \
+  "Opus 3 = legacy (90)"
+assert_eq "30.000000" "$(COST cost claude-opus-4-5 1000000 1000000)" \
+  "Opus 4.5 = current (not tripped by the legacy regex)"
 
 # ── unknown model → exit 2, prints 0, warns on stderr ─────────
 out="$(COST cost gpt-4o 1000 1000 2>/dev/null)"; rc=$?
@@ -76,7 +90,12 @@ raw='{"type":"assistant","message":{"model":"claude-opus-4-7","usage":{"input_to
 {"type":"user","message":{"role":"user","content":"hi"}}'
 raw_out="$(printf '%s\n' "$raw" | COST report 2>/dev/null)"
 assert_contains "$raw_out" "1 call(s)" "raw transcript: one assistant usage line, user line skipped"
-assert_contains "$raw_out" "11.75" "raw transcript cost = 5(in) + 6.25(cache_creation) + 0.50(cache_read) = 11.75"
+assert_contains "$raw_out" "11.75" "raw transcript (flat cache_creation → 5m fallback) = 5 + 6.25 + 0.50 = 11.75"
+
+# ── cache 5m/1h split is priced separately (the real fix) ─────
+split_in='{"type":"assistant","message":{"model":"claude-opus-4-7","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":2000000,"cache_creation":{"ephemeral_5m_input_tokens":1000000,"ephemeral_1h_input_tokens":1000000},"cache_read_input_tokens":0}}}'
+split_out="$(printf '%s\n' "$split_in" | COST report 2>/dev/null)"
+assert_contains "$split_out" "16.25" "5m(1M=6.25) + 1h(1M=10.00) priced separately = 16.25, not flat-2M-at-5m (12.50)"
 
 # ── report --json (stdout is pure JSON; provenance is on stderr) ─
 j="$(printf '%s\n' '{"model":"opus","input_tokens":1000000,"output_tokens":0}' | COST report --json 2>/dev/null)"
@@ -91,8 +110,6 @@ assert_contains "$(COST report --input "$sb/usage.jsonl" 2>/dev/null)" "5.00" "r
 prov="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report 2>&1 >/dev/null)"
 assert_contains "$prov" "Prices: bundled defaults as of" "report states it used bundled defaults (stderr)"
 assert_contains "$prov" "verify online" "provenance nudges to verify online before relying on figures"
-sav_prov="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST savings --from opus --to sonnet 2>&1 >/dev/null)"
-assert_contains "$sav_prov" "Prices:" "savings also states its price source on stderr"
 
 # ── cost basis: figures are API rates; subscription users differ ──
 basis="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report 2>&1 >/dev/null)"
@@ -102,26 +119,16 @@ hdr="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COS
 assert_contains "$hdr" "USD at API rates" "report header is labelled API rates"
 assert_contains "$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report --json 2>/dev/null)" \
   '"basis":"api_rates"' "report --json carries the basis field"
-assert_contains "$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST savings --from opus --to sonnet 2>&1 >/dev/null)" \
-  "subscription" "savings also states the API-vs-subscription basis"
 
-# ── savings projection ────────────────────────────────────────
-sav_in='{"model":"claude-opus-4-7","input_tokens":1000000,"output_tokens":1000000}'
-sav="$(printf '%s\n' "$sav_in" | COST savings --from opus --to sonnet 2>/dev/null)"
-assert_contains "$sav" "12.00" "savings opus→sonnet on 1M/1M = 30 - 18 = 12"
-assert_contains "$sav" "40.0%" "savings percentage = 40%"
-assert_contains "$sav" "Projection only" "savings is labelled a projection, not a measured win"
-savj="$(printf '%s\n' "$sav_in" | COST savings --from opus --to sonnet --json 2>/dev/null)"
-assert_contains "$savj" '"savings_usd":12.000000' "savings --json amount"
-assert_contains "$savj" '"savings_pct":40.00' "savings --json percent"
-
-# ── savings: no matching 'from' usage → graceful ──────────────
-nomatch="$(printf '%s\n' '{"model":"sonnet","input_tokens":1000,"output_tokens":1000}' | COST savings --from opus --to haiku 2>/dev/null)"
-assert_contains "$nomatch" "No usage on opus" "savings with no matching from-model is graceful"
-
-# ── savings: unknown from/to → exit 2 ─────────────────────────
-printf '%s\n' "$sav_in" | COST savings --from opus --to gpt-4o >/dev/null 2>&1; rc=$?
-assert_exit 2 "$rc" "savings with an unknown --to model → exit 2"
+# ── savings: NO projection — only the experiments pointer ─────
+# Projections without measurement are guesses; the tool must never emit one.
+sav="$(printf '%s\n' '{"model":"opus","input_tokens":1000000,"output_tokens":1000000}' | COST savings --from opus --to sonnet 2>&1)"
+assert_contains     "$sav" "experiments are coming soon" "savings points at experiments instead of guessing"
+assert_not_contains "$sav" "%"          "savings prints no percentage"
+assert_not_contains "$sav" "Projection" "savings makes no projection claim"
+assert_not_contains "$sav" "savings:"   "savings prints no savings figure"
+savrc=0; printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST savings >/dev/null 2>&1 || savrc=$?
+assert_exit 0 "$savrc" "savings exits 0 (it's a pointer, not an error)"
 
 # ── refresh: pulls a served table, caches it, validates payload ─
 sbR="$(make_sandbox)"

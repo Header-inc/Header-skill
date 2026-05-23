@@ -99,16 +99,15 @@ Everything is read locally; nothing leaves your machine. Findings split into **a
 /header-briefing cost
 ```
 
-The first piece of the optimization platform: a local "billing meter" that costs your token usage and finds routing savings. It reads usage JSONL — or your raw Claude Code transcripts directly:
+The first piece of the optimization platform: a local "billing meter" that reports your **measured** token spend. It reads usage JSONL — or your raw Claude Code transcripts directly:
 
 ```bash
 find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
-find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost savings --from opus --to sonnet
 ```
 
-`report` ranks spend by model; `savings` projects what routing to a cheaper model would cost. The savings figure is a **projection, not a measured win** — token use and quality differ across models, so the skill points you at the experiment loop that would prove it (see `docs/experiments-design.md`). Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report`/`savings` always print which prices they used and how fresh. The bundled defaults are a dated floor (verified 2026-05-22: Opus 4.5+ $5/$25, Sonnet $3/$15, Haiku $1/$5). All local; nothing is sent.
+`report` ranks spend by model — real token counts × verified prices, with cache writes priced by their real 5-minute/1-hour duration and legacy Opus (3.x/4.0/4.1) priced apart from current Opus. It does **not** guess what switching models would save: a price re-rating of the same tokens is a projection, not a measurement, so `header-cost savings` only points at the experiment loop (*"Header experiments are coming soon…"*) that would actually prove a switch. Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report` always prints which prices it used and how fresh. The bundled defaults are a dated floor (verified 2026-05-22: Opus 4.5+ $5/$25, Sonnet $3/$15, Haiku $1/$5). All local; nothing is sent.
 
-**Billing basis:** the `$` figures are **API (pay-per-token) rates**. On a Claude subscription (Pro $20 / Max $100 / $200 a month) you don't pay these — the `$` is a shadow/API-equivalent number and your real constraint is **usage limits**, so the win is headroom (more work before throttling), not dollars off a bill. The **percentage** savings is the same either way; only the dollar interpretation changes.
+**Billing basis:** the `$` figures are **API (pay-per-token) rates** (the tool says so). On a Claude subscription (Pro $20 / Max $100 / $200 a month) you don't pay these — the `$` is a shadow/API-equivalent number and your real constraint is **usage limits**, so spend reads as cap consumption rather than dollars off a bill.
 
 ### Browse Public Topics
 

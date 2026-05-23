@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.8.2
+version: 0.8.3
 description: "Browse and read Header intelligence briefings, and audit/optimize the agent's own setup. Default fetches the latest agentic-coding briefing and surfaces suggestions relevant to this project; audit mode scans the harness (CLAUDE.md, model, deps) for prompt-config debt and supply-chain gaps. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use for two things. (1) The latest agentic-coding briefing or best practices — triggers include briefing, best practices, get me the latest, latest best practices, what's new in agents/MCP/coding tools, any new patterns to adopt. (2) Auditing and improving the agent's own setup — triggers include audit, audit my setup/agent/harness, dependency upgrade, upgrade dependencies, migration, optimize codebase, reduce token cost, supply-chain risk, CLAUDE.md or prompt debt. Also runs on /header-briefing (optionally /header-briefing audit). Pass a topic name or UUID to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -573,16 +573,16 @@ Triggered by `/header-briefing cost` or "how much am I spending / token spend / 
 cheaper model save". `<COST>` is `header-cost`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
 
 **Verify prices are current *before* presenting any figures.** The bundled table is a dated floor and
-model prices drift — a stale price makes every number wrong. So before reporting cost or savings:
+model prices drift — a stale price makes every number wrong. So before reporting cost:
 1. If `HEADER_PRICES_URL` is set, run `"<COST>" refresh` to pull the served table.
 2. Otherwise fetch **current** Anthropic pricing — `https://platform.claude.com/docs/en/about-claude/pricing`
    (input / output / cache-read / 5-minute cache-write per MTok, per model family) — and write it to
    `~/.header/prices.tsv` (`family input output cache_read cache_write`, one line each), e.g. on
    2026-05-22 that was `opus 5 25 0.50 6.25`, `sonnet 3 15 0.30 3.75`, `haiku 1 5 0.10 1.25`.
 
-`report`/`savings` print the price source + freshness on stderr — **always surface that line with the
-figures** so the user knows whether the numbers are live, refreshed, or dated defaults. Never quote a cost
-or savings number without saying which prices it used and when they were checked.
+`report` prints the price source + freshness on stderr — **always surface that line with the figures** so the
+user knows whether the numbers are live, refreshed, or dated defaults. Never quote a cost number without
+saying which prices it used and when they were checked.
 
 **Billing mode — say which, every time.** The `$` figures are **API (pay-per-token) rates** (the tool
 prints this basis). Two cases, and you must frame for the right one:
@@ -599,8 +599,11 @@ a subscription user as if it were money off their bill.
 
 **Where usage comes from.** The tool reads usage JSONL (`{"model","input_tokens","output_tokens",
 "cache_read_tokens","cache_write_tokens","ts"}`, cache fields optional). It also parses **raw Claude Code
-transcripts** best-effort (it reads `input_tokens`/`output_tokens`/`cache_read_input_tokens`/
-`cache_creation_input_tokens` and skips lines with no usage), so the zero-setup path is:
+transcripts** best-effort: it reads `input_tokens`/`output_tokens`/`cache_read_input_tokens` and the cache-
+write **5m/1h split** (`cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`), so those
+are priced correctly (1.25× vs 2× input); it falls back to the flat `cache_creation_input_tokens` at the 5m
+rate only when no split is present, and skips lines with no usage. Legacy Opus (3.x / 4.0 / 4.1 = $15/$75)
+is auto-detected from the model id and priced apart from current Opus ($5/$25). The zero-setup path is:
 
 ```bash
 find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report
@@ -610,21 +613,24 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report --since
 **Where the spend is.** `report` ranks models by cost — surface the biggest line and name the obvious lever
 ("you're running Opus for everything").
 
-**The opportunity (and the honest caveat).** `savings` projects what routing the current usage on one model
-to a cheaper one would cost:
+**No projections — name the lever, don't guess the saving.** From `report` you can name the obvious lever
+("most of your spend is Opus"). **Do not estimate or state what switching/routing would save** — a price
+re-rating of the same tokens is a guess (the cheaper model uses different tokens at different quality). If
+the user asks "what would routing to Sonnet save?", do **not** compute a number; `"<COST>" savings` exists
+only to say so:
 
-```bash
-find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" savings --from opus --to sonnet
+```
+Header experiments are coming soon — A/B-test models in your own repo and verify
+correctness before Header surfaces a recommendation.
 ```
 
-It is a **projection only** — token use and quality differ across models. Present it as a *hypothesis*, never
-a measured win, and point at the experiment loop (`docs/experiments-design.md` §6, §9) that would prove it.
-This is the on-thesis hand-off: cost analytics finds the lever, an experiment proves it before you pull it.
+Surface that, and stop. The real number comes from the experiment loop (`docs/experiments-design.md`), never
+from a projection.
 
 Other subcommands: `"<COST>" refresh [--url U]` (fetch + cache a served price table; validates the payload),
-`"<COST>" prices` (show/verify the active table), `"<COST>" cost <model> <in> <out> [cr] [cw]` (cost one
-usage tuple). Add `--json` to `report`/`savings` for machine output. Best-effort and read-only; it never
-blocks a briefing.
+`"<COST>" prices` (show/verify the active table), `"<COST>" cost <model> <in> <out> [cache_read]
+[cache_write_5m] [cache_write_1h]` (cost one usage tuple). Add `--json` to `report` for machine output.
+Read-only; never blocks a briefing.
 
 ## Browse Public Topics
 

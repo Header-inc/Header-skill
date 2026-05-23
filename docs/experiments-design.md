@@ -315,11 +315,13 @@ volume into "% of your weekly cap consumed" / "headroom freed" given the plan's 
 
 Engineering pragmatism and the thesis happen to agree. Each step is the next sentence of the pitch made real.
 
-1. **Realized-savings measurement (`header-cost`)** — ✅ **shipped (v0.8.0).** The billing meter; proves the
-   wedge's value with no runner yet; reads usage JSONL or raw Claude Code transcripts. `report` (spend by
-   model), `savings` (routing projection, labelled a projection), `cost`, `prices`. *Without a trustworthy
-   savings number there is no Pro revenue.* Next: feed it real usage automatically (OTEL / a usage log) and
-   wire the per-model spend into the audit so routing opportunities surface proactively.
+1. **Realized-spend measurement (`header-cost`)** — ✅ **shipped (v0.8.0–0.8.3).** The billing meter; proves
+   the wedge's value with no runner yet; reads usage JSONL or raw Claude Code transcripts. `report` (measured
+   spend by model — cache priced by real 5m/1h duration, legacy Opus priced apart), `cost`, `prices`,
+   `refresh`. It reports **measured numbers only**: `savings` no longer projects (a price re-rating of the
+   same tokens is a guess) — it just points at experiments. *Without a trustworthy number there is no Pro
+   revenue, so the meter must not emit guesses.* Next: feed it real usage automatically (OTEL / a usage log)
+   and wire per-model spend into the audit so routing *candidates* (to be proven, not projected) surface.
 2. **A/A harness + measurement plumbing** — the foundation: capture usage, isolate runs, estimate σ,
    validate the harness. This is what makes "statistically significant" real (and billable).
 3. **Prompt-debt experiment (MVP) + significance-gated merge-back** — first end-to-end loop, closing on

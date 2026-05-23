@@ -3,6 +3,32 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.8.3 — header-cost: measured-only (no projections), correct cache + legacy pricing
+
+Removed the parts of `header-cost` that were assumptions rather than measurements:
+
+- **No more savings projections.** `savings` previously re-priced your exact tokens
+  at another model's rates and printed a "−40%" figure. That assumes the cheaper
+  model uses identical tokens at identical quality — a guess. It now prints only:
+  *"Header experiments are coming soon — A/B-test models in your own repo and verify
+  correctness before Header surfaces a recommendation."* No number, no percentage.
+- **Cache writes priced by real duration.** It now reads the 5-minute / 1-hour split
+  (`cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`) and
+  prices each correctly (1.25× vs 2× input), instead of assuming everything was
+  5-minute (which undercounts 1-hour caching). Falls back to the flat total at the
+  5m rate only when no split is present.
+- **Legacy Opus priced apart.** Opus 3.x / 4.0 / 4.1 ($15/$75) are auto-detected
+  from the model id and no longer mispriced at the current Opus rate ($5/$25).
+- Omitted cache columns in a price table now derive from input via the fixed
+  Anthropic multipliers (read 0.1×, 5m 1.25×, 1h 2×). `cost` takes an optional
+  `[cache_write_1h]`. The cost tool now reports **measured numbers only**.
+
+Audit note: the other `bin/` tools were reviewed for fabricated claims.
+`header-audit`'s supply-chain guidance was **verified online** (npm `min-release-age`
+shipped in v11.10.0; pip `--uploaded-prior-to` durations in 26.1) — accurate.
+`header-ledger`/`header-repo`/`header-update-check`/`header-telemetry`/`header-config`
+are pure logic / real local data with fail-safe network calls — nothing fabricated.
+
 ## 0.8.2 — Cost basis: API rates vs subscription usage limits
 
 - **`header-cost` now states the billing basis on every calculation.** The `$`
