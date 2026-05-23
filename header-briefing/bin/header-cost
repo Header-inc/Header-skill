@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# header-cost — estimate agent token spend and routing savings. (beta)
+#
+# Phase 1 of the experimentation platform (see docs/experiments-design.md): the
+# "billing meter and opportunity finder". It costs token-usage records against a
+# price table, breaks spend down by model, and projects what routing to a cheaper
+# model would save. No experiment runner required — it reads usage you already have.
+#
+# Usage:
+#   header-cost prices                         show the active price table
+#   header-cost cost <model> <in> <out> [cr] [cw]
+#                                              cost one usage tuple (tokens) → USD
+#   header-cost report [--input F] [--since T] [--json]
+#                                              read usage JSONL (stdin or -F), break
+#                                              spend down by model + total
+#   header-cost savings --from <model> --to <model> [--input F] [--since T] [--json]
+#                                              project routing <from>→<to> savings
+#
+# Usage record schema (one flat JSON object per line; cache fields optional):
+#   {"model":"claude-opus-4-7","input_tokens":1200,"output_tokens":800,
+#    "cache_read_tokens":5000,"cache_write_tokens":0,"ts":"2026-05-20T10:00:00Z"}
+# `report`/`savings` also parse raw Claude Code transcript lines best-effort
+# (they read input_tokens/output_tokens/cache_read_input_tokens/
+# cache_creation_input_tokens and skip lines with no usage), e.g.:
+#   find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
+#
+# Prices are USD per 1,000,000 tokens. The built-ins are DEFAULTS — confirm
+# against current Anthropic pricing and override per family or per model id in
+# ~/.header/prices.tsv  (or $HEADER_PRICES_FILE), one per line, '#' comments ok:
+#   opus    15  75  1.50  18.75
+#   claude-sonnet-4-6   3   15   0.30   3.75
+#
+# Env:
+#   HEADER_HOME          state dir (default: $HOME/.header)
+#   HEADER_PRICES_FILE   price-override file (default: $HEADER_HOME/prices.tsv)
+#
+# All local; nothing is sent anywhere.
+set -euo pipefail
+
+STATE_DIR="${HEADER_HOME:-$HOME/.header}"
+PRICES_FILE="${HEADER_PRICES_FILE:-$STATE_DIR/prices.tsv}"
+
+# Built-in defaults: family  input  output  cache_read  cache_write  (USD / 1M tokens).
+# Cache read = 0.1x input, 5-min cache write = 1.25x input (Anthropic ratios).
+default_prices() {
+  printf '%s\n' \
+    "opus 15 75 1.50 18.75" \
+    "sonnet 3 15 0.30 3.75" \
+    "haiku 1 5 0.10 1.25"
+}
+
+# Defaults first, then any override lines (later lines win in load_prices()).
+price_blob() {
+  default_prices
+  if [ -f "$PRICES_FILE" ]; then
+    grep -vE '^[[:space:]]*(#|$)' "$PRICES_FILE" || true
+  fi
+}
+
+# Shared awk: price loading + lookup + cost + JSON field extraction.
+AWK_LIB='
+function load_prices(   blob,n,lines,i,f) {
+  blob = ENVIRON["HEADER_PRICE_BLOB"]; n = split(blob, lines, "\n")
+  for (i=1;i<=n;i++) {
+    if (lines[i]=="") continue
+    split(lines[i], f, /[ \t]+/)
+    if (f[1]=="") continue
+    P[f[1]"_in"]=f[2]+0; P[f[1]"_out"]=f[3]+0; P[f[1]"_cr"]=f[4]+0; P[f[1]"_cw"]=f[5]+0
+  }
+}
+# pkey — resolve a model string to a price key: exact override id, else family
+# keyword (robust to version churn), else "" (unknown).
+function pkey(m,  lm) {
+  if ((m "_in") in P) return m
+  lm = tolower(m)
+  if (index(lm,"opus")   && ("opus_in"   in P)) return "opus"
+  if (index(lm,"sonnet") && ("sonnet_in" in P)) return "sonnet"
+  if (index(lm,"haiku")  && ("haiku_in"  in P)) return "haiku"
+  return ""
+}
+function cost_of(k,i,o,cr,cw) {
+  return i/1e6*P[k"_in"] + o/1e6*P[k"_out"] + cr/1e6*P[k"_cr"] + cw/1e6*P[k"_cw"]
+}
+function jnum(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*[0-9]+"
+  if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return s+0 } return 0 }
+function jstr(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*\"[^\"]*\""
+  if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*"/,"",s); sub(/"$/,"",s); return s } return "" }
+function rd_cr(line,  v){ v=jnum(line,"cache_read_tokens");  if(v==0) v=jnum(line,"cache_read_input_tokens");     return v }
+function rd_cw(line,  v){ v=jnum(line,"cache_write_tokens"); if(v==0) v=jnum(line,"cache_creation_input_tokens"); return v }
+'
+
+usage() {
+  echo "Usage: header-cost {prices|cost|report|savings} ..." >&2
+  exit 1
+}
+
+cmd="${1:-}"; shift 2>/dev/null || true
+
+case "$cmd" in
+  prices)
+    echo "Active price table (USD per 1M tokens) — defaults; override in $PRICES_FILE"
+    printf '  %-22s %8s %8s %11s %12s\n' "family/model" "input" "output" "cache_read" "cache_write"
+    HEADER_PRICE_BLOB="$(price_blob)" awk "$AWK_LIB"'
+    BEGIN{
+      load_prices()
+      for (k in P) { sub(/_(in|out|cr|cw)$/,"",k); seen[k]=1 }
+      for (m in seen) printf "  %-22s %8.2f %8.2f %11.2f %12.2f\n", m, P[m"_in"], P[m"_out"], P[m"_cr"], P[m"_cw"]
+    }' | sort
+    [ -f "$PRICES_FILE" ] && echo "  (overrides loaded from $PRICES_FILE)" || true
+    ;;
+
+  cost)
+    model="${1:-}"; in="${2:-}"; out="${3:-}"; cr="${4:-0}"; cw="${5:-0}"
+    [ -n "$model" ] && [ -n "$in" ] && [ -n "$out" ] || { echo "Usage: header-cost cost <model> <in> <out> [cache_read] [cache_write]" >&2; exit 1; }
+    HEADER_PRICE_BLOB="$(price_blob)" awk -v m="$model" -v i="$in" -v o="$out" -v cr="$cr" -v cw="$cw" "$AWK_LIB"'
+    BEGIN{
+      load_prices(); k=pkey(m)
+      if (k=="") { printf "header-cost: unknown model %s (no price; set it in the prices file)\n", m > "/dev/stderr"; print "0.000000"; exit 2 }
+      printf "%.6f\n", cost_of(k, i+0, o+0, cr+0, cw+0)
+    }'
+    ;;
+
+  report)
+    SRC="/dev/stdin"; SINCE=""; JSON=0
+    while [ $# -gt 0 ]; do case "$1" in
+      --input) SRC="${2:?--input needs a file}"; shift 2 ;;
+      --since) SINCE="${2:?--since needs a timestamp}"; shift 2 ;;
+      --json)  JSON=1; shift ;;
+      *) echo "header-cost report: unknown arg '$1'" >&2; exit 1 ;;
+    esac; done
+    HEADER_PRICE_BLOB="$(price_blob)" awk -v since="$SINCE" -v json="$JSON" "$AWK_LIB"'
+    BEGIN{ load_prices() }
+    {
+      model=jstr($0,"model"); inp=jnum($0,"input_tokens"); outp=jnum($0,"output_tokens")
+      cr=rd_cr($0); cw=rd_cw($0); ts=jstr($0,"ts")
+      if (model=="" || (inp==0 && outp==0 && cr==0 && cw==0)) next       # not a usage record
+      if (since!="" && ts!="" && ts<since) next
+      k=pkey(model); c=(k==""?0:cost_of(k,inp,outp,cr,cw)); if(k=="") unk++
+      if (!(model in Calls)) Keys[++nk]=model
+      Calls[model]++; In[model]+=inp; Out[model]+=outp; Cache[model]+=cr+cw; Cost[model]+=c
+      tCalls++; tIn+=inp; tOut+=outp; tCache+=cr+cw; tCost+=c
+    }
+    END{
+      # selection sort model keys by cost desc
+      for (a=1;a<=nk;a++) for (b=a+1;b<=nk;b++) if (Cost[Keys[b]]>Cost[Keys[a]]) { t=Keys[a]; Keys[a]=Keys[b]; Keys[b]=t }
+      if (json) {
+        printf "{\"total_usd\":%.6f,\"calls\":%d,\"unknown\":%d,\"models\":[", tCost, tCalls, unk+0
+        for (a=1;a<=nk;a++){ m=Keys[a]
+          printf "%s{\"model\":\"%s\",\"calls\":%d,\"input\":%d,\"output\":%d,\"cache\":%d,\"cost_usd\":%.6f}", (a>1?",":""), m, Calls[m], In[m], Out[m], Cache[m], Cost[m] }
+        print "]}"
+      } else {
+        printf "Header cost report — %d call(s)%s\n", tCalls, (since!=""?(", since " since):"")
+        printf "  %-26s %8s %12s %12s %12s %12s\n", "MODEL","CALLS","INPUT","OUTPUT","CACHE","COST(USD)"
+        for (a=1;a<=nk;a++){ m=Keys[a]
+          printf "  %-26s %8d %12d %12d %12d %11.2f\n", m, Calls[m], In[m], Out[m], Cache[m], Cost[m] }
+        printf "  %-26s %8d %12d %12d %12d %11.2f\n", "TOTAL", tCalls, tIn, tOut, tCache, tCost
+        if (unk>0) printf "  [!] %d record(s) had no known price (unknown model) — add it to the prices file.\n", unk
+      }
+    }' "$SRC"
+    ;;
+
+  savings)
+    SRC="/dev/stdin"; SINCE=""; JSON=0; FROM=""; TO=""
+    while [ $# -gt 0 ]; do case "$1" in
+      --from)  FROM="${2:?--from needs a model}"; shift 2 ;;
+      --to)    TO="${2:?--to needs a model}"; shift 2 ;;
+      --input) SRC="${2:?--input needs a file}"; shift 2 ;;
+      --since) SINCE="${2:?--since needs a timestamp}"; shift 2 ;;
+      --json)  JSON=1; shift ;;
+      *) echo "header-cost savings: unknown arg '$1'" >&2; exit 1 ;;
+    esac; done
+    [ -n "$FROM" ] && [ -n "$TO" ] || { echo "Usage: header-cost savings --from <model> --to <model> [--input F] [--since T] [--json]" >&2; exit 1; }
+    HEADER_PRICE_BLOB="$(price_blob)" awk -v from="$FROM" -v to="$TO" -v since="$SINCE" -v json="$JSON" "$AWK_LIB"'
+    BEGIN{ load_prices()
+      fk=pkey(from); tk=pkey(to)
+      if (fk=="") { printf "header-cost: unknown --from model %s\n", from > "/dev/stderr"; exit 2 }
+      if (tk=="") { printf "header-cost: unknown --to model %s\n", to     > "/dev/stderr"; exit 2 }
+    }
+    {
+      model=jstr($0,"model"); inp=jnum($0,"input_tokens"); outp=jnum($0,"output_tokens")
+      cr=rd_cr($0); cw=rd_cw($0); ts=jstr($0,"ts")
+      if (model=="" || (inp==0 && outp==0 && cr==0 && cw==0)) next
+      if (since!="" && ts!="" && ts<since) next
+      if (pkey(model)!=fk) next                       # only usage currently on the FROM model
+      n++; sIn+=inp; sOut+=outp; sCr+=cr; sCw+=cw
+    }
+    END{
+      cur = cost_of(fk, sIn,sOut,sCr,sCw)
+      proj= cost_of(tk, sIn,sOut,sCr,sCw)
+      save= cur-proj; pct=(cur>0? save/cur*100 : 0)
+      if (json) { printf "{\"from\":\"%s\",\"to\":\"%s\",\"calls\":%d,\"current_usd\":%.6f,\"projected_usd\":%.6f,\"savings_usd\":%.6f,\"savings_pct\":%.2f}\n", from,to,n+0,cur,proj,save,pct; exit }
+      if (n==0) { printf "No usage on %s found in the input — nothing to project.\n", from; exit }
+      printf "Routing %s -> %s  (matched %d call(s) on %s)\n", from, to, n, fk
+      printf "  current   (%s):  $%.2f\n", fk, cur
+      printf "  projected (%s):  $%.2f\n", tk, proj
+      printf "  savings:          $%.2f  (%.1f%%)\n", save, pct
+      print  "Projection only — token use and quality differ across models. Prove it with an"
+      print  "experiment before relying on it (docs/experiments-design.md, sections 6 and 9)."
+    }' "$SRC"
+    ;;
+
+  ""|-h|--help) usage ;;
+  *) echo "header-cost: unknown subcommand '$cmd'" >&2; usage ;;
+esac

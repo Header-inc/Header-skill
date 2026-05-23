@@ -3,6 +3,28 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.8.0 — Cost analytics (beta) — the optimization-platform billing meter
+
+- **`bin/header-cost`** — Phase 1 of the experimentation platform (see
+  `docs/experiments-design.md`): the "billing meter and opportunity finder." It
+  costs token-usage records against an overridable price table, breaks spend down
+  by model, and projects routing savings. No experiment runner required — it reads
+  usage you already have. All local; nothing is sent.
+  - `header-cost report` ranks spend by model; reads usage JSONL **or raw Claude
+    Code transcripts** best-effort (`find ~/.claude/projects -name '*.jsonl' -exec
+    cat {} + | header-cost report`), with `--since` and `--json`.
+  - `header-cost savings --from <model> --to <model>` projects routing savings —
+    explicitly labelled a **projection, not a measured win**, and points at the
+    experiment loop that would prove it (the on-thesis hand-off).
+  - `header-cost cost <model> <in> <out> [cr] [cw]` costs one usage tuple;
+    `header-cost prices` shows the table. Prices are **defaults — confirm against
+    current Anthropic pricing**; override per family or per model id in
+    `~/.header/prices.tsv`. Model matching is family-based (opus/sonnet/haiku) so
+    it survives version churn. New `cost` mode (`/header-briefing cost`).
+- **`docs/experiments-design.md`** — design spec for the experimentation platform
+  (A/A noise calibration → A/B with paired/interleaved design → significance-gated
+  merge), aligned to the pre-seed thesis, with the pitch-sequenced build order.
+
 ## 0.7.0 — Team config layer + auto-refresh cron
 
 - **Committed team config (`<repo>/.header/config`).** A repo can now ship a

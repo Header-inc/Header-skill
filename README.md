@@ -93,6 +93,21 @@ A local, no-account scan of your **agent harness** — surfaced proactively duri
 
 Everything is read locally; nothing leaves your machine. Findings split into **apply-now** fixes (deletions, the supply-chain gate, security patches) and changes worth **proving with an experiment** — experiment execution is *coming soon* (not yet supported); for now the skill records which experiments you want so they're prioritized.
 
+### Cost analytics (beta)
+
+```
+/header-briefing cost
+```
+
+The first piece of the optimization platform: a local "billing meter" that costs your token usage and finds routing savings. It reads usage JSONL — or your raw Claude Code transcripts directly:
+
+```bash
+find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
+find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost savings --from opus --to sonnet
+```
+
+`report` ranks spend by model; `savings` projects what routing to a cheaper model would cost. The savings figure is a **projection, not a measured win** — token use and quality differ across models, so the skill points you at the experiment loop that would prove it (see `docs/experiments-design.md`). Prices are **defaults — confirm against current Anthropic pricing**; override per family or per model id in `~/.header/prices.tsv`. All local; nothing is sent.
+
 ### Browse Public Topics
 
 You can also ask the skill to browse Header's public topic catalog instead of using the default topic. Public topics span a variety of technology areas and each has its own curated source list and briefing history.
@@ -182,6 +197,7 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 | `repos.jsonl` | Repo → topic bindings (which custom topic each repository uses) — local-only, never sent. |
 | `repo-seen/` | Per-repo "last briefing seen" markers, for the session-start freshness check. |
 | `repo-flags/` | Per-repo onboarding flags (e.g. `topic-offered`, `schedule-offered`) so those offers fire once **per repo** — every repo can get its own tailored topic and schedule. |
+| `prices.tsv` | Optional — token price overrides for `header-cost` (per family or per model id). Built-in defaults are used if absent. |
 
 ## Updating
 
