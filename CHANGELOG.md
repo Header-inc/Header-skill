@@ -3,6 +3,24 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.8.1 — Correct prices + always verify them online
+
+- **Fixed the Opus default price.** Current Opus (4.5/4.6/4.7) is **$5 / $25** per
+  MTok (cache read $0.50, 5-min write $6.25) — the shipped default had Opus 4.1's
+  old $15 / $75. Verified 2026-05-22 against `platform.claude.com/docs`. Sonnet
+  ($3 / $15) and Haiku ($1 / $5) were already correct. Legacy Opus 4.1 and earlier
+  ($15 / $75) need a per-model override.
+- **`header-cost refresh [--url U]`** — fetch a served price table (`$HEADER_PRICES_URL`
+  or `--url`) and cache it; the payload is validated so a 404/HTML page can't poison
+  the meter, and a failed fetch keeps the existing prices. Resolution is now
+  defaults → refreshed cache → user override.
+- **Price provenance on every calculation.** `report` and `savings` print the price
+  source and freshness on stderr ("bundled defaults as of …", "refreshed … (cached)",
+  or "user override"), so a figure is never silently computed on stale prices.
+- **The skill now verifies prices online first.** The Cost analytics flow refreshes
+  (or fetches current Anthropic pricing into `~/.header/prices.tsv`) before quoting
+  any cost/savings, and always surfaces which prices it used and when.
+
 ## 0.8.0 — Cost analytics (beta) — the optimization-platform billing meter
 
 - **`bin/header-cost`** — Phase 1 of the experimentation platform (see

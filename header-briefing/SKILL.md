@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.8.0
+version: 0.8.1
 description: "Browse and read Header intelligence briefings, and audit/optimize the agent's own setup. Default fetches the latest agentic-coding briefing and surfaces suggestions relevant to this project; audit mode scans the harness (CLAUDE.md, model, deps) for prompt-config debt and supply-chain gaps. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use for two things. (1) The latest agentic-coding briefing or best practices — triggers include briefing, best practices, get me the latest, latest best practices, what's new in agents/MCP/coding tools, any new patterns to adopt. (2) Auditing and improving the agent's own setup — triggers include audit, audit my setup/agent/harness, dependency upgrade, upgrade dependencies, migration, optimize codebase, reduce token cost, supply-chain risk, CLAUDE.md or prompt debt. Also runs on /header-briefing (optionally /header-briefing audit). Pass a topic name or UUID to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -572,6 +572,18 @@ The local ledger always captures the full detail; telemetry aggregates the deman
 Triggered by `/header-briefing cost` or "how much am I spending / token spend / what would routing to a
 cheaper model save". `<COST>` is `header-cost`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
 
+**Verify prices are current *before* presenting any figures.** The bundled table is a dated floor and
+model prices drift — a stale price makes every number wrong. So before reporting cost or savings:
+1. If `HEADER_PRICES_URL` is set, run `"<COST>" refresh` to pull the served table.
+2. Otherwise fetch **current** Anthropic pricing — `https://platform.claude.com/docs/en/about-claude/pricing`
+   (input / output / cache-read / 5-minute cache-write per MTok, per model family) — and write it to
+   `~/.header/prices.tsv` (`family input output cache_read cache_write`, one line each), e.g. on
+   2026-05-22 that was `opus 5 25 0.50 6.25`, `sonnet 3 15 0.30 3.75`, `haiku 1 5 0.10 1.25`.
+
+`report`/`savings` print the price source + freshness on stderr — **always surface that line with the
+figures** so the user knows whether the numbers are live, refreshed, or dated defaults. Never quote a cost
+or savings number without saying which prices it used and when they were checked.
+
 **Where usage comes from.** The tool reads usage JSONL (`{"model","input_tokens","output_tokens",
 "cache_read_tokens","cache_write_tokens","ts"}`, cache fields optional). It also parses **raw Claude Code
 transcripts** best-effort (it reads `input_tokens`/`output_tokens`/`cache_read_input_tokens`/
@@ -596,9 +608,10 @@ It is a **projection only** — token use and quality differ across models. Pres
 a measured win, and point at the experiment loop (`docs/experiments-design.md` §6, §9) that would prove it.
 This is the on-thesis hand-off: cost analytics finds the lever, an experiment proves it before you pull it.
 
-Other subcommands: `"<COST>" prices` (show/verify the table), `"<COST>" cost <model> <in> <out> [cr] [cw]`
-(cost one usage tuple). Add `--json` to `report`/`savings` for machine output. Best-effort and read-only;
-it never blocks a briefing.
+Other subcommands: `"<COST>" refresh [--url U]` (fetch + cache a served price table; validates the payload),
+`"<COST>" prices` (show/verify the active table), `"<COST>" cost <model> <in> <out> [cr] [cw]` (cost one
+usage tuple). Add `--json` to `report`/`savings` for machine output. Best-effort and read-only; it never
+blocks a briefing.
 
 ## Browse Public Topics
 

@@ -8,6 +8,8 @@
 #
 # Usage:
 #   header-cost prices                         show the active price table
+#   header-cost refresh [--url U]              fetch a live price table → cache it
+#                                              (URL from --url or $HEADER_PRICES_URL)
 #   header-cost cost <model> <in> <out> [cr] [cw]
 #                                              cost one usage tuple (tokens) → USD
 #   header-cost report [--input F] [--since T] [--json]
@@ -33,27 +35,51 @@
 # Env:
 #   HEADER_HOME          state dir (default: $HOME/.header)
 #   HEADER_PRICES_FILE   price-override file (default: $HEADER_HOME/prices.tsv)
+#   HEADER_PRICES_URL    served price table for `refresh` (TSV, same columns)
+#
+# Prices drift — the built-in table is a dated FLOOR. `report`/`savings` print the
+# price source + freshness on stderr; refresh (or override) before relying on
+# figures. The defaults were verified 2026-05-22 vs platform.claude.com/docs.
 #
 # All local; nothing is sent anywhere.
 set -euo pipefail
 
 STATE_DIR="${HEADER_HOME:-$HOME/.header}"
 PRICES_FILE="${HEADER_PRICES_FILE:-$STATE_DIR/prices.tsv}"
+CACHE_FILE="$STATE_DIR/prices-cache.tsv"     # written by `header-cost refresh`
+PRICES_AS_OF="2026-05-22"                      # date the built-ins below were verified
 
-# Built-in defaults: family  input  output  cache_read  cache_write  (USD / 1M tokens).
-# Cache read = 0.1x input, 5-min cache write = 1.25x input (Anthropic ratios).
+# Built-in defaults: family  input  output  cache_read  cache_write(5m)  (USD / 1M tokens).
+# Verified ${PRICES_AS_OF} against platform.claude.com/docs pricing — CURRENT tiers
+# (Opus 4.5+, Sonnet 4.x, Haiku 4.5). Cache read = 0.1x input, 5-min write = 1.25x.
+# NOTE: legacy Opus 4.1 and earlier are 15/75 (cr 1.50, cw 18.75) — override per
+# model id if you still run them. These defaults are a FLOOR: prices drift, so
+# `header-cost refresh` (a served table) or a manual override should be preferred.
 default_prices() {
   printf '%s\n' \
-    "opus 15 75 1.50 18.75" \
+    "opus 5 25 0.50 6.25" \
     "sonnet 3 15 0.30 3.75" \
     "haiku 1 5 0.10 1.25"
 }
 
-# Defaults first, then any override lines (later lines win in load_prices()).
+# Defaults (floor) -> refreshed cache -> user override. load_prices() lets later
+# lines win, so the override beats the cache beats the defaults.
 price_blob() {
   default_prices
+  if [ -f "$CACHE_FILE" ];  then grep -vE '^[[:space:]]*(#|$)' "$CACHE_FILE"  || true; fi
+  if [ -f "$PRICES_FILE" ]; then grep -vE '^[[:space:]]*(#|$)' "$PRICES_FILE" || true; fi
+}
+
+# price_provenance — on stderr, state which prices a calculation used and how
+# fresh they are, so figures are never silently computed on stale numbers.
+price_provenance() {
   if [ -f "$PRICES_FILE" ]; then
-    grep -vE '^[[:space:]]*(#|$)' "$PRICES_FILE" || true
+    echo "Prices: user override ($PRICES_FILE)." >&2
+  elif [ -f "$CACHE_FILE" ]; then
+    _f="$(sed -n 's/^#[[:space:]]*fetched //p' "$CACHE_FILE" | head -1)"
+    echo "Prices: refreshed ${_f:-recently} (cached) — 'header-cost refresh' to update." >&2
+  else
+    echo "Prices: bundled defaults as of $PRICES_AS_OF — verify online before relying on figures ('header-cost refresh' with a served table, or update $PRICES_FILE). Source: platform.claude.com/docs." >&2
   fi
 }
 
@@ -90,7 +116,7 @@ function rd_cw(line,  v){ v=jnum(line,"cache_write_tokens"); if(v==0) v=jnum(lin
 '
 
 usage() {
-  echo "Usage: header-cost {prices|cost|report|savings} ..." >&2
+  echo "Usage: header-cost {prices|refresh|cost|report|savings} ..." >&2
   exit 1
 }
 
@@ -106,7 +132,32 @@ case "$cmd" in
       for (k in P) { sub(/_(in|out|cr|cw)$/,"",k); seen[k]=1 }
       for (m in seen) printf "  %-22s %8.2f %8.2f %11.2f %12.2f\n", m, P[m"_in"], P[m"_out"], P[m"_cr"], P[m"_cw"]
     }' | sort
+    [ -f "$CACHE_FILE" ] && echo "  (refreshed table cached at $CACHE_FILE)" || true
     [ -f "$PRICES_FILE" ] && echo "  (overrides loaded from $PRICES_FILE)" || true
+    ;;
+
+  refresh)
+    # Pull a served price table (TSV: 'family input output cache_read cache_write'
+    # per line) and cache it. Validates the payload so a 404/HTML page can't poison
+    # the billing meter; on any failure it keeps the existing prices.
+    URL="${HEADER_PRICES_URL:-}"
+    while [ $# -gt 0 ]; do case "$1" in
+      --url) URL="${2:?--url needs a value}"; shift 2 ;;
+      *) echo "header-cost refresh: unknown arg '$1'" >&2; exit 1 ;;
+    esac; done
+    [ -n "$URL" ] || { echo "header-cost: no price URL. Set HEADER_PRICES_URL (or --url) to a served price table, or update $PRICES_FILE from current pricing — see the skill's Cost analytics section." >&2; exit 1; }
+    mkdir -p "$STATE_DIR"
+    tmp="$(mktemp "${CACHE_FILE}.XXXXXX")"
+    if curl -fsSL --retry 1 "$URL" -o "$tmp" 2>/dev/null \
+       && grep -qiE '(opus|sonnet|haiku|claude)[ \t]+[0-9.]+[ \t]+[0-9.]+' "$tmp"; then
+      { printf '# fetched %s from %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$URL"; cat "$tmp"; } > "$CACHE_FILE"
+      rm -f "$tmp"
+      echo "Refreshed price table from $URL"
+    else
+      rm -f "$tmp"
+      echo "header-cost: could not fetch a valid price table from $URL (offline, 404, or unexpected format) — keeping existing prices." >&2
+      exit 1
+    fi
     ;;
 
   cost)
@@ -128,6 +179,7 @@ case "$cmd" in
       --json)  JSON=1; shift ;;
       *) echo "header-cost report: unknown arg '$1'" >&2; exit 1 ;;
     esac; done
+    price_provenance
     HEADER_PRICE_BLOB="$(price_blob)" awk -v since="$SINCE" -v json="$JSON" "$AWK_LIB"'
     BEGIN{ load_prices() }
     {
@@ -170,6 +222,7 @@ case "$cmd" in
       *) echo "header-cost savings: unknown arg '$1'" >&2; exit 1 ;;
     esac; done
     [ -n "$FROM" ] && [ -n "$TO" ] || { echo "Usage: header-cost savings --from <model> --to <model> [--input F] [--since T] [--json]" >&2; exit 1; }
+    price_provenance
     HEADER_PRICE_BLOB="$(price_blob)" awk -v from="$FROM" -v to="$TO" -v since="$SINCE" -v json="$JSON" "$AWK_LIB"'
     BEGIN{ load_prices()
       fk=pkey(from); tk=pkey(to)

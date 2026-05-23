@@ -106,7 +106,7 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
 find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost savings --from opus --to sonnet
 ```
 
-`report` ranks spend by model; `savings` projects what routing to a cheaper model would cost. The savings figure is a **projection, not a measured win** — token use and quality differ across models, so the skill points you at the experiment loop that would prove it (see `docs/experiments-design.md`). Prices are **defaults — confirm against current Anthropic pricing**; override per family or per model id in `~/.header/prices.tsv`. All local; nothing is sent.
+`report` ranks spend by model; `savings` projects what routing to a cheaper model would cost. The savings figure is a **projection, not a measured win** — token use and quality differ across models, so the skill points you at the experiment loop that would prove it (see `docs/experiments-design.md`). Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report`/`savings` always print which prices they used and how fresh. The bundled defaults are a dated floor (verified 2026-05-22: Opus 4.5+ $5/$25, Sonnet $3/$15, Haiku $1/$5). All local; nothing is sent.
 
 ### Browse Public Topics
 
@@ -198,6 +198,7 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 | `repo-seen/` | Per-repo "last briefing seen" markers, for the session-start freshness check. |
 | `repo-flags/` | Per-repo onboarding flags (e.g. `topic-offered`, `schedule-offered`) so those offers fire once **per repo** — every repo can get its own tailored topic and schedule. |
 | `prices.tsv` | Optional — token price overrides for `header-cost` (per family or per model id). Built-in defaults are used if absent. |
+| `prices-cache.tsv` | Optional — price table fetched by `header-cost refresh` (validated). Sits between defaults and your override. |
 
 ## Updating
 
