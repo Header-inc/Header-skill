@@ -41,6 +41,11 @@
 # price source + freshness on stderr; refresh (or override) before relying on
 # figures. The defaults were verified 2026-05-22 vs platform.claude.com/docs.
 #
+# BASIS: all $ figures are API (pay-per-token) rates. On a Claude subscription
+# ($20/$100/$200/mo) you don't pay these — your constraint is usage limits, so the
+# $ is a proxy for cap consumption. The % savings is the same either way (tokens
+# saved = dollars for API, headroom for subscription). report/savings say this.
+#
 # All local; nothing is sent anywhere.
 set -euo pipefail
 
@@ -81,6 +86,13 @@ price_provenance() {
   else
     echo "Prices: bundled defaults as of $PRICES_AS_OF — verify online before relying on figures ('header-cost refresh' with a served table, or update $PRICES_FILE). Source: platform.claude.com/docs." >&2
   fi
+}
+
+# billing_note — costs here are API (pay-per-token) rates. Subscription users pay a
+# flat fee and don't incur these; their constraint is usage limits. The % savings is
+# the same either way (tokens saved = dollars for API, headroom for subscription).
+billing_note() {
+  echo "Basis: USD at API (pay-per-token) rates. On a Claude subscription (\$20/\$100/\$200/mo) you don't pay these — your constraint is usage limits, so read \$ as a proxy for cap consumption; the % still applies (tokens saved = headroom freed)." >&2
 }
 
 # Shared awk: price loading + lookup + cost + JSON field extraction.
@@ -180,6 +192,7 @@ case "$cmd" in
       *) echo "header-cost report: unknown arg '$1'" >&2; exit 1 ;;
     esac; done
     price_provenance
+    billing_note
     HEADER_PRICE_BLOB="$(price_blob)" awk -v since="$SINCE" -v json="$JSON" "$AWK_LIB"'
     BEGIN{ load_prices() }
     {
@@ -196,12 +209,12 @@ case "$cmd" in
       # selection sort model keys by cost desc
       for (a=1;a<=nk;a++) for (b=a+1;b<=nk;b++) if (Cost[Keys[b]]>Cost[Keys[a]]) { t=Keys[a]; Keys[a]=Keys[b]; Keys[b]=t }
       if (json) {
-        printf "{\"total_usd\":%.6f,\"calls\":%d,\"unknown\":%d,\"models\":[", tCost, tCalls, unk+0
+        printf "{\"basis\":\"api_rates\",\"total_usd\":%.6f,\"calls\":%d,\"unknown\":%d,\"models\":[", tCost, tCalls, unk+0
         for (a=1;a<=nk;a++){ m=Keys[a]
           printf "%s{\"model\":\"%s\",\"calls\":%d,\"input\":%d,\"output\":%d,\"cache\":%d,\"cost_usd\":%.6f}", (a>1?",":""), m, Calls[m], In[m], Out[m], Cache[m], Cost[m] }
         print "]}"
       } else {
-        printf "Header cost report — %d call(s)%s\n", tCalls, (since!=""?(", since " since):"")
+        printf "Header cost report — %d call(s)%s  ·  USD at API rates\n", tCalls, (since!=""?(", since " since):"")
         printf "  %-26s %8s %12s %12s %12s %12s\n", "MODEL","CALLS","INPUT","OUTPUT","CACHE","COST(USD)"
         for (a=1;a<=nk;a++){ m=Keys[a]
           printf "  %-26s %8d %12d %12d %12d %11.2f\n", m, Calls[m], In[m], Out[m], Cache[m], Cost[m] }
@@ -223,6 +236,7 @@ case "$cmd" in
     esac; done
     [ -n "$FROM" ] && [ -n "$TO" ] || { echo "Usage: header-cost savings --from <model> --to <model> [--input F] [--since T] [--json]" >&2; exit 1; }
     price_provenance
+    billing_note
     HEADER_PRICE_BLOB="$(price_blob)" awk -v from="$FROM" -v to="$TO" -v since="$SINCE" -v json="$JSON" "$AWK_LIB"'
     BEGIN{ load_prices()
       fk=pkey(from); tk=pkey(to)

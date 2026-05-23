@@ -108,6 +108,8 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost savings --f
 
 `report` ranks spend by model; `savings` projects what routing to a cheaper model would cost. The savings figure is a **projection, not a measured win** — token use and quality differ across models, so the skill points you at the experiment loop that would prove it (see `docs/experiments-design.md`). Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report`/`savings` always print which prices they used and how fresh. The bundled defaults are a dated floor (verified 2026-05-22: Opus 4.5+ $5/$25, Sonnet $3/$15, Haiku $1/$5). All local; nothing is sent.
 
+**Billing basis:** the `$` figures are **API (pay-per-token) rates**. On a Claude subscription (Pro $20 / Max $100 / $200 a month) you don't pay these — the `$` is a shadow/API-equivalent number and your real constraint is **usage limits**, so the win is headroom (more work before throttling), not dollars off a bill. The **percentage** savings is the same either way; only the dollar interpretation changes.
+
 ### Browse Public Topics
 
 You can also ask the skill to browse Header's public topic catalog instead of using the default topic. Public topics span a variety of technology areas and each has its own curated source list and briefing history.

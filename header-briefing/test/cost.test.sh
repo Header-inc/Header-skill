@@ -94,6 +94,17 @@ assert_contains "$prov" "verify online" "provenance nudges to verify online befo
 sav_prov="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST savings --from opus --to sonnet 2>&1 >/dev/null)"
 assert_contains "$sav_prov" "Prices:" "savings also states its price source on stderr"
 
+# ── cost basis: figures are API rates; subscription users differ ──
+basis="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report 2>&1 >/dev/null)"
+assert_contains "$basis" "API (pay-per-token) rates" "report states the API-rate basis (stderr)"
+assert_contains "$basis" "subscription" "report flags that subscription users don't pay API costs"
+hdr="$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report 2>/dev/null)"
+assert_contains "$hdr" "USD at API rates" "report header is labelled API rates"
+assert_contains "$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report --json 2>/dev/null)" \
+  '"basis":"api_rates"' "report --json carries the basis field"
+assert_contains "$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST savings --from opus --to sonnet 2>&1 >/dev/null)" \
+  "subscription" "savings also states the API-vs-subscription basis"
+
 # ── savings projection ────────────────────────────────────────
 sav_in='{"model":"claude-opus-4-7","input_tokens":1000000,"output_tokens":1000000}'
 sav="$(printf '%s\n' "$sav_in" | COST savings --from opus --to sonnet 2>/dev/null)"

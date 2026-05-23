@@ -3,6 +3,26 @@
 Notable changes to the Header briefing skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.8.2 — Cost basis: API rates vs subscription usage limits
+
+- **`header-cost` now states the billing basis on every calculation.** The `$`
+  figures are **API (pay-per-token) rates**: `report`/`savings` print a "Basis:"
+  line, the report header is labelled "USD at API rates", and `report --json`
+  carries `"basis":"api_rates"`.
+- **Subscription users are framed correctly.** On a Claude subscription
+  (Pro \$20 / Max \$100 / \$200 a month) you don't pay per-token costs — the `$`
+  is a shadow/API-equivalent number and the real constraint is **usage limits**
+  (the win is headroom, not dollars). The **percentage** savings is identical
+  across modes (tokens saved = dollars for API, headroom for subscription); only
+  the dollar interpretation differs. The skill now asks/says which mode applies
+  before quoting any figure.
+- **Design doc:** added the **Verifiers & task mining** section (how a real
+  experiment grades an arbitrary codebase — mine the repo's own tests/build/types
+  as the oracle; reverse test-bearing git commits into tasks; LLM-judge only as a
+  validated fallback) and a concrete **`header-experiment` interface spec**
+  (miner / verifier / runner / arm schemas). `header-experiment` is **not built
+  yet** — spec only.
+
 ## 0.8.1 — Correct prices + always verify them online
 
 - **Fixed the Opus default price.** Current Opus (4.5/4.6/4.7) is **$5 / $25** per

@@ -1,6 +1,8 @@
 # Experiments & Cost Analytics — design spec
 
-Status: draft / for review. **Phase 1 (`bin/header-cost`) shipped** in v0.8.0; the runner (Phase 2+) is not yet built.
+Status: draft / for review. **Phase 1 (`bin/header-cost`) shipped** (v0.8.0–0.8.2; now states API-vs-subscription
+cost basis). Verifiers & task mining (§11) and the `header-experiment` interface (§12) are **specified, not
+built**. The runner (Phase 2+) is not yet implemented.
 Aligns with the Header pre-seed thesis: *automated experimentation for AI coding agents.*
 Relates to: `bin/header-audit` (hypothesis generation), `bin/header-ledger`
 (`wanted`/`applied`), `bin/header-telemetry` (`experiment_interest`), the team-config layer
@@ -36,6 +38,18 @@ These aren't preferences — they fall out of the deck and constrain the archite
   realized token savings* (20-30%). We can only invoice a savings number we can defend. That makes the
   noise-floor work (§3) and the confidence intervals (§6) **revenue-critical**: if the savings figure is
   inside the noise band, the Pro tier is unbillable.
+- **Two billing bases — and they change what "savings" means.** Token cost maps to value differently:
+  - **API / Console (pay-per-token):** tokens → real dollars. The savings-share Pro pricing applies here,
+    and on enterprise contracts. This is where the "share of realized savings" model lives.
+  - **Subscription (Claude Pro \$20 / Max \$100 / \$200 a month):** flat fee, **no per-token cost**. The
+    `$` is a shadow/API-equivalent number; the real constraint is **usage limits** (rolling + weekly caps),
+    so the value is **headroom** — more work per period, or avoiding a tier upgrade. You can't bill a share
+    of dollars that were never spent; subscription users are the **\$15/dev self-serve** wedge, sold on
+    headroom, not savings-share.
+
+  The experiment measures **tokens** either way; the **percentage** is basis-agnostic (tokens saved =
+  dollars for API, headroom for subscription). Only the dollar interpretation — and therefore the pricing
+  model — differs. Every figure must state its basis (the cost meter already does).
 - **Hypothesis generation is the COGS.** "Our primary COGS is hypothesis generation." The audit *is* the
   hypothesis generator — it's the cost center and the top of the funnel, not a free giveaway.
 - **Analysis runs on customer infrastructure.** Stated in the model ("Analysis runs on customer
@@ -289,6 +303,12 @@ experiment engine runs A (all-Opus) vs B (routed), measures cost + quality, and 
 holds (§6.5). #5 needs no separate proof machinery; it's the **second experiment type** after prompt-debt
 and maps directly to the "model migrations" learning the moat names.
 
+**Output basis (shipped).** `header-cost` labels every figure as **API (pay-per-token) rates** and warns
+that subscription users (Pro \$20 / Max \$100 / \$200) don't pay them — for them the `$` is a shadow number
+and the lever is **usage-limit headroom** (see §1). A future **subscription mode** would translate token
+volume into "% of your weekly cap consumed" / "headroom freed" given the plan's limits; until then the
+**percentage** savings carries across both bases and is the honest cross-mode number.
+
 ---
 
 ## 10. Build order (sequenced by pitch consistency)
@@ -317,13 +337,184 @@ into step 3+ — new models and dep advisories become experiments.
 
 ---
 
-## 11. Open questions / risks
+## 11. Verifiers & task mining (the #1 hard problem)
+
+Everything above assumes a `verify()` that, for a given task, answers *did this agent run succeed?* —
+objectively, reproducibly, cheaply (it runs hundreds of times), faithfully, and **on an arbitrary customer
+codebase** without a human hand-writing a grader per task. That last clause is the hard part. The reframe
+that makes it tractable:
+
+> **You don't author verifiers. You mine them.** A real codebase already ships its own correctness oracle —
+> the **test suite, the build, the type-checker, the linter**. The job is to *manufacture tasks whose oracle
+> already exists*, and the richest source is the customer's **git history**. This is the SWE-bench
+> construction pointed at the customer's own repo.
+
+### Worked example — git-history reversal → task + oracle
+Commit `a1b2c3` fixed a null-deref: it touched `src/auth.ts` **and** added 3 cases to `auth.test.ts`.
+1. Check out the **parent** (`a1b2c3^`).
+2. Apply **only the test file** from the child commit.
+3. Run the suite → those 3 tests **fail** (`FAIL_TO_PASS`); everything else stays **green** (`PASS_TO_PASS`).
+4. **Lock the test files read-only.** Task = *"make the suite pass."*
+5. Run the **Opus arm** and **Sonnet arm** in separate sandboxes.
+6. **Oracle (one objective bit):** target tests go FAIL→PASS **AND** no PASS_TO_PASS regression **AND**
+   build + typecheck clean.
+
+`random() < 0.94` becomes `tests_pass AND no_regressions AND builds`. Nobody hand-wrote it — the human who
+made that commit already did. **Every commit touching code + tests together is a task/oracle pair**; a repo
+with history is a factory of them.
+
+### The verifier ladder (use the strongest tier a task supports)
+- **Tier 1 — objective oracle (default):** the repo's own tests / build / typecheck / lint. Tasks from
+  git-history reversal, CI red→green commits, "refactor X, suite stays green." Objective, cheap,
+  ungameable (with test files locked). Bounded by what tests cover.
+- **Tier 2 — differential / equivalence (no golden answer needed):** grade **both arms against the same
+  gate** — does B's diff also compile, typecheck, keep the suite green? For refactors: run the *existing*
+  tests against both outputs, or property-test the changed function and diff A-vs-B behavior. Symmetric and
+  fair; "passes gates" ≠ "elegant."
+- **Tier 3 — LLM judge (fallback for what tests can't capture):** docstrings, explanations, open-ended
+  generation. Make it **reference-based** (compare to the human's merged answer from git) and **blind
+  pairwise** (judge sees A and B unlabeled → better/tie; pairwise beats absolute scoring). Then **validate
+  the judge**: ensemble + majority, measure test-retest agreement, control position/verbosity/self-preference
+  bias. Covers everything; noisy, biased, expensive — never the default.
+- **Tier 4 — process guardrails (secondary signal, not a verdict):** finished without error, turn count,
+  touched only relevant files, repo still runnable.
+
+Hierarchy in practice: **Tier 1 wherever tests exist; Tier 2 for refactors/migrations; Tier 3 only for the
+uncovered remainder, flagged as soft.**
+
+### A/A earns its keep here (not circular in the real system)
+Run the oracle repeatedly on the **unchanged** state. Any test that isn't deterministic (network, time,
+ordering, race) gets **quarantined out of the oracle** — automated flaky-test detection. A/A also measures
+the environment's true noise floor, which sizes replication. Flaky tests are the #1 thing that silently
+corrupts a code verifier; A/A is the defense.
+
+### Per-task runner pipeline
+```
+for each mined task, for each arm (A/B), K times:
+  1. git worktree at the pinned commit, in an isolated sandbox (container)
+  2. install deps + detect build/test commands  ← reuse header-audit ecosystem detection;
+     better, read the CI config (.github/workflows, .gitlab-ci.yml) — it already encodes
+     exactly how to build + test this repo
+  3. baseline: run suite/build → record the green set (PASS_TO_PASS); quarantine flaky tests
+  4. apply the task (revert impl, keep + lock tests); run the agent → capture real usage + diff
+  5. verify: target FAIL→PASS? PASS_TO_PASS still green? build/types/lint clean?
+  6. teardown the worktree
+```
+
+### Hard parts (not solved — scope honestly)
+- **Coverage.** Weak tests → thin Tier 1 → forced into noisy Tier 3. You can only prove what the repo can
+  verify. (Also a wedge: the audit flags low coverage; test-bootstrap helps.)
+- **Reproducible environments.** Building/testing an arbitrary repo (services, DBs, secrets, monorepos) is
+  genuinely hard; CI config is the best map; flaky tests poison the oracle → A/A quarantine is mandatory.
+- **Reward hacking.** "Make the test pass" invites deleting/hardcoding. Mitigations: **lock test files**,
+  enforce **PASS_TO_PASS**, keep **hidden held-out tests**, diff-sanity checks (did it just `return 42`?).
+- **Cost.** suite × tasks × replicates × arms is expensive (compute + tokens). A/A power analysis sizes K
+  to the minimum; gate on "expected savings > experiment cost."
+- **Privacy.** Runs on customer code → must run on customer infra (the COGS/margin story); only anonymized
+  aggregates leave.
+- **"Tests ≠ all quality."** Tier 1 proves *correctness on covered behavior*, not maintainability / latency
+  / taste. State the scope; broaden with Tier 3 + human spot-checks; don't overclaim.
+
+### Verifier MVP (first build, after `header-cost`)
+1. One ecosystem (the design partner's). 2. **Git-history miner**: commits touching source+tests where the
+new tests fail on the parent; cap scope (≤ N files); keep ~30–50. 3. **Tests-oracle verifier only** (defer
+Tier 3). 4. Sandbox + CI-config-driven build/test; **A/A flaky-test quarantine** + noise calibration.
+5. Then the **A/B**: Opus vs Sonnet on the mined slice, real usage, real pass/fail → the verdict shape from
+the simulation, now measured.
+
+One-liner: **the verifier is the customer's own CI; the tasks are their own git history played back.** You're
+not grading the model's taste — you're checking whether the cheaper model's diff still clears the bar the
+team already trusts.
+
+---
+
+## 12. `header-experiment` interfaces (spec — NOT yet built)
+
+Spec only — no implementation in this version. New helper `bin/header-experiment`, consistent with the other
+`bin/` tools, local-first, runs on customer infra. Four cooperating pieces: **miner → spec → runner →
+analysis**, with a pluggable **verifier**.
+
+### CLI surface
+```
+header-experiment mine    [--repo DIR] [--ecosystem auto] [--max-files N] [--limit N]
+                          # scan git history → emit candidate task specs (tests-bearing commits)
+header-experiment define  <change>          # author an experiment: arms (A/B), task set, N, δ, tests
+header-experiment run     <id> [--aa] [--k N] [--sandbox docker]   # execute matrix; append runs.jsonl
+header-experiment analyze <id>              # stats per §6 → result.json (effect, CI, verdict, power)
+header-experiment report  <id>              # scorecard; ledger; consent-gated aggregate submit
+header-experiment merge   <id>              # apply a significant win (gated; shows diff)
+```
+
+### Task spec (one per mined/curated task) — `task-specs.jsonl`
+```json
+{
+  "id": "auth-nulldef-a1b2c3",
+  "repo_commit": "a1b2c3^",                     // pinned base state
+  "kind": "git-reversal",                        // git-reversal | refactor-equiv | curated | synthetic
+  "apply": { "checkout": "a1b2c3^", "patch_from": "a1b2c3", "patch_paths": ["auth.test.ts"] },
+  "lock_paths": ["auth.test.ts"],                // agent may not edit these
+  "verifier": "tests-oracle",                    // registry key (see below)
+  "oracle": { "fail_to_pass": ["auth.test.ts::null_token"], "pass_to_pass": "baseline" },
+  "build": ["npm ci"], "test": ["npm test"],     // from CI config / audit detection; null = auto-detect
+  "scope_files": 2, "est_minutes": 3
+}
+```
+
+### Verifier interface (a registry; runner stays agnostic)
+```
+verify(repo_at_commit, task_spec, agent_diff) -> {
+  passed: bool,                 // the objective bit (Tier 1/2) or judged win (Tier 3)
+  score:  float|null,           // optional graded quality (0..1)
+  signals: { build:bool, typecheck:bool, lint:bool, fail_to_pass:int, regressions:int, turns:int },
+  flaky_quarantined: [..],      // tests dropped during A/A calibration
+  verifier: "tests-oracle"      // tests-oracle | build-gate | equivalence | llm-judge
+}
+```
+Implementations: `tests-oracle` (T1), `build-gate`/`equivalence` (T2), `llm-judge` (T3, reference+pairwise,
+ensemble). New task types add a verifier without touching the runner.
+
+### Arm / config (what A and B actually are)
+```json
+{ "A": { "model": "claude-opus-4-7",   "harness": "default" },
+  "B": { "model": "claude-sonnet-4-6", "harness": "default" } }   // or harness deltas: CLAUDE.md edit, gate, subagent
+```
+
+### Runner contract (per task × arm × replicate)
+- Isolation: fresh `git worktree` at `repo_commit` in a sandbox (container; tool allow-list reusing the
+  audit's bash posture; no-network where possible; wall-clock + token caps). Never edit `lock_paths`.
+- Agent adapter (one seam, keeps Header **model/harness-agnostic**): Claude Code headless
+  (`claude -p --output-format json`) | Claude Agent SDK | generic CLI. Captures real `usage` (→ `header-cost`).
+- Order: **interleave** arms in time; randomize task order; **pair by task** (§6.2).
+
+### Artifacts (local-first, like the ledger)
+```
+~/.header/experiments/<id>/
+  spec.json          # pre-registration: arms, task set ref, N, δ, metric, test (frozen before running)
+  task-specs.jsonl   # the mined/curated tasks
+  runs.jsonl         # one raw record per (task, arm, replicate): usage, cost, latency, verifier result
+  result.json        # analysis: per-metric effect + CI + verdict + power + billable-savings bound
+```
+
+### Reuse / dependencies
+- `header-audit` → ecosystem + build/test detection, bash-tool sandbox posture.
+- CI config → the authoritative build+test recipe.
+- `header-cost` → real usage capture + cost basis (API vs subscription).
+- `header-ledger` / `header-telemetry` → record outcomes + consent-gated aggregate submit (the moat).
+
+**Status: design only.** Build order: this lands as Phase 2/3 in §10, *after* `header-cost` (shipped) and
+the A/A harness. The verifier MVP (§11) is the first runnable slice.
+
+---
+
+## 13. Open questions / risks
 
 - **Billing trust.** Because we invoice on realized savings, the savings number must survive a customer
   audit. Conservative-bound billing (§6.5), raw run records (§4), and a clean A/A (§3) are the defenses.
   Get this wrong and the Pro tier is disputed, not just inaccurate.
-- **Quality metric beyond pass/fail.** Routing/model changes need finer measurement than binary tests;
-  LLM-judge reliability must itself be measured. The MVP dodges it on purpose; it's the gating problem for L2.
+- **Verifier coverage (was the #1 risk — now §11).** Addressed by "Verifiers & task mining": mine the repo's
+  own tests/build/types as the oracle, reverse test-bearing git commits into tasks, fall back to a *validated*
+  LLM judge only for the uncovered remainder. Residual risk: repos with weak tests limit what can be proven,
+  and LLM-judge reliability must itself be measured.
 - **Cost of experimenting.** Replication burns tokens (the customer's). Need budget caps + an
   "expected-savings > experiment-cost" gate. Header infra amortizes standardized experiments across customers.
 - **Sandbox blast radius.** Autonomous agent runs on tasks need real isolation; a bad experiment must not

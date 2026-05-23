@@ -1,6 +1,6 @@
 ---
 name: header-briefing
-version: 0.8.1
+version: 0.8.2
 description: "Browse and read Header intelligence briefings, and audit/optimize the agent's own setup. Default fetches the latest agentic-coding briefing and surfaces suggestions relevant to this project; audit mode scans the harness (CLAUDE.md, model, deps) for prompt-config debt and supply-chain gaps. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use for two things. (1) The latest agentic-coding briefing or best practices — triggers include briefing, best practices, get me the latest, latest best practices, what's new in agents/MCP/coding tools, any new patterns to adopt. (2) Auditing and improving the agent's own setup — triggers include audit, audit my setup/agent/harness, dependency upgrade, upgrade dependencies, migration, optimize codebase, reduce token cost, supply-chain risk, CLAUDE.md or prompt debt. Also runs on /header-briefing (optionally /header-briefing audit). Pass a topic name or UUID to fetch a specific topic; otherwise the default agentic-coding briefing is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -583,6 +583,19 @@ model prices drift — a stale price makes every number wrong. So before reporti
 `report`/`savings` print the price source + freshness on stderr — **always surface that line with the
 figures** so the user knows whether the numbers are live, refreshed, or dated defaults. Never quote a cost
 or savings number without saying which prices it used and when they were checked.
+
+**Billing mode — say which, every time.** The `$` figures are **API (pay-per-token) rates** (the tool
+prints this basis). Two cases, and you must frame for the right one:
+- **API / Console (pay-per-token):** the `$` is real spend. Savings are real dollars → this is the case the
+  Pro "share of realized savings" pricing targets.
+- **Claude subscription** (Pro \$20 / Max \$100 / \$200 a month): the user pays a flat fee and does **not**
+  incur per-token costs. Reframe — the `$` is a **shadow/API-equivalent** number, and their real constraint
+  is **usage limits** (rolling + weekly caps). The win isn't dollars, it's **headroom**: more work before
+  throttling, or avoiding a tier upgrade. The **percentage** savings is identical across modes (tokens saved
+  = dollars for API, headroom for subscription) — only the dollar interpretation changes.
+
+If you don't know which mode the user is on, ask, or present both readings. Don't quote a dollar "saving" to
+a subscription user as if it were money off their bill.
 
 **Where usage comes from.** The tool reads usage JSONL (`{"model","input_tokens","output_tokens",
 "cache_read_tokens","cache_write_tokens","ts"}`, cache fields optional). It also parses **raw Claude Code
