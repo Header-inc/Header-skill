@@ -60,8 +60,8 @@ These aren't preferences — they fall out of the deck and constrain the archite
   and dependency upgrades benefit from learnings Header has already internalized." The proven-changes
   library (§7.3) is the one thing a single customer — or a model provider optimizing only its own
   model — structurally can't replicate. Model- and harness-agnostic by design.
-- **"Merge back" is gated on *significance*, not on a risk heuristic.** The merge step ships
-  statistically significant wins (§6.5), full stop.
+- **"Merge back" requires *significance*, but significance is not the whole gate.** Statistical proof is
+  mandatory; merge also requires a practical effect size, a clean safety diff, and explicit approval (§6.5).
 - **Briefings are the distribution wedge, not the thesis.** The public skill's reader/audit gets Header
   installed and earns the "point at your codebase" relationship ($15/dev self-serve). Its on-thesis job
   is to **feed the experiment queue**: "new Opus dropped → run a migration experiment," "this dep has a
@@ -73,7 +73,7 @@ These aren't preferences — they fall out of the deck and constrain the archite
 |---|---|---|
 | Experiment engine + A/A + significance | "experimentation and statistical analysis"; "statistically significant wins" | The product |
 | Realized-savings measurement (`header-cost`) | "share of realized token savings (20-30%)"; "ROI-positive by construction" | Billing meter |
-| Significance-gated merge-back | "merge … back into the agent's harness configuration" | Loop close |
+| Evidence-gated merge-back | "merge … back into the agent's harness configuration" | Loop close |
 | Hypothesis generation (the audit) | "continuously generates hypotheses"; "primary COGS is hypothesis generation" | COGS + funnel |
 | Hybrid runner (analysis on customer infra) | "Analysis runs on customer infrastructure … 70-80% margins" | Margin |
 | Proven-changes library (cross-customer) | "aggregation of experimental results across all customers" | Moat |
@@ -112,14 +112,20 @@ into two arbitrary groups). It does three jobs:
    #2..N. A/A surfaces it so we randomize order or discard warmup.
 
 Procedure: run config A `K` times per task on the v0 suite, then estimate per-task and pooled σ, compute
-the **minimum detectable effect (MDE)** at 80% power / α=0.05, and assert the A/A difference CI contains 0
-for every metric. If not → STOP, debug the harness. Only then run A/B.
+the **minimum detectable effect (MDE)** at 80% power / α=0.05, and check that observed A/A bias is below a
+pre-registered practical threshold. A CI containing 0 is necessary but not enough; with low N it can hide a
+large noise floor, and with many metrics it can fail spuriously. Also test for order/cache/time covariates.
+If A/A shows practical bias or unstable variance → STOP, debug the harness. Only then run A/B.
 
 ---
 
 ## 4. What we measure
 
 **Unit:** one *task run* = (task, arm, replicate).
+
+**Analysis unit:** one *task* (or task block), not one replicate. Replicates within the same task are
+clustered observations; treating them as independent would overstate confidence. Aggregate or model
+within-task A/B deltas first, then bootstrap / test at the task-block level.
 
 | Metric | Type | Notes |
 |---|---|---|
@@ -147,7 +153,8 @@ A win is only real against a representative, reproducible task set. Layered, in 
 
 - **L0 — repo-as-task (v0 for prompt-debt).** Use the project's own test suite as the verifier; the
   task is "make the change / hold the spec," success = tests still pass. For *deletion* experiments the
-  suite is just "run the golden tasks, confirm no regression." Deterministic, no judge.
+  suite must still exercise the harness under representative agent work; "tests pass after deletion" alone
+  does not measure whether the removed prompt mattered. Deterministic, no judge.
 - **L1 — curated golden tasks.** 15–30 small gradeable tasks pinned to a commit, each with an automatic
   verifier (test, regex/AST match, or rubric). The workhorse suite.
 - **L2 — replayed real tasks.** Captured transcripts replayed against a pinned checkout. Most realistic,
@@ -194,9 +201,11 @@ Merge B iff **both**:
 - **Quality non-inferiority** — lower bound of the success-rate difference CI (B − A) is above **−δ**
   (not worse by more than the margin, e.g. δ = 2% absolute).
 
-Anything else → "no proven win" (flagging underpowered vs genuinely flat). The **billed savings = the
-measured cost-difference point estimate, discounted to the conservative bound of its CI** — never bill the
-optimistic tail.
+Then merge only if the effect is practically meaningful, the diff is safe/reviewable, and the user approves
+the change. Anything else → "no proven win" (flagging underpowered vs genuinely flat). For experimental
+savings, if Δ = B − A, the conservative savings rate is `max(0, -upper_CI(Δ))`; never bill the optimistic
+tail. For Pro billing, distinguish the experiment-estimated savings rate from **realized post-merge
+savings** on actual production usage volume.
 
 ### 6.6 Multiple comparisons & peeking
 Many experiments/metrics at once → control false discovery with **Benjamini–Hochberg FDR**. **Don't
@@ -232,7 +241,7 @@ Storage (local-first, like the ledger):
 ```
 ~/.header/experiments/<id>/
   spec.json     # pre-registration: arms (A/B configs), suite ref+commit, N, metrics, δ, test
-  runs.jsonl    # one raw record per (task, arm, replicate): usage, cost, latency, success, model id, ts
+  runs.jsonl    # one raw record per (task, arm, replicate): usage, cost, latency, success, model id, price table, ts
   result.json   # analysis: per-metric effect + CI + test + verdict + power + billable-savings bound
 ```
 
@@ -258,8 +267,11 @@ results comparable across customers. ✗ Privacy (can't ship proprietary CLAUDE.
 ### 7.3 Hybrid (the design) — and why it produces the margins and the moat
 - **Private experiments run locally / on customer infra.** Code and prompts stay put. The runner submits
   **only anonymized aggregates** — effect size, `n`, and the change *category* (e.g. "deleted
-  think-step-by-step block"), never code — consent-gated, exactly like `experiment_interest` today. This
-  is the literal "analysis runs on customer infrastructure" → **Header's COGS is just hypothesis
+  think-step-by-step block"), never code — consent-gated, exactly like `experiment_interest` today. Aggregates
+  need enough context to be reusable without leaking code: model family, harness type, verifier tier,
+  ecosystem/language, task class, baseline prompt size, cache mode, and price-table version. Backend reporting
+  must enforce small-cohort protections (for example k-anonymity thresholds) before surfacing cross-customer
+  claims. This is the literal "analysis runs on customer infrastructure" → **Header's COGS is just hypothesis
   generation → 70-80% margins.**
 - **Standardized experiments run on Header infra** against a public benchmark, for generic changes.
   Header pools these + the anonymized customer aggregates into a **proven-changes library** served back to
@@ -356,9 +368,10 @@ Commit `a1b2c3` fixed a null-deref: it touched `src/auth.ts` **and** added 3 cas
 1. Check out the **parent** (`a1b2c3^`).
 2. Apply **only the test file** from the child commit.
 3. Run the suite → those 3 tests **fail** (`FAIL_TO_PASS`); everything else stays **green** (`PASS_TO_PASS`).
-4. **Lock the test files read-only.** Task = *"make the suite pass."*
-5. Run the **Opus arm** and **Sonnet arm** in separate sandboxes.
-6. **Oracle (one objective bit):** target tests go FAIL→PASS **AND** no PASS_TO_PASS regression **AND**
+4. Hide future git history from the agent (synthetic/shallow checkout, no child commit reachable via `.git`).
+5. **Lock the test files read-only.** Task = *"make the suite pass."*
+6. Run the **Opus arm** and **Sonnet arm** in separate sandboxes.
+7. **Oracle (one objective bit):** target tests go FAIL→PASS **AND** no PASS_TO_PASS regression **AND**
    build + typecheck clean.
 
 `random() < 0.94` becomes `tests_pass AND no_regressions AND builds`. Nobody hand-wrote it — the human who
@@ -368,7 +381,7 @@ with history is a factory of them.
 ### The verifier ladder (use the strongest tier a task supports)
 - **Tier 1 — objective oracle (default):** the repo's own tests / build / typecheck / lint. Tasks from
   git-history reversal, CI red→green commits, "refactor X, suite stays green." Objective, cheap,
-  ungameable (with test files locked). Bounded by what tests cover.
+  harder to game when test files and verifier commands are controlled. Bounded by what tests cover.
 - **Tier 2 — differential / equivalence (no golden answer needed):** grade **both arms against the same
   gate** — does B's diff also compile, typecheck, keep the suite green? For refactors: run the *existing*
   tests against both outputs, or property-test the changed function and diff A-vs-B behavior. Symmetric and
@@ -393,13 +406,13 @@ corrupts a code verifier; A/A is the defense.
 ### Per-task runner pipeline
 ```
 for each mined task, for each arm (A/B), K times:
-  1. git worktree at the pinned commit, in an isolated sandbox (container)
+  1. synthetic/shallow checkout at the pinned commit, in an isolated sandbox (container)
   2. install deps + detect build/test commands  ← reuse header-audit ecosystem detection;
      better, read the CI config (.github/workflows, .gitlab-ci.yml) — it already encodes
      exactly how to build + test this repo
   3. baseline: run suite/build → record the green set (PASS_TO_PASS); quarantine flaky tests
   4. apply the task (revert impl, keep + lock tests); run the agent → capture real usage + diff
-  5. verify: target FAIL→PASS? PASS_TO_PASS still green? build/types/lint clean?
+  5. verify outside the agent-controlled shell: target FAIL→PASS? PASS_TO_PASS still green? build/types/lint clean?
   6. teardown the worktree
 ```
 
@@ -409,7 +422,8 @@ for each mined task, for each arm (A/B), K times:
 - **Reproducible environments.** Building/testing an arbitrary repo (services, DBs, secrets, monorepos) is
   genuinely hard; CI config is the best map; flaky tests poison the oracle → A/A quarantine is mandatory.
 - **Reward hacking.** "Make the test pass" invites deleting/hardcoding. Mitigations: **lock test files**,
-  enforce **PASS_TO_PASS**, keep **hidden held-out tests**, diff-sanity checks (did it just `return 42`?).
+  hide future commits, run verification outside the agent-controlled shell, reject unexpected build/test config
+  edits, enforce **PASS_TO_PASS**, keep **hidden held-out tests**, diff-sanity checks (did it just `return 42`?).
 - **Cost.** suite × tasks × replicates × arms is expensive (compute + tokens). A/A power analysis sizes K
   to the minimum; gate on "expected savings > experiment cost."
 - **Privacy.** Runs on customer code → must run on customer infra (the COGS/margin story); only anonymized
@@ -493,7 +507,7 @@ ensemble). New task types add a verifier without touching the runner.
 ~/.header/experiments/<id>/
   spec.json          # pre-registration: arms, task set ref, N, δ, metric, test (frozen before running)
   task-specs.jsonl   # the mined/curated tasks
-  runs.jsonl         # one raw record per (task, arm, replicate): usage, cost, latency, verifier result
+  runs.jsonl         # one raw record per (task, arm, replicate): usage, cost, latency, verifier result, price table
   result.json        # analysis: per-metric effect + CI + verdict + power + billable-savings bound
 ```
 
