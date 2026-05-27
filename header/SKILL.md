@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.11.0
+version: 0.11.1
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -288,7 +288,7 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 **Present** as a one-line scorecard, then a ranked recommendation list. Each recommendation is a hypothesis: **what** (the change), **where** (file + line/manifest), **why** (cite the audit line *or* the briefing item — link the `source_articles` URL for the latter), and the **expected effect** (`est.` and directional unless measured). Split into two groups:
 
 - **Apply now** — deletions/simplifications, supply-chain gate, security patches. Low-risk and deterministic. On the user's yes, make the edit (show a diff first; for the gate, write/append the `<AUDIT> gate ...` snippet to `.npmrc`).
-- **`[Experiment]`** _(beta)_ — anything whose payoff must be *proven*: a model change, a major dependency/framework upgrade, a behavioral rewrite. State the A/B that *would* settle it ("A = current, B = proposed; measure tokens + test pass-rate over N runs"), and either: (a) point the user at `header-experiment` for a local MVP A/B run (see the "Experiments" section below), or (b) when an experiment isn't realistic for the user right now, offer to **note the user's interest** in the ledger so they're told when richer experiments ship. The skill itself runs nothing — `header-experiment` is user-invoked for MVP.
+- **`[Experiment]`** _(beta)_ — anything whose payoff must be *proven*: a model change, a major dependency/framework upgrade, a behavioral rewrite. State the A/B that *would* settle it ("A = current, B = proposed; measure tokens + test pass-rate over N runs"). If the user says "let's test that", **scaffold the spec from the finding payload** with `header-experiment new --kind ...` (see "Experiments" section below) — don't make the user retype what the audit already told us. The standard ledger dispositions apply per finding: `dismissed` if they reject this specific experiment, `wanted` if they want this one but aren't running it locally right now, `snoozed` for "not now."
 
 After presenting, ask which (if any) to implement. On selection, proceed with the implementation in the current project.
 
@@ -570,26 +570,65 @@ Other subcommands: `"<COST>" refresh [--url U]`, `"<COST>" prices`, `"<COST>" co
 
 ## Experiments (`header-experiment`) — beta
 
-> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **MVP scope:** `define`, `validate`, `run` (with `--aa` for noise-floor), `analyze`, `report`. **Not yet:** git-history task mining (§11), auto-merge of the winning arm, LLM judges, cross-customer aggregate submit.
+> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **MVP scope:** `new` (audit-aware scaffolder), `validate`, `run` (with `--aa` for noise-floor), `analyze`, `report`. **Not yet:** git-history task mining (§11), auto-merge of the winning arm, LLM judges, cross-customer aggregate submit.
 
-When a user asks "is switching to <cheaper model> safe for my repo?" / "can I delete this CLAUDE.md section without regressing?" / "prove the saving" — **do not guess the answer**. Point them at `header-experiment`. Show them the four-step loop and let them drive it (the runner spends real tokens; this is a deliberate user action, not an autoflow):
+### From audit finding to scaffolded experiment
+
+The audit's `[Experiment]` findings are the input. When the user says "let's test that" on a finding, **don't make them retype what the audit already knows** — call `header-experiment new --kind ...` with the finding's payload pre-filled. The wizard auto-detects the verify command from the project's manifests (`package.json` → `npm test`, `Cargo.toml` → `cargo test`, etc.) and only asks for the one bit the audit can't infer: **which task to run the agent on**.
+
+Concrete invocations by finding kind:
+
+- **Prompt-debt deletion** (a `HIT` from `header-audit harness` — cargo-cult lines in `CLAUDE.md`/`AGENTS.md`):
+  ```bash
+  header-experiment new "<ledger-key>-$(date +%Y%m%d-%H%M%S)" \
+    --kind prompt-debt-deletion \
+    --file <relative-path-from-HIT> \
+    --lines <line1,line2,...> \
+    --description "<short title>" \
+    --ledger-key <key> \
+    --task <task-prompt-or-path> \
+    --verify <verify-cmd>
+  ```
+  Arm A = current state. Arm B = the file with those lines stripped (the wizard does the sed for you and writes `arms/B/<file>`).
+- **Model swap** (audit/briefing-derived: "consider routing this task class to a cheaper model"):
+  ```bash
+  header-experiment new "<ledger-key>-$(date +%Y%m%d-%H%M%S)" \
+    --kind model-swap \
+    --from <current-model> \
+    --to <proposed-model> \
+    --description "<short title>" \
+    --ledger-key <key> \
+    --task <task-prompt-or-path> \
+    --verify <verify-cmd>
+  ```
+- **Other** (major dep upgrade, behavioral rewrite — anything where you need to construct arm B's overrides by hand): fall back to the generic flow:
+  ```bash
+  header-experiment new "<id>" \
+    --arm A:<current-model> --arm B:<proposed-model>:arms/B \
+    --task <path-or-inline> --verify <cmd>
+  ```
+  Then prepare `~/.header/experiments/<id>/arms/B/` with the override files (copied into the worktree before the agent runs).
+
+`--task` accepts either a path (resolved relative to the repo first, then the experiment dir) or a one-line inline prompt (written to `<exp_dir>/tasks/t1.md`). If you have a real prior task transcript or a recent feature spec in the repo, use that — it's a more realistic measurement than a synthetic prompt.
+
+After the scaffold prints, walk the user through the four-step loop:
 
 ```bash
-header-experiment define my-exp                      # scaffold ~/.header/experiments/my-exp/spec
-# edit the spec: set arms (model + optional overrides_dir), tasks (prompt + verify), replicates
-header-experiment validate my-exp                    # lint
-header-experiment run my-exp --aa                    # noise-floor check FIRST (§3) — must be clean
-header-experiment run my-exp                         # the A/B
-header-experiment analyze my-exp && header-experiment report my-exp
+header-experiment validate <id>                      # lint
+header-experiment run <id> --aa                      # noise-floor check FIRST (§3) — must be clean
+header-experiment run <id>                           # the A/B
+header-experiment analyze <id> && header-experiment report <id>
 ```
 
-Surface the four points in the verdict so the user reads it correctly:
+Surface these four points when interpreting the report:
 - The CI on **B − A cost** (per-task paired bootstrap, 95%) is the effect — the diff itself is meaningless without it.
 - **Decision rule** (§6.5): merge B iff the cost CI's upper bound is below 0 AND success-rate diff's lower CI bound is ≥ −δ. Anything else is **"no proven win"**, not "B wins."
 - **Conservative savings rate** (= `max(0, -upper_CI(diff_cost))`) is the figure that survives an audit — never quote the optimistic tail.
 - A **noisy A/A** (CI excludes 0) means the harness is biased — *fix the harness before trusting any A/B*. This is the most common silent failure mode.
 
-Out of scope for the MVP: the agent does not auto-define experiments from audit findings, and does not auto-apply the winning arm's diff to the repo — both are explicit user actions for now. If the user expresses interest in an experiment the MVP can't run, log it: `<LEDGER> record wanted "<key>"`.
+The runner spends real tokens — the cost gate confirms before launching. Don't auto-`--yes` for the user.
+
+Out of scope for the MVP: auto-applying the winning arm's diff to the repo (this is a future `merge` subcommand; for now, when a user wins an experiment, show them the `arms/B/` diff and let them apply it manually).
 
 ## Browse public topics
 

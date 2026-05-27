@@ -289,4 +289,208 @@ EXP run exp-1 --yes --adapter "$sb/fail-adapter.sh" --k 1 >/dev/null 2>&1
 assert_contains "$(cat "$(exp_dir_for exp-1)/runs.jsonl")" '"success":false' \
   "verify exit != 0 → success=false in runs.jsonl"
 
+# ── new (audit-aware wizard / one-shot) ──────────────────────
+# Pre-build a small git repo so --kind prompt-debt-deletion has a real file
+# to strip lines from, and --repo can resolve.
+nw_repo="$sb/nw-repo"
+mkdir -p "$nw_repo" && (cd "$nw_repo" && git init -q && \
+  git config user.email t@t && git config user.name t)
+cat > "$nw_repo/CLAUDE.md" <<'EOF'
+# Project rules
+You are an expert engineer.
+Always think step by step.
+Take a deep breath.
+Don't hallucinate.
+Be helpful.
+EOF
+echo '{"name":"x"}' > "$nw_repo/package.json"
+(cd "$nw_repo" && git add . && git commit -qm init)
+
+# 1) generic mode (--arm/--task/--verify) writes a complete, valid spec
+EXP new gen-1 --arm "A:claude-opus-4-7" --arm "B:claude-sonnet-4-6" \
+  --task "Refactor a function — keep tests green." \
+  --verify "true" --replicates 2 --description "model swap (generic)" \
+  --repo "$nw_repo" >/dev/null
+assert_eq "yes" "$([ -f "$(exp_dir_for gen-1)/spec" ] && echo yes || echo no)" \
+  "new (generic) wrote a spec"
+spec_gen="$(cat "$(exp_dir_for gen-1)/spec")"
+assert_contains "$spec_gen" "model: claude-opus-4-7"   "generic spec: arm A model"
+assert_contains "$spec_gen" "model: claude-sonnet-4-6" "generic spec: arm B model"
+assert_contains "$spec_gen" "description: model swap (generic)" "generic spec: description"
+assert_contains "$spec_gen" "repo: $nw_repo"           "generic spec: repo absolute"
+# Inline task → file written under exp_dir/tasks/
+assert_eq "yes" "$([ -f "$(exp_dir_for gen-1)/tasks/t1.md" ] && echo yes || echo no)" \
+  "inline task is written to <exp_dir>/tasks/t1.md"
+# validate is implicit: `new` calls it; if validate fails the command errors
+EXP new gen-1 --arm A: --arm B: --task t --verify true --repo "$nw_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "new refuses duplicate id (no clobber)"
+
+# 2) --kind prompt-debt-deletion auto-generates arm B's overrides_dir
+EXP new debt-1 --kind prompt-debt-deletion \
+  --file CLAUDE.md --lines "3,4,5" \
+  --task "Tiny task — exit cleanly." --verify "true" \
+  --replicates 2 --ledger-key delete-cargo-cult \
+  --repo "$nw_repo" >/dev/null
+assert_eq "yes" "$([ -f "$(exp_dir_for debt-1)/spec" ] && echo yes || echo no)" \
+  "new --kind prompt-debt-deletion wrote a spec"
+spec_debt="$(cat "$(exp_dir_for debt-1)/spec")"
+# ledger_key must be in the TOP block (before [section]s) so spec_get_scalar finds it
+assert_contains "$spec_debt" "ledger_key: delete-cargo-cult" "ledger_key written into spec"
+ledger_line="$(awk '/ledger_key/{print NR;exit}' "$(exp_dir_for debt-1)/spec")"
+first_section_line="$(awk '/^\[/{print NR;exit}' "$(exp_dir_for debt-1)/spec")"
+[ "${ledger_line:-9999}" -lt "${first_section_line:-9999}" ] && lk_in_top=yes || lk_in_top=no
+assert_eq "yes" "$lk_in_top" "ledger_key is in the top-level block (above first [section])"
+assert_contains "$spec_debt" "overrides_dir: arms/B" "arm B has overrides_dir = arms/B"
+# Arm B's CLAUDE.md exists and has lines 3,4,5 removed
+arm_b_file="$(exp_dir_for debt-1)/arms/B/CLAUDE.md"
+assert_eq "yes" "$([ -f "$arm_b_file" ] && echo yes || echo no)" \
+  "arm B's CLAUDE.md materialized under arms/B/"
+arm_b_lines="$(wc -l < "$arm_b_file" | tr -d ' ')"
+assert_eq "3" "$arm_b_lines" "arm B's CLAUDE.md has 3 lines (original 6 − 3 stripped)"
+assert_not_contains "$(cat "$arm_b_file")" "think step by step" "stripped line 3 (cargo-cult)"
+assert_not_contains "$(cat "$arm_b_file")" "deep breath"         "stripped line 4 (cargo-cult)"
+assert_not_contains "$(cat "$arm_b_file")" "hallucinate"         "stripped line 5 (cargo-cult)"
+# Bad --lines (non-integer) → refused
+EXP new debt-bad --kind prompt-debt-deletion --file CLAUDE.md --lines "abc" \
+  --task t --verify true --repo "$nw_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "new --kind prompt-debt-deletion rejects non-integer --lines"
+# Missing file (audit pointed at nonsense) → refused
+EXP new debt-nofile --kind prompt-debt-deletion --file does-not-exist.md --lines "1" \
+  --task t --verify true --repo "$nw_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "new --kind prompt-debt-deletion rejects missing --file"
+
+# 3) --kind model-swap → two arms differ only in model
+EXP new swap-1 --kind model-swap --from claude-opus-4-7 --to claude-sonnet-4-6 \
+  --task "Tiny." --verify "true" --replicates 2 --repo "$nw_repo" >/dev/null
+spec_swap="$(cat "$(exp_dir_for swap-1)/spec")"
+assert_contains "$spec_swap" "model: claude-opus-4-7"   "swap spec: arm A model"
+assert_contains "$spec_swap" "model: claude-sonnet-4-6" "swap spec: arm B model"
+# Neither arm has overrides_dir (it's a model swap, not a file change)
+assert_not_contains "$spec_swap" "overrides_dir: arms" "swap spec: no overrides_dir for either arm"
+
+# 4) Unknown --kind → refused
+EXP new bad-kind --kind not-a-kind --repo "$nw_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "new rejects unknown --kind"
+
+# 5) Task passed as a real repo-relative file path → stored as relative
+mkdir -p "$nw_repo/tasks"
+echo "Real prompt." > "$nw_repo/tasks/real.md"
+EXP new path-1 --arm A: --arm B: --task "tasks/real.md" --verify true \
+  --replicates 1 --repo "$nw_repo" >/dev/null
+spec_path="$(cat "$(exp_dir_for path-1)/spec")"
+assert_contains "$spec_path" "prompt: tasks/real.md" \
+  "repo-relative task path is stored as relative (not absolute)"
+EXP validate path-1 >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "validate finds the repo-relative task file"
+# A path-resolution sanity check: a task path that doesn't exist anywhere is
+# treated as inline (file written under exp_dir/tasks/). NOT a fatal error.
+EXP new path-inline --arm A: --arm B: --task "Just refactor X." --verify true \
+  --replicates 1 --repo "$nw_repo" >/dev/null
+assert_eq "yes" "$([ -f "$(exp_dir_for path-inline)/tasks/t1.md" ] && echo yes || echo no)" \
+  "non-path --task value is written to <exp_dir>/tasks/t1.md as an inline prompt"
+
+# ── merge ─────────────────────────────────────────────────────
+# Synthesize a B-wins runs.jsonl for the prompt-debt experiment, analyze, merge.
+synth_runs() {
+  # 5 tasks × 2 replicates × 2 arms, B reliably cheaper
+  local exp="$1"
+  local out; out="$(exp_dir_for "$exp")/runs.jsonl"
+  : > "$out"
+  local tid c_a c_b r
+  for tid in t1 t2 t3 t4 t5; do
+    case "$tid" in
+      t1) c_a=0.20; c_b=0.12 ;;
+      t2) c_a=0.30; c_b=0.18 ;;
+      t3) c_a=0.40; c_b=0.24 ;;
+      t4) c_a=0.50; c_b=0.30 ;;
+      t5) c_a=0.60; c_b=0.36 ;;
+    esac
+    for r in 0 1; do
+      printf '{"task":"%s","arm":"A","rep":%d,"cost_usd":%s,"success":true}\n' "$tid" "$r" "$c_a" >> "$out"
+      printf '{"task":"%s","arm":"B","rep":%d,"cost_usd":%s,"success":true}\n' "$tid" "$r" "$c_b" >> "$out"
+    done
+  done
+}
+
+# Re-create CLAUDE.md (an earlier test may have shifted the repo state)
+cat > "$nw_repo/CLAUDE.md" <<'EOF'
+# Project rules
+You are an expert engineer.
+Always think step by step.
+Take a deep breath.
+Don't hallucinate.
+Be helpful.
+EOF
+
+synth_runs debt-1
+EXP analyze debt-1 --seed 7 >/dev/null
+# B-wins applies; CLAUDE.md in the repo gets the lines stripped
+EXP merge debt-1 --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "merge on B-wins exits 0"
+assert_not_contains "$(cat "$nw_repo/CLAUDE.md")" "think step by step" \
+  "merge stripped the cargo-cult line from the repo's CLAUDE.md"
+assert_not_contains "$(cat "$nw_repo/CLAUDE.md")" "deep breath" \
+  "merge stripped 'deep breath' from the repo's CLAUDE.md"
+assert_contains "$(cat "$nw_repo/CLAUDE.md")" "You are an expert engineer." \
+  "merge preserved the lines that weren't in the deletion list"
+
+# Header-Audit-Finding trailer suggestion appears (provenance for the commit)
+merge_out="$(EXP merge debt-1 --yes 2>&1)"
+assert_contains "$merge_out" "Header-Audit-Finding: delete-cargo-cult" \
+  "merge prints the Header-Audit-Finding trailer suggestion when ledger_key is set"
+assert_contains "$merge_out" "header-ledger record applied" \
+  "merge prints the ledger record command"
+
+# No-proven-win → refuses (without --force)
+synth_flat_runs() {
+  local out; out="$(exp_dir_for "$1")/runs.jsonl"
+  : > "$out"
+  local tid r
+  for tid in t1 t2 t3 t4 t5; do for r in 0 1; do
+    printf '{"task":"%s","arm":"A","rep":%d,"cost_usd":0.50,"success":true}\n' "$tid" "$r" >> "$out"
+    printf '{"task":"%s","arm":"B","rep":%d,"cost_usd":0.51,"success":true}\n' "$tid" "$r" >> "$out"
+  done; done
+}
+EXP new flat-1 --kind prompt-debt-deletion --file CLAUDE.md --lines "6" \
+  --task "tiny" --verify true --replicates 2 --repo "$nw_repo" >/dev/null
+synth_flat_runs flat-1
+EXP analyze flat-1 --seed 7 >/dev/null
+EXP merge flat-1 --yes >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "merge refuses when verdict is not 'B wins'"
+refuse_out="$(EXP merge flat-1 --yes 2>&1)"
+assert_contains "$refuse_out" "refusing to merge" "merge refusal mentions 'refusing to merge'"
+# --force overrides the refusal
+EXP merge flat-1 --yes --force >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "merge --force overrides the verdict refusal"
+
+# A/A result → refuses (model-swap or otherwise; the spec is the same)
+EXP new aa-m --arm A: --arm B: --task "tiny" --verify true \
+  --replicates 1 --repo "$nw_repo" >/dev/null
+mkdir -p "$(exp_dir_for aa-m)"
+cat > "$(exp_dir_for aa-m)/result.json" << 'EOF'
+{ "mode": "aa", "arms": ["A","A_2"], "verdict": "A/A OK — harness clean" }
+EOF
+EXP merge aa-m --yes >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "merge refuses an A/A result (nothing to merge)"
+
+# Missing result.json → error
+EXP new noresult --arm A: --arm B: --task t --verify true \
+  --replicates 1 --repo "$nw_repo" >/dev/null
+EXP merge noresult --yes >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "merge errors when result.json is missing"
+
+# Model-swap merge: no files to copy, prints model-update note + ledger hint
+EXP new swap-merge --kind model-swap --from claude-opus-4-7 --to claude-sonnet-4-6 \
+  --task "tiny" --verify true --replicates 2 \
+  --ledger-key route-boilerplate --repo "$nw_repo" >/dev/null
+synth_runs swap-merge
+EXP analyze swap-merge --seed 7 >/dev/null
+swap_merge_out="$(EXP merge swap-merge --yes 2>&1)"
+assert_contains "$swap_merge_out" "model swap, not a code change" \
+  "merge on a model-swap spec explains there are no files to copy"
+assert_contains "$swap_merge_out" "Update your default to 'claude-sonnet-4-6'" \
+  "merge on a model-swap surfaces the target model"
+assert_contains "$swap_merge_out" "header-ledger record applied \"route-boilerplate\"" \
+  "merge on a model-swap still suggests the ledger record"
+
 t_done

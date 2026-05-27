@@ -3,6 +3,71 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.11.1 — `header-experiment`: audit-aware `new`, one-step `merge`
+
+Closes the audit → experiment → applied-change loop in code, not just in
+SKILL.md prose. The `[Experiment]` finding the audit surfaces becomes a
+runnable spec with one command, and the winning arm gets applied with one more.
+
+**`header-experiment new <id>`** — the recommended scaffolder. Three flavors,
+all producing a complete, runnable spec in one call (no editor needed for the
+common case):
+
+- `--kind prompt-debt-deletion --file F --lines L1,L2,...` — the §8 wedge.
+  Arm A = current state; arm B = F with those lines stripped (the wizard runs
+  the `sed` and writes the override into `arms/B/F`). Wire it directly to a
+  `HIT` from `header-audit harness` — the audit already prints the file and
+  line numbers.
+- `--kind model-swap --from M --to N` — two arms differing only in model.
+- Generic `--arm A:model[:overrides_dir] --task PATH-OR-INLINE --verify CMD` —
+  caller specifies arms directly; useful for dep upgrades / behavioural
+  rewrites where arm B's overrides need to be hand-prepared.
+
+Path resolution flipped: `--task` and the spec's `prompt:` paths now resolve
+**relative to the repo** first (where users naturally put `tasks/*.md`),
+falling back to the experiment dir for files the wizard generated. Was
+experiment-dir-only before — that wasn't useful.
+
+Inline prompts: `--task "Refactor the auth module..."` writes the text to
+`<exp_dir>/tasks/t1.md` automatically. No more "create a .md file first."
+
+Auto-detected verify: omitting `--verify` picks `npm test` / `cargo test` /
+`pytest -q` / `go test ./...` / `bundle exec rake test` based on which
+manifest the repo has. Interactive sessions show it as the default.
+
+`--ledger-key` carries the audit-finding key into the spec's top block — so
+`merge` can suggest the right `Header-Audit-Finding:` commit trailer when the
+experiment came from an audit finding.
+
+**`header-experiment merge <id>`** — applies arm B's override files into the
+repo after a B-wins verdict. Refuses other verdicts unless `--force`. Shows a
+unified diff per file and asks for confirmation (`--yes` skips). For
+model-swap experiments (no override files) it prints a "update your default
+model to <B's model>" note + the ledger hint, but doesn't pretend to mutate
+your runtime model selection (that lives outside the skill). Does NOT
+auto-commit; prints a suggested `git commit` invocation with the
+`Header-Audit-Finding: <ledger-key>` trailer (the same trailer pattern 0.10.1
+introduced for audit-driven applies).
+
+**SKILL.md**: the audit → experiment handoff is now concrete instructions,
+not just a pointer. When the user picks an `[Experiment]` finding, the agent
+constructs the appropriate `header-experiment new --kind ...` invocation from
+the finding's payload (file/lines for prompt-debt; from/to model for swap);
+the wizard fills in the rest from project manifests.
+
+**Caveats / honest scope notes** (carried into the design doc):
+- The "<5 paired tasks → verdict = underpowered" cutoff is a *heuristic*, not
+  a power analysis. Real σ-based power sizing comes once A/A surfaces σ.
+- Cost is read from claude's `total_cost_usd`/`cost_usd`. If those fields are
+  absent in a future Claude Code release, cost falls to 0 silently — should
+  add a `tokens × header-cost` fallback (latent bug, not current).
+- Tier-1 oracle only (exit-code verifier). LLM judges deferred.
+
+Tests: +39 assertions for `new` (all three modes, ledger_key placement,
+arm B materialization, bad inputs) and `merge` (B-wins, no-win refusal,
+--force, A/A refusal, model-swap path, trailer suggestion). Total 100 in the
+experiment suite; all 11 suites green (354 assertions).
+
 ## 0.11.0 — `header-experiment` MVP (beta): local A/B + A/A for harness changes
 
 The first runnable slice of the optimization-by-experimentation loop. **Beta —

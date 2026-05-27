@@ -159,12 +159,136 @@ spec_section_get() {
 }
 
 # resolve_path <base_dir> <maybe_relative_path>  → absolute path. Empty in → empty out.
+# Used for paths that are unambiguously rooted at base_dir (overrides_dir).
 resolve_path() {
   case "${2:-}" in
     ''|-) printf '' ;;
     /*)   printf '%s' "$2" ;;
     *)    printf '%s/%s' "$1" "$2" ;;
   esac
+}
+
+# resolve_task_path <repo> <exp_dir> <maybe_relative_path>  → absolute path.
+# Task prompts naturally live in the user's repo (committed), so relative paths
+# resolve against the repo first. Falls back to the experiment dir for files the
+# wizard generated (inline prompts written to <exp_dir>/tasks/).
+resolve_task_path() {
+  local repo="$1" exp_dir="$2" p="${3:-}"
+  case "$p" in
+    '')   printf '' ;;
+    /*)   printf '%s' "$p" ;;
+    *)
+      if [ -f "$repo/$p" ];     then printf '%s' "$repo/$p"
+      elif [ -f "$exp_dir/$p" ]; then printf '%s' "$exp_dir/$p"
+      else                            printf '%s' "$repo/$p"
+      fi ;;
+  esac
+}
+
+# auto_detect_verify <repo_dir>  → best-guess verify command for the project.
+# Order: package.json → Cargo.toml → pyproject.toml/requirements.txt → go.mod →
+# Gemfile → fallback "true" (no-op; user should override). Stops at the first
+# manifest match. We don't run anything — just match the manifest.
+auto_detect_verify() {
+  local repo="$1"
+  [ -f "$repo/package.json" ]    && echo "npm test"        && return 0
+  [ -f "$repo/Cargo.toml" ]      && echo "cargo test"      && return 0
+  [ -f "$repo/pyproject.toml" ]  && echo "pytest -q"       && return 0
+  [ -f "$repo/requirements.txt" ]&& echo "pytest -q"       && return 0
+  [ -f "$repo/go.mod" ]          && echo "go test ./..."   && return 0
+  [ -f "$repo/Gemfile" ]         && echo "bundle exec rake test" && return 0
+  echo "true"
+}
+
+# prompt_user <message> [<default>]  → read one line interactively, echo answer.
+# `[ -t 0 ]` is the right check: it returns true iff stdin is a real terminal.
+# In tests / piped invocations stdin is NOT a tty, so we silently return the
+# default — callers must pass all required fields as flags in that case. (We
+# don't try /dev/tty: `-r /dev/tty` returns true but reading errors with ENXIO
+# when there's no controlling terminal, and bash's redirect error message
+# can't be suppressed by the read command's 2>/dev/null.)
+prompt_user() {
+  local msg="$1" def="${2:-}" ans=""
+  if [ -t 0 ]; then
+    if [ -n "$def" ]; then
+      printf '%s [%s]: ' "$msg" "$def" >&2
+    else
+      printf '%s: ' "$msg" >&2
+    fi
+    IFS= read -r ans
+    printf '%s' "${ans:-$def}"
+  else
+    printf '%s' "$def"
+  fi
+}
+
+# write_inline_task <exp_dir> <task_id> <text> → writes text to a .md file under
+# <exp_dir>/tasks/, prints the absolute path. Used by `new` when the user types
+# a one-liner instead of pointing at a file.
+write_inline_task() {
+  local d="$1" tid="$2" txt="$3"
+  mkdir -p "$d/tasks"
+  printf '%s\n' "$txt" > "$d/tasks/$tid.md"
+  printf '%s/tasks/%s.md' "$d" "$tid"
+}
+
+# gen_prompt_debt_arm_b <repo> <exp_dir> <file_rel> <lines>  → writes a copy of
+# <file_rel> into <exp_dir>/arms/B/<file_rel> with the listed line numbers
+# removed (sed). `lines` is a comma-separated list ("12,13,14"). Used by
+# `new --kind prompt-debt-deletion` to materialise arm B's override file from
+# audit findings.
+gen_prompt_debt_arm_b() {
+  local repo="$1" exp_dir="$2" file_rel="$3" lines="$4"
+  local src="$repo/$file_rel" arm_dir="$exp_dir/arms/B"
+  [ -f "$src" ] || { err "file not found in repo: $file_rel ($src)"; return 1; }
+  case "$lines" in *[!0-9,]*) err "lines must be comma-separated integers (got '$lines')"; return 1 ;; esac
+  local sub_dir; sub_dir="$(dirname "$file_rel")"
+  mkdir -p "$arm_dir/$sub_dir" 2>/dev/null || true
+  local sed_expr="" ln
+  local IFS=','
+  for ln in $lines; do sed_expr="${sed_expr}${ln}d;"; done
+  sed "$sed_expr" "$src" > "$arm_dir/$file_rel"
+}
+
+# write_spec — emit a complete `spec` file given parsed arguments. Used by both
+# `define` (template) and `new` (one-shot / wizard-driven). Args:
+#   $1 spec path  $2 id  $3 description  $4 repo  $5 replicates  $6 margin
+#   $7 arms (one per line: "label|model|overrides_dir")
+#   $8 tasks (one per line: "id|prompt|verify|timeout_s")
+#   $9 (optional) ledger_key — provenance from an audit finding
+# Field separator is "|" (a non-whitespace IFS so empty fields don't collapse —
+# tab DOES collapse because it's whitespace IFS, that's the bash gotcha).
+write_spec() {
+  local out="$1" id="$2" desc="$3" repo="$4" reps="$5" margin="$6"
+  local arms_blob="$7" tasks_blob="$8" ledger_key="${9:-}"
+  {
+    printf '# header-experiment spec — see ~/.header/experiments/%s/\n' "$id"
+    printf '# Flat "key: value" lines. Sections: [arm:LABEL] and [task:ID].\n'
+    printf '# Edit freely; `header-experiment validate %s` checks it.\n\n' "$id"
+    printf 'id: %s\n' "$id"
+    printf 'description: %s\n' "${desc:-(set me)}"
+    printf 'repo: %s\n' "${repo:-.}"
+    printf 'commit: HEAD\n'
+    printf 'replicates: %s\n' "${reps:-3}"
+    printf 'non_inferiority_margin: %s\n' "${margin:-0.02}"
+    [ -n "$ledger_key" ] && printf 'ledger_key: %s\n' "$ledger_key"
+    printf '\n'
+    local label model ovd
+    printf '%s\n' "$arms_blob" | while IFS='|' read -r label model ovd; do
+      [ -n "$label" ] || continue
+      printf '[arm:%s]\n' "$label"
+      printf 'model: %s\n' "$model"
+      printf 'overrides_dir: %s\n\n' "$ovd"
+    done
+    local tid prompt verify timeout
+    printf '%s\n' "$tasks_blob" | while IFS='|' read -r tid prompt verify timeout; do
+      [ -n "$tid" ] || continue
+      printf '[task:%s]\n' "$tid"
+      printf 'prompt: %s\n' "$prompt"
+      printf 'verify: %s\n' "$verify"
+      printf 'timeout_s: %s\n\n' "${timeout:-600}"
+    done
+  } > "$out"
 }
 
 # ── DEFINE ────────────────────────────────────────────────────
@@ -241,6 +365,210 @@ cmd_define() {
   echo "    header-experiment analyze $id && header-experiment report $id"
 }
 
+# ── NEW (audit-aware wizard / one-shot scaffolder) ────────────
+# The friendly front door. Three flavors, all writing a complete, runnable spec
+# in one call (no editor needed for the common case):
+#
+#   header-experiment new <id> --kind prompt-debt-deletion \
+#       --file CLAUDE.md --lines 12,13,14 \
+#       --task <repo-relative-path-or-inline> --verify "npm test"
+#       — auto-generates arm B's overrides_dir by sed-deleting those lines
+#       from <file>. This is the §8 wedge (deletion-as-the-cleanest-A/B).
+#
+#   header-experiment new <id> --kind model-swap \
+#       --from claude-opus-4-7 --to claude-sonnet-4-6 \
+#       --task ./tasks/refactor.md --verify "npm test"
+#       — two arms differing only in model.
+#
+#   header-experiment new <id> \
+#       --arm A:claude-opus-4-7 --arm B:claude-sonnet-4-6 \
+#       --task ./refactor.md --verify "npm test"
+#       — generic: caller specifies arms directly. Same as --kind model-swap
+#       when the only difference is model, but lets you mix overrides too:
+#       --arm B:claude-sonnet-4-6:arms/B  (label:model:overrides_dir).
+#
+#   header-experiment new <id>
+#       — interactive wizard. Asks for description, two arms, a task (inline
+#       OR file path in the repo), verify (auto-detected from manifests), and
+#       replicates. Writes a complete spec.
+#
+# Any missing required field, when a TTY is available, is asked interactively;
+# without a TTY, missing fields fail with an explicit error. Always prints the
+# next-step commands (--aa first, then A/B) when the spec is written.
+cmd_new() {
+  local id="" kind="" file_arg="" lines="" from="" to=""
+  local task_arg="" verify_arg="" replicates="" margin="" desc="" ledger_key=""
+  local repo_arg=""
+  local arms_in=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kind)        kind="${2:-}"; shift 2 ;;
+      --file)        file_arg="${2:-}"; shift 2 ;;
+      --lines)       lines="${2:-}"; shift 2 ;;
+      --from)        from="${2:-}"; shift 2 ;;
+      --to)          to="${2:-}"; shift 2 ;;
+      --arm)         arms_in+=("${2:-}"); shift 2 ;;
+      --task)        task_arg="${2:-}"; shift 2 ;;
+      --verify)      verify_arg="${2:-}"; shift 2 ;;
+      --replicates)  replicates="${2:-}"; shift 2 ;;
+      --margin)      margin="${2:-}"; shift 2 ;;
+      --description) desc="${2:-}"; shift 2 ;;
+      --ledger-key)  ledger_key="${2:-}"; shift 2 ;;
+      --repo)        repo_arg="${2:-}"; shift 2 ;;
+      -h|--help)
+        cat <<USAGE
+Usage: header-experiment new <id> [options]
+
+Modes:
+  --kind prompt-debt-deletion --file PATH --lines L1,L2,...
+                              auto-generate arm B by deleting those lines from FILE
+                              (path relative to repo). Use audit HIT lines directly.
+  --kind model-swap --from MODEL --to MODEL
+                              two-arm spec differing only in model
+  --arm LABEL[:MODEL[:OVERRIDES_DIR]] (repeatable)
+                              generic; caller specifies arms directly
+
+Shared:
+  --task PATH-OR-INLINE       prompt file (relative to repo) OR a one-line
+                              prompt (written to <exp_dir>/tasks/<id>.md)
+  --verify CMD                shell cmd (exit 0 = success); auto-detected
+                              from manifests if omitted
+  --replicates N              default 3
+  --margin F                  non-inferiority margin δ for success (default 0.02)
+  --description T             human description
+  --ledger-key K              record audit-finding provenance in the spec
+  --repo DIR                  repo root (default: current dir)
+
+Any missing field is prompted interactively when stdin is a TTY.
+USAGE
+        return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  case "$id" in *[!a-zA-Z0-9_.-]*) err "id must be [a-zA-Z0-9_.-]+ (got '$id')"; return 1 ;; esac
+
+  local dir; dir="$(exp_dir "$id")"
+  [ -e "$dir" ] && { err "experiment '$id' already exists ($dir)"; return 1; }
+
+  # Determine repo. CLI arg > prompt > git toplevel > $PWD.
+  local repo="${repo_arg:-}"
+  if [ -z "$repo" ]; then
+    repo="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  fi
+  case "$repo" in /*) ;; *) repo="$(cd "$repo" && pwd)" ;; esac
+  [ -d "$repo" ] || { err "repo dir does not exist: $repo"; return 1; }
+
+  # We need to create the dir *before* materialising arm B's files for
+  # prompt-debt-deletion or writing inline tasks. Hold off until after we've
+  # validated --kind args though, so a bad CLI doesn't leave junk behind.
+  if [ -n "$kind" ]; then
+    case "$kind" in
+      prompt-debt-deletion)
+        [ -n "$file_arg" ] || file_arg="$(prompt_user "File to edit (path relative to repo, e.g. CLAUDE.md)" "CLAUDE.md")"
+        [ -n "$lines" ] || lines="$(prompt_user "Lines to delete (comma-separated, e.g. 12,13,14)" "")"
+        [ -n "$lines" ] || { err "--lines is required for prompt-debt-deletion"; return 1; }
+        [ -f "$repo/$file_arg" ] || { err "file not found in repo: $file_arg (repo=$repo)"; return 1; }
+        ;;
+      model-swap)
+        [ -n "$from" ] || from="$(prompt_user "Current model (arm A)" "claude-opus-4-7")"
+        [ -n "$to" ]   || to="$(prompt_user   "Proposed model (arm B)" "claude-sonnet-4-6")"
+        [ -n "$from" ] && [ -n "$to" ] || { err "--from and --to are required for model-swap"; return 1; }
+        ;;
+      *) err "unknown --kind '$kind' (want: prompt-debt-deletion | model-swap)"; return 1 ;;
+    esac
+  fi
+
+  # Ask for the task + verify if not provided AND a TTY is around.
+  if [ -z "$task_arg" ]; then
+    task_arg="$(prompt_user "Task — file path (relative to repo) OR a one-line inline prompt" "")"
+    [ -n "$task_arg" ] || { err "a task is required (use --task PATH-OR-INLINE)"; return 1; }
+  fi
+  if [ -z "$verify_arg" ]; then
+    local guess; guess="$(auto_detect_verify "$repo")"
+    verify_arg="$(prompt_user "Verify command (shell; exit 0 = success)" "$guess")"
+    [ -n "$verify_arg" ] || verify_arg="$guess"
+  fi
+  [ -n "$replicates" ] || replicates="$(prompt_user "Replicates per (task, arm)" "3")"
+  [ -n "$margin" ]     || margin="${margin:-0.02}"
+  [ -n "$desc" ]       || desc="$(prompt_user "Short description" "")"
+
+  # In generic mode (no --kind), arms must be set — ask if not.
+  if [ -z "$kind" ] && [ "${#arms_in[@]}" -eq 0 ]; then
+    local am_a am_b
+    am_a="$(prompt_user "Arm A label[:model]" "A:")"
+    am_b="$(prompt_user "Arm B label[:model]" "B:")"
+    arms_in=("$am_a" "$am_b")
+  fi
+
+  # Time to materialise.
+  mkdir -p "$dir/logs" "$dir/tasks" "$dir/arms"
+
+  # Build arms_blob (label|model|overrides_dir per line; "|" because tab IFS
+  # collapses consecutive empty fields).
+  local arms_blob=""
+  case "$kind" in
+    prompt-debt-deletion)
+      # Arm A = no overrides (control). Arm B = file with lines stripped.
+      gen_prompt_debt_arm_b "$repo" "$dir" "$file_arg" "$lines" || { err "could not generate arm B"; return 1; }
+      arms_blob=$'A||\nB||arms/B'
+      ;;
+    model-swap)
+      arms_blob="$(printf 'A|%s|\nB|%s|' "$from" "$to")"
+      ;;
+    *)
+      local a label model ovd rest
+      for a in "${arms_in[@]}"; do
+        label="${a%%:*}"; rest="${a#*:}"
+        [ "$rest" = "$a" ] && rest=""
+        # parse "model[:overrides_dir]"
+        model="${rest%%:*}"; ovd="${rest#*:}"
+        [ "$ovd" = "$rest" ] && ovd=""
+        arms_blob="${arms_blob}${label}|${model}|${ovd}"$'\n'
+      done
+      ;;
+  esac
+
+  # Resolve the task: if it's an existing file (in repo or absolute), use as-is.
+  # Otherwise treat as inline → write a .md under <exp_dir>/tasks/.
+  local task_path=""
+  local task_id="t1"
+  if [ -f "$task_arg" ]; then
+    task_path="$task_arg"
+  elif [ -f "$repo/$task_arg" ]; then
+    task_path="$task_arg"   # store as relative; resolve_task_path will find it under repo
+  else
+    task_path="$(write_inline_task "$dir" "$task_id" "$task_arg")"
+  fi
+
+  local tasks_blob; tasks_blob="${task_id}|${task_path}|${verify_arg}|600"
+
+  local spec="$dir/spec"
+  write_spec "$spec" "$id" "$desc" "$repo" "$replicates" "${margin:-0.02}" "$arms_blob" "$tasks_blob" "$ledger_key"
+
+  # Sanity-check the result.
+  if ! cmd_validate "$id" >/dev/null 2>&1; then
+    err "spec was written but failed validation — run 'header-experiment validate $id' to see why"
+    return 1
+  fi
+
+  echo "Wrote $spec"
+  echo "  Repo:      $repo"
+  echo "  Task:      $task_path"
+  echo "  Verify:    $verify_arg"
+  case "$kind" in
+    prompt-debt-deletion) echo "  Arms:      A=control, B=$(basename "$file_arg") with lines [$lines] removed (arms/B/$file_arg)" ;;
+    model-swap)           echo "  Arms:      A=$from, B=$to" ;;
+    *)                    echo "  Arms:      $(printf '%s\n' "$arms_blob" | awk -F'|' 'NF>0{print $1"="$2}' | paste -sd ", " -)" ;;
+  esac
+  echo ""
+  echo "  Next:"
+  echo "    header-experiment run $id --aa     # noise-floor / harness check FIRST"
+  echo "    header-experiment run $id          # the A/B"
+  echo "    header-experiment analyze $id && header-experiment report $id"
+}
+
 # ── VALIDATE ──────────────────────────────────────────────────
 cmd_validate() {
   local id="${1:-}"; [ -n "$id" ] || { err "<id> required"; return 1; }
@@ -290,8 +618,8 @@ cmd_validate() {
     verify="$(spec_section_get "$spec" task "$tid" verify)"
     [ -n "$prompt" ] || { err "task $tid: prompt is required"; rc=1; }
     [ -n "$verify" ] || { err "task $tid: verify is required (use 'true' for no-op)"; rc=1; }
-    local prompt_abs; prompt_abs="$(resolve_path "$dir" "$prompt")"
-    [ -f "$prompt_abs" ] || { err "task $tid: prompt file not found: $prompt_abs"; rc=1; }
+    local prompt_abs; prompt_abs="$(resolve_task_path "$repo_abs" "$dir" "$prompt")"
+    [ -f "$prompt_abs" ] || { err "task $tid: prompt file not found: $prompt_abs (checked $repo_abs and $dir)"; rc=1; }
   done
 
   if [ "$rc" -eq 0 ]; then
@@ -522,7 +850,7 @@ cmd_run() {
         verify="$(spec_section_get "$spec" task "$task" verify)"
         timeout_s="$(spec_section_get "$spec" task "$task" timeout_s)"
         [ -n "$timeout_s" ] || timeout_s="600"
-        local prompt_abs; prompt_abs="$(resolve_path "$dir" "$prompt")"
+        local prompt_abs; prompt_abs="$(resolve_task_path "$repo" "$dir" "$prompt")"
         step=$(( step + 1 ))
         printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$step" "$n_runs" "$task" "$arm" "$r" >&2
         run_one "$dir" "$repo" "$commit_resolved" "$task" "$arm" "$r" \
@@ -767,16 +1095,182 @@ cmd_report() {
     }' "$rf"
 }
 
+# ── MERGE ─────────────────────────────────────────────────────
+# Apply the winning arm's override files to the repo. Refuses unless the
+# analysed verdict says B wins (override with --force). Shows the diff first
+# and asks for confirmation unless --yes. Does NOT auto-commit — prints the
+# suggested commit command (with the Header-Audit-Finding trailer when a
+# ledger_key is recorded in the spec) so the user retains the final say.
+#
+# Two cases:
+#   - arms/B/ has files → copy them into the repo (the prompt-debt-deletion
+#     case and any generic experiment with override files)
+#   - arms/B/ is empty (model-swap) → no files to copy; print "the win is the
+#     model — update your default to <B's model>" and stop (the harness
+#     doesn't manage your runtime model selection for you).
+cmd_merge() {
+  local id="" yes=0 force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes|-y)  yes=1; shift ;;
+      --force)   force=1; shift ;;
+      -h|--help) echo "Usage: header-experiment merge <id> [--yes] [--force]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  local dir; dir="$(exp_dir "$id")"
+  local spec="$dir/spec"
+  local rf="$dir/result.json"
+  [ -f "$spec" ] || { err "no spec for $id"; return 1; }
+  [ -f "$rf" ]   || { err "no result.json — run 'analyze $id' first"; return 1; }
+
+  # Pull the verdict + arm labels out of result.json. (Simple greps; the file
+  # is written by us so the shape is stable.)
+  local verdict; verdict="$(sed -n 's/.*"verdict"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$rf" | head -1)"
+  local mode;    mode="$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$rf" | head -1)"
+  [ "$mode" = "aa" ] && { err "this is an A/A result (noise-floor check), nothing to merge"; return 1; }
+
+  case "$verdict" in
+    "B wins"*) ;;
+    *)
+      if [ "$force" -ne 1 ]; then
+        err "verdict is '$verdict' — refusing to merge. Pass --force to override (rare; usually means you should reanalyze with more replicates)."
+        return 1
+      fi
+      ;;
+  esac
+
+  local repo; repo="$(spec_get_scalar "$spec" repo)"
+  case "$repo" in /*) ;; *) repo="$dir/$repo" ;; esac
+  [ -d "$repo" ] || { err "repo not found: $repo"; return 1; }
+
+  # Locate arm B by reading the [arm:*] sections — second declared arm is B.
+  local arms_list; arms_list="$(spec_list_sections "$spec" arm)"
+  local i=0 first_arm="" second_arm=""
+  local L
+  for L in $arms_list; do
+    [ -n "$L" ] || continue
+    i=$(( i + 1 ))
+    [ "$i" -eq 1 ] && first_arm="$L"
+    [ "$i" -eq 2 ] && second_arm="$L"
+  done
+  [ -n "$second_arm" ] || { err "couldn't find arm B in spec"; return 1; }
+
+  local b_overrides b_model
+  b_overrides="$(spec_section_get "$spec" arm "$second_arm" overrides_dir)"
+  b_model="$(spec_section_get "$spec" arm "$second_arm" model)"
+
+  local ledger_key; ledger_key="$(spec_get_scalar "$spec" ledger_key)"
+
+  # Model-swap path: no files to apply; just say what to do.
+  if [ -z "$b_overrides" ]; then
+    local a_model; a_model="$(spec_section_get "$spec" arm "$first_arm" model)"
+    cat <<EOF
+This experiment's win is a model swap, not a code change:
+  Arm A model: ${a_model:-(unset)}
+  Arm B model: ${b_model:-(unset)}
+
+There are no override files to copy. Update your default to '$b_model' wherever your agent reads its model setting (e.g. in CLAUDE.md / agent settings / wrapper script — header-config doesn't manage model selection).
+EOF
+    [ -n "$ledger_key" ] && {
+      echo ""
+      echo "Once you've applied it manually, record the disposition:"
+      echo "  header-ledger record applied \"$ledger_key\" --title \"<short title>\""
+    }
+    return 0
+  fi
+
+  # File-overrides path. Resolve the overrides dir and locate the files inside.
+  local b_dir; b_dir="$(resolve_path "$dir" "$b_overrides")"
+  [ -d "$b_dir" ] || { err "arm B overrides_dir not found: $b_dir"; return 1; }
+
+  # Enumerate every regular file under b_dir, relative to it.
+  local files
+  files="$(cd "$b_dir" && find . -type f 2>/dev/null | sed 's|^\./||')"
+  [ -n "$files" ] || { err "no files under $b_dir to merge"; return 1; }
+
+  echo "Merging arm $second_arm overrides from:"
+  echo "  $b_dir"
+  echo "into:"
+  echo "  $repo"
+  echo ""
+  echo "Files to be replaced:"
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -f "$repo/$f" ]; then
+      echo "  ~ $f (replaces existing file)"
+    else
+      echo "  + $f (new file)"
+    fi
+  done <<< "$files"
+  echo ""
+
+  # Show a diff for each file. Use plain `diff -u` so the user gets unified
+  # diffs they can sanity-check. If the file is new (no prior in repo), show
+  # the whole thing.
+  echo "── DIFF ──────────────────────────────────────────────"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -f "$repo/$f" ]; then
+      diff -u "$repo/$f" "$b_dir/$f" || true
+    else
+      printf -- '--- /dev/null\n+++ %s (new file)\n' "$f"
+      sed 's/^/+/' "$b_dir/$f"
+    fi
+    echo ""
+  done <<< "$files"
+  echo "──────────────────────────────────────────────────────"
+  echo ""
+
+  if [ "$yes" -ne 1 ]; then
+    if [ ! -t 0 ]; then
+      err "no TTY for confirmation — pass --yes to apply non-interactively"
+      return 1
+    fi
+    printf 'Apply these changes to the repo? [y/N] '
+    local ans=""; IFS= read -r ans
+    case "$ans" in [yY]|[yY][eE][sS]) ;; *) echo "Aborted — nothing written." ; return 1 ;; esac
+  fi
+
+  # Apply: cp each file, creating parent dirs if needed.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    local sub; sub="$(dirname "$f")"
+    [ "$sub" != "." ] && mkdir -p "$repo/$sub"
+    cp -a "$b_dir/$f" "$repo/$f"
+  done <<< "$files"
+
+  echo "Applied. Next steps:"
+  echo "  cd $repo"
+  if [ -n "$ledger_key" ]; then
+    cat <<EOF
+  git add <changed files>
+  git commit                              # message body, then a trailer:
+                                          #   Header-Audit-Finding: $ledger_key — https://joinheader.com
+  header-ledger record applied "$ledger_key" --title "<short title>"
+EOF
+  else
+    echo "  git add <changed files> && git commit"
+  fi
+}
+
 # ── dispatch ──────────────────────────────────────────────────
 usage() {
   cat >&2 <<EOF
 Usage: header-experiment <command> ...
 
-  define <id>     scaffold a new experiment (writes ~/.header/experiments/<id>/spec)
+  new <id>        audit-aware scaffolder (RECOMMENDED — interactive or one-shot)
+                    --kind prompt-debt-deletion --file F --lines L1,L2,...
+                    --kind model-swap --from M --to N
+                    or generic: --arm A:model --arm B:model --task P --verify CMD
+  define <id>     low-level placeholder spec (template to edit by hand)
   validate <id>   lint the spec
   run <id>        execute the matrix (--aa for noise-floor check, --yes to skip cost gate)
   analyze <id>    write result.json (paired bootstrap CI, §6 of design)
   report <id>     pretty scorecard
+  merge <id>      apply arm B's override files to the repo (after a B-wins verdict)
 
 BETA — see docs/experiments-design.md.
 EOF
@@ -785,11 +1279,13 @@ EOF
 
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
+  new)      cmd_new      "$@" ;;
   define)   cmd_define   "$@" ;;
   validate) cmd_validate "$@" ;;
   run)      cmd_run      "$@" ;;
   analyze)  cmd_analyze  "$@" ;;
   report)   cmd_report   "$@" ;;
+  merge)    cmd_merge    "$@" ;;
   ""|-h|--help) usage ;;
   *) err "unknown subcommand '$cmd'"; usage ;;
 esac

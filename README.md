@@ -112,20 +112,36 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
 
 `report` ranks spend by model — real token counts × verified prices, with cache writes priced by their real 5-minute/1-hour duration and legacy Opus (3.x/4.0/4.1) priced apart from current Opus. It does **not** guess what switching models would save: a price re-rating of the same tokens is a projection, not a measurement, so `header-cost savings` only points at the experiment loop (`header-experiment`, below) that would actually prove a switch. Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report` always prints which prices it used and how fresh.
 
-### Experiments (beta — MVP, local-only)
+### Experiments (beta — local-only)
+
+The audit feeds the experiment. When the audit surfaces an `[Experiment]` finding (model swap, prompt-debt deletion, dep upgrade), the skill scaffolds a runnable spec with one command — no editor homework:
 
 ```bash
-header-experiment define my-exp
-# edit ~/.header/experiments/my-exp/spec: arms (model + optional overrides), tasks (prompt + verify), replicates
-header-experiment validate my-exp
-header-experiment run my-exp --aa      # noise-floor / harness check FIRST
-header-experiment run my-exp           # the A/B
-header-experiment analyze my-exp && header-experiment report my-exp
+# Prompt-debt deletion (auto-derived from a header-audit HIT — file + line numbers
+# come straight from the audit finding):
+header-experiment new <id> \
+  --kind prompt-debt-deletion \
+  --file CLAUDE.md --lines 12,13,14 \
+  --task "Refactor a function — keep tests green." \
+  --verify "npm test" --ledger-key <key>
+
+# Or a model swap:
+header-experiment new <id> --kind model-swap --from claude-opus-4-7 --to claude-sonnet-4-6 \
+  --task ./tasks/refactor.md
+
+# Then:
+header-experiment validate <id>
+header-experiment run <id> --aa     # noise-floor / harness check FIRST
+header-experiment run <id>          # the A/B
+header-experiment analyze <id> && header-experiment report <id>
+header-experiment merge <id>        # if verdict = "B wins" — applies arm B's overrides
 ```
 
-The first runnable slice of the optimization-by-experimentation loop. Each `(task × arm × replicate)` runs in an isolated `git worktree` at a pinned commit; `--aa` validates the harness has no ordering / cache-warmup / drift confound before you trust any A/B. Stats: paired-by-task **bootstrap 95% CI on per-task cost differences**, with **success rate non-inferiority** (lower CI bound ≥ −δ, default δ = 2%) as the merge gate. Verdict is one of `B wins (cost lower, success non-inferior)` / `A wins` / `no proven win` / `underpowered` / `A/A BIASED` — and the report prints the **conservative savings rate** = `max(0, -upper_CI(diff_cost))` so the number you quote survives an audit.
+Each `(task × arm × replicate)` runs in an isolated `git worktree` at a pinned commit; `--aa` validates the harness has no ordering / cache-warmup / drift confound before you trust any A/B. Stats: paired-by-task **bootstrap 95% CI on per-task cost differences**, with **success rate non-inferiority** (lower CI bound ≥ −δ, default δ = 2%) as the merge gate. Verdict is one of `B wins (cost lower, success non-inferior)` / `A wins` / `no proven win` / `underpowered` / `A/A BIASED` — the report prints the **conservative savings rate** (`max(0, -upper_CI(diff_cost))`) so the number you quote survives an audit. `merge` refuses to apply anything other than a B-wins verdict (`--force` overrides), shows a unified diff before writing, and prints a suggested `git commit` with the `Header-Audit-Finding:` trailer when the experiment came from an audit finding.
 
-Out of scope for the MVP (planned in [ROADMAP](ROADMAP.md)): mining tasks from git history, auto-applying the winning arm's diff, LLM judges, and cross-customer aggregate submission. Local-only by design — nothing leaves the machine.
+`new` auto-detects your verify command from `package.json` / `Cargo.toml` / `pyproject.toml` / `go.mod` / `Gemfile`. Pass `--task` as either a file path (relative to the repo) or a one-line inline prompt (written to `<exp_dir>/tasks/t1.md` automatically). For full control there's a generic flow: `--arm A:model[:overrides_dir] --arm B:model[:overrides_dir]`.
+
+Out of scope for now (planned in [ROADMAP](ROADMAP.md)): mining tasks from git history (so the user doesn't author task prompts at all), σ-based power analysis (the current `<5 paired tasks → underpowered` cutoff is a heuristic), LLM-judge verifiers, and cross-customer aggregate submission of effect sizes. Local-only by design — nothing leaves the machine.
 
 **Billing basis:** the `$` figures are **API (pay-per-token) rates** (the tool says so). On a Claude subscription (Pro $20 / Max $100 / $200 a month) you don't pay these — the `$` is a shadow/API-equivalent number and your real constraint is **usage limits**, so spend reads as cap consumption rather than dollars off a bill.
 

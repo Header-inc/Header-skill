@@ -1,11 +1,41 @@
 # Experiments & Cost Analytics — design spec
 
-Status: draft / for review. **Phase 1 (`bin/header-cost`) shipped** (v0.8.0–0.8.2; now states API-vs-subscription
-cost basis). **Phase 2 MVP (`bin/header-experiment`) shipped as beta** (v0.11.0): `define / validate / run / analyze /
-report` with worktree-isolated runs, paired-by-task bootstrap CIs, an A/A noise-floor mode, and the §6.5
-decision rule. Verifiers & task mining (§11) and the `merge` subcommand (§12) are **specified, not yet built**;
-the runner currently expects user-authored task specs and the local Claude Code headless adapter
-(`claude --print --output-format json`) or a custom adapter via `$HEADER_EXPERIMENT_ADAPTER`.
+Status: draft / for review.
+
+**What's shipped today (v0.11.1) — the audit → experiment → applied-change loop in code:**
+- **Phase 1 — `bin/header-cost`** (v0.8.0+; v0.8.2+ states API-vs-subscription cost basis) — the
+  realized-spend meter that prices §1's "billable savings."
+- **Phase 2 MVP — `bin/header-experiment`** (beta):
+  - `define` / `validate` / `run` (with `--aa`) / `analyze` / `report` (v0.11.0) — worktree-isolated
+    matrix runs, paired-by-task bootstrap CIs (§6.4), the §6.5 cost-superiority + success
+    non-inferiority decision rule, conservative savings rate.
+  - **`new`** (v0.11.1) — audit-aware scaffolder. `--kind prompt-debt-deletion --file F --lines L`
+    auto-generates arm B by stripping the audit's HIT lines (the §8 wedge realized). `--kind model-swap`
+    generates a two-arm model spec. Generic `--arm` flow for the rest. Auto-detects the verify command
+    from project manifests. Inline prompts written to `<exp_dir>/tasks/`.
+  - **`merge`** (v0.11.1) — applies arm B's overrides to the repo after a B-wins verdict (refuses
+    others unless `--force`). Shows the unified diff, asks for confirmation, prints a `git commit`
+    suggestion with the `Header-Audit-Finding: <ledger-key>` trailer.
+
+**What's specified but NOT yet built (in this order):**
+- **`mine` — git-history task mining** (§11) — the next runnable slice. Today the MVP requires the
+  user to author the prompt + name the verify command; with `mine`, FAIL_TO_PASS commits become task
+  specs automatically.
+- **σ-based power analysis** — use A/A's per-metric σ to size N for a chosen MDE. Today's
+  `<5 paired tasks → "underpowered"` cutoff is a hand-picked heuristic, not power-driven (called
+  out in §6.3 as the gap).
+- **LLM-judge verifier** (§11 Tier 3) — for tasks the repo's tests don't cover.
+- **Cross-customer proven-changes library** (§7.3) — consent-gated aggregate submit.
+- **Schedule integration** — wire `header-experiment run` to the briefing schedule.
+
+**Honest knobs in the current implementation** (defaults are sensible but not derived from data):
+- Default bootstrap iterations: 2000 (`--bootstrap` to override).
+- Default non-inferiority margin δ: 0.02 (`--margin`, or per-spec `non_inferiority_margin`).
+- Underpowered threshold: `<5` paired tasks — a heuristic until power analysis replaces it.
+- Cost is read from claude's JSON (`total_cost_usd`, `cost_usd`). No fallback to
+  `tokens × header-cost prices` yet; if those fields ever disappear, cost falls to 0 silently
+  (latent bug, not current).
+- Tier-1 oracle only (shell exit code = success). LLM-judge fallback deferred.
 Aligns with the Header pre-seed thesis: *automated experimentation for AI coding agents.*
 Relates to: `bin/header-audit` (hypothesis generation), `bin/header-ledger`
 (`wanted`/`applied`), `bin/header-telemetry` (`experiment_interest`), the team-config layer
@@ -187,6 +217,11 @@ From the A/A σ and the effect you care about (e.g. ≥5% token reduction), comp
 power, α=0.05. Intuition: `N ∝ (σ/MDE)²`. Token data is high-variance and right-skewed → prefer
 log-transform or non-parametric tests, expect non-trivial N.
 
+**Implementation status (v0.11.1):** `analyze` does **not yet** compute power from σ. It flags
+`verdict = "underpowered"` when `paired tasks < 5` — a hand-picked floor that catches the
+single-task / two-task cases where any CI is nonsense, but is not a substitute for proper σ-driven
+sizing. The proper version is part of step 2 of §10's build order.
+
 ### 6.4 Tests by metric type
 
 | Metric | Paired (preferred) | Unpaired | Report |
@@ -340,13 +375,17 @@ Engineering pragmatism and the thesis happen to agree. Each step is the next sen
 2. **A/A harness + measurement plumbing** — ✅ **shipped as beta in `bin/header-experiment` (v0.11.0)**:
    per-run worktree isolation, usage capture from the Claude Code headless adapter, paired-by-task
    bootstrap CIs, and `run --aa` as the noise-floor / harness-validation mode. What makes
-   "statistically significant" real (and billable). Next: σ estimation surfaced in `analyze`, automatic
-   replication-size suggestion from observed σ + MDE.
-3. **Prompt-debt experiment (MVP) + significance-gated merge-back** — the analyze/report side of the loop
-   is shipped: the §6.5 decision rule (cost CI < 0 AND success non-inferior within δ) prints in every
-   report. The runnable A/B for prompt-debt deletion works today *if* the user authors a task with a
-   verifier; **the gap is `header-experiment merge`** (auto-apply the winning arm's diff to the harness,
-   gated and review-able) — closing on the deck's "merge wins back into the harness configuration."
+   "statistically significant" real (and billable). **Next on this step:** surface σ in `analyze`,
+   compute the automatic replication-size suggestion from observed σ + MDE (replaces the current
+   hand-picked `<5 → underpowered` heuristic).
+3. **Prompt-debt experiment (MVP) + significance-gated merge-back** — ✅ **shipped (v0.11.0 + v0.11.1)**:
+   the §6.5 decision rule prints in every report (cost CI < 0 AND success non-inferior within δ),
+   `bin/header-experiment new --kind prompt-debt-deletion` turns an audit `HIT` (file + line numbers)
+   into a runnable spec in one call, and `bin/header-experiment merge` applies arm B's overrides to the
+   repo after a B-wins verdict (gated, reviewable, refusing other verdicts unless `--force`). The deck's
+   "merge wins back into the harness configuration" loop is closed for the prompt-debt deletion wedge.
+   **What's left on this step:** task mining (§11) so the user doesn't have to author the task prompt
+   themselves.
 4. **Cross-customer proven-changes library** — the moat. Pull this *earlier* than pure eng-sequencing
    suggests, because aggregation is the defensibility vs Cursor/Kiro/model providers. Lead with the two
    learnings the deck names: **model migrations + dependency upgrades.**
@@ -526,9 +565,12 @@ ensemble). New task types add a verifier without touching the runner.
 - `header-cost` → real usage capture + cost basis (API vs subscription).
 - `header-ledger` / `header-telemetry` → record outcomes + consent-gated aggregate submit (the moat).
 
-**Status: MVP shipped as beta (v0.11.0).** The runnable subcommands are `define / validate / run / analyze /
-report` (with `--aa`); `mine` (§11) and `merge` are still spec-only. Build order: this lands as Phase 2 in §10,
-*after* `header-cost` (shipped). The verifier MVP (§11) is the next runnable slice.
+**Status: MVP shipped as beta (v0.11.0–v0.11.1).** Runnable today: `new` (the audit-aware scaffolder — see
+the per-kind invocations in v0.11.1's `--kind prompt-debt-deletion` / `--kind model-swap` / generic flows),
+`define` (low-level placeholder), `validate`, `run` (with `--aa`), `analyze`, `report`, `merge` (applies arm
+B's overrides after a B-wins verdict, refuses others unless `--force`, prints a `git commit` suggestion with
+the `Header-Audit-Finding:` trailer when `ledger_key` is set in the spec). **`mine` is still spec-only** —
+the verifier MVP (§11) is the next runnable slice and unlocks "the user doesn't author task prompts."
 
 ---
 
