@@ -2,20 +2,35 @@
 
 Status: draft / for review.
 
-**What's shipped today (v0.11.1) — the audit → experiment → applied-change loop in code:**
+**What's shipped today (v0.12.0) — the audit → experiment → applied-change loop in code, with
+cost-vs-magnitude gating:**
 - **Phase 1 — `bin/header-cost`** (v0.8.0+; v0.8.2+ states API-vs-subscription cost basis) — the
   realized-spend meter that prices §1's "billable savings."
 - **Phase 2 MVP — `bin/header-experiment`** (beta):
   - `define` / `validate` / `run` (with `--aa`) / `analyze` / `report` (v0.11.0) — worktree-isolated
     matrix runs, paired-by-task bootstrap CIs (§6.4), the §6.5 cost-superiority + success
     non-inferiority decision rule, conservative savings rate.
-  - **`new`** (v0.11.1) — audit-aware scaffolder. `--kind prompt-debt-deletion --file F --lines L`
-    auto-generates arm B by stripping the audit's HIT lines (the §8 wedge realized). `--kind model-swap`
-    generates a two-arm model spec. Generic `--arm` flow for the rest. Auto-detects the verify command
-    from project manifests. Inline prompts written to `<exp_dir>/tasks/`.
+  - **`new`** (v0.11.1, extended v0.12.0) — audit-aware scaffolder.
+    - `--kind prompt-debt-deletion --file F --lines L` auto-generates arm B by stripping the audit's
+      HIT lines (the §8 wedge realized). v0.12.0 adds an up-front **magnitude estimate** (removed
+      bytes / total bytes); when <5%, surfaces both `[Apply with review]` and "cheaper experiment"
+      paths instead of silently scaffolding a wasteful A/B.
+    - `--kind clause-add --file F --after-line N --text "..."` (v0.12.0) — INSERTION experiments
+      for behavior-change cases (mandatory-skill, delegation toggles, fast-mode rules).
+    - `--kind model-swap --from M --to N` generates a two-arm model spec.
+    - Generic `--arm` flow for the rest. Auto-detects verify from project manifests. Inline
+      prompts written to `<exp_dir>/tasks/`.
   - **`merge`** (v0.11.1) — applies arm B's overrides to the repo after a B-wins verdict (refuses
     others unless `--force`). Shows the unified diff, asks for confirmation, prints a `git commit`
     suggestion with the `Header-Audit-Finding: <ledger-key>` trailer.
+  - **Cost gate v0.12.0** — `run`'s confirmation prompt now speaks BOTH billing modes (API \$ +
+    subscription headroom), states the load-bearing rule (*"don't run a \$60 experiment to prove a
+    \$0.10 effect"*), and lists the cheap-experiment levers (Haiku adapter, `--k 1`, narrower verify,
+    shorter tasks).
+- **§6.8 (added v0.12.0)** — *Magnitude vs. experiment cost* promoted from §13 open-question to
+  design constraint. The audit is now a two-stage filter: generate hypotheses, then classify each
+  into `[Apply now]` / `[Apply with review]` / `[Experiment]` by the cost-vs-magnitude ratio. Both
+  levers (magnitude AND experiment-cost) are first-class.
 
 **What's specified but NOT yet built (in this order):**
 - **`mine` — git-history task mining** (§11) — the next runnable slice. Today the MVP requires the
@@ -260,6 +275,52 @@ sequential inference (mSPRT / group-sequential alpha-spending) for honest early 
 | External state (codebase, deps, network) | pinned commit, clean worktree per run, sandboxed tools |
 | Grader noise | prefer deterministic verifiers; if LLM-judge, measure its test–retest reliability, majority of multiple judges |
 | Temperature nondeterminism | replication (K runs) |
+
+### 6.8 Magnitude vs. experiment cost — when NOT to A/B (added v0.12.0)
+
+Promoted from §13 ("Cost of experimenting") to a real design constraint after the
+2026-05-27 audit, when we scaffolded a slim-CLAUDE.md experiment that would have
+cost ≈\$60 of API-equivalent spend to prove ≈\$0.10/session in savings (and on a
+Max subscription, the equivalent waste was rate-limit headroom). The runner did
+its job — the JSON exposed the real numbers — but **the audit had no business
+labelling that finding `[Experiment]` in the first place**. So:
+
+**The audit is a two-stage filter, not just a generator.** Stage 1: generate
+hypotheses from prompt-debt patterns, briefing items, supply-chain posture, etc.
+Stage 2: sort each hypothesis into one of three dispositions by *cost-vs-magnitude
+ratio*:
+
+- **`[Apply now]`** — strictly deterministic + low-risk (security patches, gate
+  snippets, doc typos). The diff is the proof.
+- **`[Apply with review]`** — small-magnitude AND diff-faithful (cargo-cult
+  deletions, role-puffery removal, minor doc cleanups). The user is the verifier;
+  show the diff. Optionally one sanity replicate (`run --k 1`).
+- **`[Experiment]`** — diff-opaque OR high-magnitude, AND the experiment can be
+  run cheaply enough that the ratio is defensible.
+
+**The ratio has two levers, both first-class:**
+
+| Lever | What you're moving | Concrete moves |
+|---|---|---|
+| Magnitude (numerator) | Make the change bigger — only if it's actually bigger | Pick changes that affect ≥5% of the relevant prefix, or that change behavior at all (model swap, delegation, fast-mode toggle, framework upgrade) |
+| Experiment cost (denominator) | Make the experiment cheaper without losing its point | Haiku adapter for prefix-only experiments (the model isn't what's being tested; the prefix effect transfers); `--k 1` sanity-only; narrower verify cmd; shorter task prompts |
+
+**The line in one sentence:** *don't run a \$60 experiment to prove a \$0.10
+effect*. True on API rates. True translated to usage-limit headroom on a
+subscription. The rule isn't "small magnitudes are off-limits"; it's "small
+magnitudes need cheap experiments — or `[Apply with review]` instead."
+
+**Implementation status (v0.12.0):**
+- `header-experiment new --kind prompt-debt-deletion` prints a magnitude
+  estimate (removed bytes / total bytes) and, when <5%, surfaces both paths:
+  `[Apply with review]` and "cheaper experiment" (Haiku + `--k 1` + narrower
+  verify).
+- `header-experiment run`'s cost gate speaks both billing modes (API \$ +
+  subscription headroom), states the load-bearing rule, and lists the cheap-
+  experiment levers.
+- `SKILL.md` teaches the agent the three-way classification. `[Apply with
+  review]` is the new disposition; the existing `[Apply now]` / `[Experiment]`
+  semantics didn't change.
 
 ---
 
@@ -583,8 +644,10 @@ the verifier MVP (§11) is the next runnable slice and unlocks "the user doesn't
   own tests/build/types as the oracle, reverse test-bearing git commits into tasks, fall back to a *validated*
   LLM judge only for the uncovered remainder. Residual risk: repos with weak tests limit what can be proven,
   and LLM-judge reliability must itself be measured.
-- **Cost of experimenting.** Replication burns tokens (the customer's). Need budget caps + an
-  "expected-savings > experiment-cost" gate. Header infra amortizes standardized experiments across customers.
+- **Cost of experimenting.** ✅ **Promoted to a design constraint in §6.8 (v0.12.0)** —
+  audit is a two-stage filter (generate → classify by cost-vs-magnitude ratio); cheap-experiment
+  levers (Haiku adapter, `--k 1`, narrow verify, shorter tasks) are first-class. Header infra
+  amortizing standardized experiments across customers is still future work.
 - **Sandbox blast radius.** Autonomous agent runs on tasks need real isolation; a bad experiment must not
   damage the repo.
 - **Privacy of standardized runs.** The shared benchmark must be genuinely generic; never require shipping

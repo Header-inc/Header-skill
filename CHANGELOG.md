@@ -3,6 +3,76 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.12.0 — Cost-vs-magnitude gating: don't run a $60 experiment to prove a $0.10 effect
+
+Promoted from §13 open-question to a real design constraint after the
+2026-05-27 audit, when a `slim CLAUDE.md` experiment scaffolded by `new --kind
+prompt-debt-deletion` would have cost ≈$60 of API-equivalent spend (or the
+equivalent in usage-limit headroom on a Max subscription) to prove ≈$0.10/session
+in savings. The runner did its job — the JSON exposed the real numbers — but
+the audit had no business labelling that finding `[Experiment]` in the first
+place.
+
+**The audit is now a two-stage filter, not just a generator.** Stage 1 still
+generates hypotheses from prompt-debt patterns, briefing items, and supply-chain
+posture. Stage 2 (new) sorts each into three dispositions by the
+cost-vs-magnitude ratio:
+
+- **`[Apply now]`** — strictly deterministic, low-risk: security patches, gate
+  snippets, doc typos. Unchanged.
+- **`[Apply with review]`** _(new)_ — small-magnitude AND diff-faithful: cargo-cult
+  deletions, role-puffery removal, doc cleanups. The user is the verifier; show
+  the diff. Optionally one sanity replicate (`run --k 1`); skip the full
+  bootstrap A/B.
+- **`[Experiment]`** — diff-opaque OR high-magnitude, AND the experiment can be
+  run cheaply enough that the ratio is defensible.
+
+**Both levers are first-class.** The dividing line isn't a magnitude threshold —
+it's a *ratio*. A tiny-magnitude question is still fair game for `[Experiment]`
+if you spend on the cost-lever side: Haiku adapter for prefix-only experiments
+(the model isn't what's tested; the prefix effect transfers), `--k 1`
+sanity-only, narrower verify, shorter task prompts.
+
+### Code changes
+
+- **`header-experiment new --kind prompt-debt-deletion`** prints an up-front
+  **magnitude estimate** (removed bytes / total bytes, ~est tokens). When the
+  change is <5% of the file, surfaces **both** paths: `[Apply with review]` AND
+  cheaper-experiment levers. Doesn't block — just informs.
+
+- **`header-experiment new --kind clause-add`** _(new)_ — INSERTION experiments.
+  `--file F --after-line N (--text "..." | --text-file F)` inserts content after
+  line N in F (0 = top of file) into arm B's overrides. Unblocks behavior-change
+  experiments the deck has wanted forever: mandatory-skill rules, delegation
+  toggles, fast-mode instructions, framework-migration patches — all things
+  `prompt-debt-deletion` couldn't express because they ADD a clause rather than
+  remove one.
+
+- **`header-experiment run`'s cost gate** now speaks BOTH billing modes
+  (mirrors `header-cost`'s existing framing): API/Console pay-per-token vs.
+  Claude subscription usage-limit headroom. Quotes the load-bearing rule
+  verbatim. Lists the cheap-experiment levers — Haiku adapter, `--k 1`,
+  narrow verify, shorter tasks.
+
+### Doc changes
+
+- **`SKILL.md`** — `[Apply with review]` is the new audit disposition. The
+  dividing line between it and `[Experiment]` is explicitly the *ratio*, with
+  both levers (magnitude + experiment-cost) named. Quotable principle baked in.
+- **`docs/experiments-design.md`** — new **§6.8 Magnitude vs. experiment cost**:
+  the audit is a two-stage filter, both ratio levers are first-class. §13 entry
+  for "Cost of experimenting" marked promoted to design constraint.
+
+### Tests
+
++33 assertions covering the three-disposition split: cost gate dual-mode
+framing (mentions both billing bases, quotes the load-bearing rule, lists
+cheap-experiment levers); magnitude estimate at scaffold time (prints %,
+fires <5% pointer below 5%, suppresses it ≥5%); `clause-add` materialises
+arm B's file at the right insertion point (`--after-line 0` = top,
+`--after-line N` = after line N), accepts `--text` and `--text-file`, rejects
+bad inputs. 133 in experiment, 387 total; all 11 suites green.
+
 ## 0.11.2 — `header-experiment run`: clean refusal in agent subshells (no `/dev/tty` leak)
 
 Bug fix. `header-experiment run` without `--yes` (and without `--adapter`)

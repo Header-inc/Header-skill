@@ -18,13 +18,20 @@ hypotheses — new models, dependency advisories), **`header-cost`** (the
 measurement / billing meter), and an **`header-experiment` MVP (beta, local-only)**
 that closes the audit → experiment → applied-change loop in code, not just in prose:
 
-- **`new`** (0.11.1) — audit-aware scaffolder. `--kind prompt-debt-deletion --file F
-  --lines L1,L2,...` (the §8 wedge) auto-generates arm B by stripping those lines,
-  driven straight from `header-audit harness` `HIT` output. `--kind model-swap`
-  generates a two-arm model spec. Generic `--arm` flow for everything else.
-- **`define / validate / run / analyze / report`** (0.11.0) — worktree-isolated
-  runs, paired-by-task bootstrap CIs, A/A noise-floor mode, §6.5 cost-superiority +
-  success non-inferiority decision rule, conservative savings rate.
+- **`new`** (0.11.1, extended 0.12.0) — audit-aware scaffolder.
+  - `--kind prompt-debt-deletion --file F --lines L1,L2,...` — the §8 wedge.
+    v0.12.0 adds an up-front **magnitude estimate**; <5% changes surface
+    `[Apply with review]` and cheaper-experiment levers (don't burn tokens
+    proving a tiny effect).
+  - `--kind clause-add --file F --after-line N --text "..."` (0.12.0) — INSERTION
+    experiments for behavior-change cases (mandatory-skill rules, delegation
+    toggles, fast-mode instructions, framework-migration patches).
+  - `--kind model-swap` generates a two-arm model spec. Generic `--arm` flow for
+    everything else.
+- **`define / validate / run / analyze / report`** (0.11.0; `run`'s cost gate extended
+  in 0.12.0 to speak both billing modes + the cost-vs-magnitude rule + cheap-experiment
+  levers) — worktree-isolated runs, paired-by-task bootstrap CIs, A/A noise-floor mode,
+  §6.5 cost-superiority + success non-inferiority decision rule, conservative savings rate.
 - **`merge`** (0.11.1) — applies arm B's overrides to the repo after a B-wins
   verdict (refuses other verdicts unless `--force`). Shows the unified diff first,
   asks for confirmation, prints a suggested `git commit` with the

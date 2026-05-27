@@ -250,6 +250,103 @@ gen_prompt_debt_arm_b() {
   sed "$sed_expr" "$src" > "$arm_dir/$file_rel"
 }
 
+# magnitude_estimate_prompt_debt <repo> <file_rel> <lines>  → prints, to stderr,
+# a magnitude report for a prompt-debt-deletion scaffold: how many bytes/tokens
+# we'd strip, what fraction of the file that is, and whether [Apply with review]
+# is probably a better fit. Token estimate is bytes/4 — same proxy header-audit
+# uses; not a tokenizer. This is honest framing, not a hard gate — the user
+# decides whether to scaffold knowing the magnitude.
+magnitude_estimate_prompt_debt() {
+  local repo="$1" file_rel="$2" lines="$3"
+  local src="$repo/$file_rel"
+  [ -f "$src" ] || return 0
+  local total_bytes; total_bytes="$(wc -c < "$src" 2>/dev/null | tr -d ' ')"
+  [ -n "$total_bytes" ] && [ "$total_bytes" -gt 0 ] || return 0
+  # Sum bytes of the lines that will be removed (sed prints them).
+  local sed_expr="" ln
+  local IFS=','
+  for ln in $lines; do sed_expr="${sed_expr}${ln}p;"; done
+  local removed_bytes
+  removed_bytes="$(sed -n "$sed_expr" "$src" 2>/dev/null | wc -c | tr -d ' ')"
+  [ -n "$removed_bytes" ] || removed_bytes=0
+  # Integer percent — awk for the division (bash math is integer-only).
+  local pct
+  pct="$(awk -v r="$removed_bytes" -v t="$total_bytes" 'BEGIN{ if (t>0) printf "%.1f", (r*100)/t; else print "0.0" }')"
+  local est_removed_tokens=$(( removed_bytes / 4 ))
+  cat >&2 <<EOF
+
+Magnitude estimate (arm B vs A):
+  Stripping ~${removed_bytes} bytes (~${est_removed_tokens} tokens) from ${file_rel}.
+  That's ~${pct}% of the file (${total_bytes} bytes total).
+
+Reality check (the rule that matters more than statistical power):
+  Experiments are honest when the proven payoff outweighs their own cost.
+  Don't run a \$60 experiment to prove a \$0.10 effect.
+EOF
+  # 5% is the rough cutoff between "small enough to review" and "big enough to
+  # bother proving" — see SKILL.md's audit categorisation. The number is a
+  # rule of thumb, not a hard threshold; we just suggest, never block. And we
+  # surface BOTH paths so the user doesn't think small-magnitude implies "skip
+  # the experiment" — sometimes you want empirical proof even of a small
+  # effect, you just want to run it cheap.
+  if awk -v p="$pct" 'BEGIN{ exit !(p+0 < 5) }'; then
+    cat >&2 <<'EOF'
+  This change is <5% of the file. Two paths — pick by ratio, not by magnitude alone:
+
+  A) [Apply with review] — recommended when the diff IS the proof:
+       · review the diff (small + observable)
+       · optionally run ONE sanity replicate (`--k 1`) to confirm tests still pass
+       · skip the full bootstrap A/B
+  B) [Experiment] but cheaper — if you want empirical proof anyway:
+       · `--k 1` (sanity-only) or `--k 2` (light power)
+       · point `--adapter` at a Haiku wrapper — for prefix-only changes the model
+         isn't what's being tested, the prefix effect transfers (5-10× cheaper)
+       · narrow the `verify:` cmd to the smallest test that covers the change
+       · shorter tasks (10-turn focused, not 76-turn marathon)
+
+  Continuing to scaffold anyway (your call).
+EOF
+  fi
+  echo "" >&2
+}
+
+# gen_clause_add_arm_b <repo> <exp_dir> <file_rel> <after_line> <text> [<text_file>]
+# Insert content into <file_rel> after line <after_line> (0 = top of file).
+# Source: --text "..." (inline; \n becomes newline) OR --text-file F.
+# Writes the modified file to <exp_dir>/arms/B/<file_rel>. Used by
+# `new --kind clause-add` for INSERTION experiments — the high-magnitude
+# behavior-change cases (mandatory-skill instructions, fast-mode toggles,
+# delegation rules) that prompt-debt-deletion can't express.
+gen_clause_add_arm_b() {
+  local repo="$1" exp_dir="$2" file_rel="$3" after_line="$4" text="$5" text_file="${6:-}"
+  local src="$repo/$file_rel" arm_dir="$exp_dir/arms/B"
+  [ -f "$src" ] || { err "file not found in repo: $file_rel ($src)"; return 1; }
+  case "$after_line" in ''|*[!0-9]*) err "--after-line must be a non-negative integer (got '$after_line')"; return 1 ;; esac
+  local sub_dir; sub_dir="$(dirname "$file_rel")"
+  mkdir -p "$arm_dir/$sub_dir" 2>/dev/null || true
+  local out="$arm_dir/$file_rel"
+  local insert_text=""
+  if [ -n "$text_file" ]; then
+    [ -f "$text_file" ] || { err "--text-file not found: $text_file"; return 1; }
+    insert_text="$(cat "$text_file")"
+  elif [ -n "$text" ]; then
+    # %b interprets backslash escapes (\n → newline) so callers can pass
+    # multi-line content without a temp file.
+    insert_text="$(printf '%b' "$text")"
+  else
+    err "clause-add needs --text or --text-file"; return 1
+  fi
+  # Position 0 = top of file (before line 1). Otherwise insert after line N.
+  if [ "$after_line" -eq 0 ]; then
+    { printf '%s\n' "$insert_text"; cat "$src"; } > "$out"
+  else
+    awk -v N="$after_line" -v insert="$insert_text" '
+      { print }
+      NR == N { print insert }
+    ' "$src" > "$out"
+  fi
+}
+
 # write_spec — emit a complete `spec` file given parsed arguments. Used by both
 # `define` (template) and `new` (one-shot / wizard-driven). Args:
 #   $1 spec path  $2 id  $3 description  $4 repo  $5 replicates  $6 margin
@@ -374,6 +471,17 @@ cmd_define() {
 #       --task <repo-relative-path-or-inline> --verify "npm test"
 #       — auto-generates arm B's overrides_dir by sed-deleting those lines
 #       from <file>. This is the §8 wedge (deletion-as-the-cleanest-A/B).
+#       Prints a magnitude estimate up front; for <5%-of-file deletions, points
+#       at [Apply with review] instead (don't run a $60 experiment to prove a
+#       $0.10 effect).
+#
+#   header-experiment new <id> --kind clause-add \
+#       --file CLAUDE.md --after-line 30 --text "..." \
+#       --task <repo-relative-path-or-inline> --verify "npm test"
+#       — auto-generates arm B by INSERTING content after a given line. Used
+#       for behavior-change experiments (mandatory-skill instructions,
+#       delegation toggles, fast-mode rules) — the high-magnitude side of
+#       the experiment surface.
 #
 #   header-experiment new <id> --kind model-swap \
 #       --from claude-opus-4-7 --to claude-sonnet-4-6 \
@@ -399,12 +507,16 @@ cmd_new() {
   local id="" kind="" file_arg="" lines="" from="" to=""
   local task_arg="" verify_arg="" replicates="" margin="" desc="" ledger_key=""
   local repo_arg=""
+  local after_line="" text_arg="" text_file=""
   local arms_in=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind)        kind="${2:-}"; shift 2 ;;
       --file)        file_arg="${2:-}"; shift 2 ;;
       --lines)       lines="${2:-}"; shift 2 ;;
+      --after-line)  after_line="${2:-}"; shift 2 ;;
+      --text)        text_arg="${2:-}"; shift 2 ;;
+      --text-file)   text_file="${2:-}"; shift 2 ;;
       --from)        from="${2:-}"; shift 2 ;;
       --to)          to="${2:-}"; shift 2 ;;
       --arm)         arms_in+=("${2:-}"); shift 2 ;;
@@ -423,6 +535,15 @@ Modes:
   --kind prompt-debt-deletion --file PATH --lines L1,L2,...
                               auto-generate arm B by deleting those lines from FILE
                               (path relative to repo). Use audit HIT lines directly.
+                              Prints a magnitude estimate before scaffolding so you
+                              can decide if a full A/B is worth the spend (see
+                              [Apply with review] in SKILL.md).
+  --kind clause-add --file PATH --after-line N (--text "..." | --text-file F)
+                              auto-generate arm B by INSERTING content after line N
+                              in FILE (N=0 inserts at top). Use for behavior-change
+                              experiments (mandatory-skill instructions, delegation
+                              toggles, fast-mode rules) that need to ADD a clause,
+                              not delete one.
   --kind model-swap --from MODEL --to MODEL
                               two-arm spec differing only in model
   --arm LABEL[:MODEL[:OVERRIDES_DIR]] (repeatable)
@@ -470,13 +591,29 @@ USAGE
         [ -n "$lines" ] || lines="$(prompt_user "Lines to delete (comma-separated, e.g. 12,13,14)" "")"
         [ -n "$lines" ] || { err "--lines is required for prompt-debt-deletion"; return 1; }
         [ -f "$repo/$file_arg" ] || { err "file not found in repo: $file_arg (repo=$repo)"; return 1; }
+        # Print the magnitude estimate up front so the caller can decide if the
+        # full A/B is worth the spend BEFORE we materialise everything. Honest
+        # framing, not a hard gate.
+        magnitude_estimate_prompt_debt "$repo" "$file_arg" "$lines"
+        ;;
+      clause-add)
+        [ -n "$file_arg" ] || file_arg="$(prompt_user "File to edit (path relative to repo, e.g. CLAUDE.md)" "CLAUDE.md")"
+        [ -n "$after_line" ] || after_line="$(prompt_user "Insert after which line? (0 = top of file)" "0")"
+        [ -f "$repo/$file_arg" ] || { err "file not found in repo: $file_arg (repo=$repo)"; return 1; }
+        case "$after_line" in ''|*[!0-9]*) err "--after-line must be a non-negative integer (got '$after_line')"; return 1 ;; esac
+        [ -n "$text_arg" ] || [ -n "$text_file" ] || {
+          # Last-resort interactive prompt — one line only (multi-line content
+          # belongs in --text-file).
+          text_arg="$(prompt_user "Text to insert (one line; use --text-file for multi-line)" "")"
+          [ -n "$text_arg" ] || { err "clause-add needs --text or --text-file"; return 1; }
+        }
         ;;
       model-swap)
         [ -n "$from" ] || from="$(prompt_user "Current model (arm A)" "claude-opus-4-7")"
         [ -n "$to" ]   || to="$(prompt_user   "Proposed model (arm B)" "claude-sonnet-4-6")"
         [ -n "$from" ] && [ -n "$to" ] || { err "--from and --to are required for model-swap"; return 1; }
         ;;
-      *) err "unknown --kind '$kind' (want: prompt-debt-deletion | model-swap)"; return 1 ;;
+      *) err "unknown --kind '$kind' (want: prompt-debt-deletion | clause-add | model-swap)"; return 1 ;;
     esac
   fi
 
@@ -512,6 +649,12 @@ USAGE
     prompt-debt-deletion)
       # Arm A = no overrides (control). Arm B = file with lines stripped.
       gen_prompt_debt_arm_b "$repo" "$dir" "$file_arg" "$lines" || { err "could not generate arm B"; return 1; }
+      arms_blob=$'A||\nB||arms/B'
+      ;;
+    clause-add)
+      # Arm A = no overrides (control). Arm B = file with content inserted.
+      gen_clause_add_arm_b "$repo" "$dir" "$file_arg" "$after_line" "$text_arg" "$text_file" \
+        || { err "could not generate arm B"; return 1; }
       arms_blob=$'A||\nB||arms/B'
       ;;
     model-swap)
@@ -559,6 +702,7 @@ USAGE
   echo "  Verify:    $verify_arg"
   case "$kind" in
     prompt-debt-deletion) echo "  Arms:      A=control, B=$(basename "$file_arg") with lines [$lines] removed (arms/B/$file_arg)" ;;
+    clause-add)           echo "  Arms:      A=control, B=$(basename "$file_arg") with content inserted after line $after_line (arms/B/$file_arg)" ;;
     model-swap)           echo "  Arms:      A=$from, B=$to" ;;
     *)                    echo "  Arms:      $(printf '%s\n' "$arms_blob" | awk -F'|' 'NF>0{print $1"="$2}' | paste -sd ", " -)" ;;
   esac
@@ -810,21 +954,33 @@ cmd_run() {
 
   local n_runs=$(( ${#tasks[@]} * ${#arms[@]} * reps ))
 
-  # Cost gate — refuse to run silently. The user's API budget pays for this.
-  # `[ -t 0 ]` is the right check: stdin is a real terminal iff we can prompt.
-  # `/dev/tty` lies (exists as a file but open returns ENXIO with no controlling
-  # terminal, and bash's redirect error message can't be suppressed by `read
-  # 2>/dev/null` because it's emitted by the shell layer, not the command).
-  # If there's no TTY, refuse explicitly and point at --yes so an agent /
-  # subshell caller knows exactly how to authorize the spend.
+  # Cost gate — refuse to run silently. Speak BOTH billing modes (mirrors
+  # header-cost's framing: subscription users don't pay $ per token, they spend
+  # usage-limit headroom, so we don't pretend the only cost is dollars). And
+  # surface the load-bearing rule explicitly so the caller can sanity-check
+  # the experiment is worth running. `[ -t 0 ]` is the right TTY check;
+  # `/dev/tty` lies (it exists as a file but open() returns ENXIO with no
+  # controlling terminal, and bash's redirect error message can't be suppressed
+  # by `read 2>/dev/null` because it's emitted by the shell layer).
   if [ "$yes" -ne 1 ] && [ -z "$adapter" ]; then
-    printf 'About to launch %d agent invocation(s): %d tasks × %d arms × %d replicates.\n' \
-      "$n_runs" "${#tasks[@]}" "${#arms[@]}" "$reps" >&2
+    cat >&2 <<EOF
+About to launch $n_runs agent invocation(s): ${#tasks[@]} tasks × ${#arms[@]} arms × $reps replicates.
+  · API / Console (pay-per-token): real \$ spend on tokens for each invocation.
+  · Claude subscription (Pro / Max): no \$, but each invocation burns usage-limit headroom against the rolling + weekly caps. The % savings translates either way.
+
+The load-bearing rule: don't run a \$60 experiment to prove a \$0.10 effect. Experiments are honest only when the proven payoff outweighs the experiment's own cost. For small-magnitude prefix changes (deleting a cargo-cult line in CLAUDE.md), a diff review + one sanity replicate is usually a better fit than a full bootstrap CI. Reserve experiments for behavior changes whose effect isn't visible from the diff (model swaps, delegation toggles, framework migrations).
+
+Levers to make an experiment cheaper without losing its point:
+  · --k 1 (sanity-only), or --k 2 (light power) instead of the default 3
+  · --adapter a Haiku wrapper for prefix-only experiments (prefix effect transfers)
+  · narrow your verify cmd to the smallest test that covers the change
+  · shorter task prompts (10-turn focused, not 76-turn coding marathons)
+EOF
     if [ ! -t 0 ]; then
       err "no TTY for confirmation — re-run with --yes to authorize the spend non-interactively (or set --adapter to use a stub for testing)"
       return 1
     fi
-    printf 'Each invocation spends real tokens. Continue? [y/N] ' >&2
+    printf 'Continue? [y/N] ' >&2
     local ans=""; IFS= read -r ans
     case "$ans" in [yY]|[yY][eE][sS]) ;; *) err "aborted"; return 1 ;; esac
   fi

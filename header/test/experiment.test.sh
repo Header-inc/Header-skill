@@ -161,6 +161,29 @@ assert_contains "$no_tty_out" "no TTY for confirmation" \
 assert_contains "$no_tty_out" "--yes" \
   "no-TTY refusal points at --yes so callers know how to authorize"
 
+# ── run: cost gate speaks BOTH billing modes (API + subscription headroom)
+# Regression after the 2026-05-27 audit where the gate only mentioned dollars,
+# misleading users on a Max subscription (no $ per token, just usage-limit
+# headroom). header-cost already had the framing; we just hadn't pulled it
+# into header-experiment's gate.
+gate_out="$(EXP run exp-1 </dev/null 2>&1)"
+assert_contains "$gate_out" "API / Console (pay-per-token)" \
+  "cost gate mentions API/Console billing basis"
+assert_contains "$gate_out" "Claude subscription" \
+  "cost gate mentions subscription basis (Pro / Max)"
+assert_contains "$gate_out" "usage-limit headroom" \
+  "cost gate flags that subscription users spend headroom, not dollars"
+# The load-bearing rule appears in the gate itself.
+assert_contains "$gate_out" '$60 experiment to prove a $0.10 effect' \
+  "cost gate quotes the load-bearing rule verbatim"
+# Both levers — magnitude AND experiment-cost — surface for the user.
+assert_contains "$gate_out" "Levers to make an experiment cheaper" \
+  "cost gate surfaces the cheap-experiment levers"
+assert_contains "$gate_out" "Haiku" \
+  "cost gate mentions Haiku as a cheap-adapter lever"
+assert_contains "$gate_out" "k 1" \
+  "cost gate mentions --k 1 as a sanity-only lever"
+
 # ── analyze: bootstrap CI, paired-by-task ────────────────────
 # Hand-author a noisy 5-task runs.jsonl: B is reliably cheaper everywhere,
 # success holds across the board. Verdict should be "B wins".
@@ -403,6 +426,105 @@ EXP new path-inline --arm A: --arm B: --task "Just refactor X." --verify true \
   --replicates 1 --repo "$nw_repo" >/dev/null
 assert_eq "yes" "$([ -f "$(exp_dir_for path-inline)/tasks/t1.md" ] && echo yes || echo no)" \
   "non-path --task value is written to <exp_dir>/tasks/t1.md as an inline prompt"
+
+# 6) Magnitude estimate fires for --kind prompt-debt-deletion (v0.12.0)
+# Need a bigger CLAUDE.md so a 1-line delete is reliably <5%. Build one.
+big_repo="$sb/big-repo"
+mkdir -p "$big_repo" && (cd "$big_repo" && git init -q && \
+  git config user.email t@t && git config user.name t)
+{
+  printf '# Project rules\n'
+  printf 'You are an expert engineer.\n'
+  printf 'Always think step by step.\n'
+  for i in $(seq 1 50); do
+    printf 'Actual content line %d with real instructions and useful context here.\n' "$i"
+  done
+} > "$big_repo/CLAUDE.md"
+(cd "$big_repo" && git add . && git commit -qm init)
+
+mag_small_out="$(EXP new mag-small --kind prompt-debt-deletion \
+  --file CLAUDE.md --lines "3" --task t --verify true \
+  --replicates 2 --repo "$big_repo" 2>&1)"
+assert_contains "$mag_small_out" "Magnitude estimate" "magnitude estimate prints"
+assert_contains "$mag_small_out" "of the file"        "magnitude estimate shows % of file"
+assert_contains "$mag_small_out" '$60 experiment to prove a $0.10 effect' \
+  "magnitude estimate quotes the load-bearing rule"
+assert_contains "$mag_small_out" "<5% of the file"    "small change triggers the <5% pointer"
+assert_contains "$mag_small_out" "[Apply with review]" \
+  "small-magnitude estimate surfaces the [Apply with review] path"
+assert_contains "$mag_small_out" "Haiku"              "small-magnitude estimate surfaces the cheap-experiment Haiku lever"
+assert_contains "$mag_small_out" "narrow"             "small-magnitude estimate surfaces the narrow-verify lever"
+
+# 6b) Big change → no [Apply with review] suggestion (magnitude is enough)
+big_repo2="$sb/big-repo2"
+mkdir -p "$big_repo2" && (cd "$big_repo2" && git init -q && \
+  git config user.email t@t && git config user.name t)
+{ printf 'line1\nline2\nline3\nline4\nline5\n'; } > "$big_repo2/CLAUDE.md"
+(cd "$big_repo2" && git add . && git commit -qm init)
+mag_big_out="$(EXP new mag-big --kind prompt-debt-deletion \
+  --file CLAUDE.md --lines "1,2,3" --task t --verify true \
+  --replicates 2 --repo "$big_repo2" 2>&1)"
+assert_contains     "$mag_big_out" "Magnitude estimate" "magnitude estimate prints for big changes too"
+assert_not_contains "$mag_big_out" "<5% of the file"   "big-change estimate does NOT trigger the <5% pointer"
+
+# 7) --kind clause-add (insertion experiments)
+EXP new clause-1 --kind clause-add \
+  --file CLAUDE.md --after-line 1 \
+  --text "For model-field changes, invoke the model-field-checklist skill first." \
+  --task "tiny" --verify true --replicates 2 --repo "$big_repo" >/dev/null
+clause_spec="$(cat "$(exp_dir_for clause-1)/spec")"
+assert_contains "$clause_spec" "overrides_dir: arms/B" \
+  "clause-add spec: arm B has overrides_dir = arms/B"
+arm_b_file="$(exp_dir_for clause-1)/arms/B/CLAUDE.md"
+assert_eq "yes" "$([ -f "$arm_b_file" ] && echo yes || echo no)" \
+  "clause-add arm B's file materialized"
+assert_contains "$(cat "$arm_b_file")" "model-field-checklist skill" \
+  "clause-add inserted the new instruction"
+# Original file has 53 lines (header + 50 generated); arm B should have 54
+orig_lines="$(wc -l < "$big_repo/CLAUDE.md" | tr -d ' ')"
+new_lines="$(wc -l < "$arm_b_file" | tr -d ' ')"
+assert_eq "$(( orig_lines + 1 ))" "$new_lines" \
+  "clause-add added exactly one line"
+# Insertion happens AFTER line 1 — line 1 should still be the original header
+head1="$(head -1 "$arm_b_file")"
+assert_eq "# Project rules" "$head1" "clause-add preserved the existing line 1"
+head2="$(sed -n '2p' "$arm_b_file")"
+assert_contains "$head2" "model-field-checklist skill" \
+  "clause-add inserted at position 2 (after line 1)"
+
+# 7b) clause-add at after-line=0 inserts at the top
+EXP new clause-top --kind clause-add \
+  --file CLAUDE.md --after-line 0 \
+  --text "TOP_LINE_INSERTED" \
+  --task "tiny" --verify true --replicates 2 --repo "$big_repo" >/dev/null
+top_file="$(exp_dir_for clause-top)/arms/B/CLAUDE.md"
+assert_eq "TOP_LINE_INSERTED" "$(head -1 "$top_file")" \
+  "clause-add --after-line 0 inserts at the very top of the file"
+
+# 7c) clause-add via --text-file (multi-line content)
+multi_file="$sb/multi.txt"
+{ printf 'Line A\n'; printf 'Line B\n'; printf 'Line C\n'; } > "$multi_file"
+EXP new clause-multi --kind clause-add \
+  --file CLAUDE.md --after-line 1 --text-file "$multi_file" \
+  --task "tiny" --verify true --replicates 2 --repo "$big_repo" >/dev/null
+multi_b="$(exp_dir_for clause-multi)/arms/B/CLAUDE.md"
+assert_contains "$(cat "$multi_b")" "Line A" "clause-add --text-file: multi-line content present"
+assert_contains "$(cat "$multi_b")" "Line B" "clause-add --text-file: line B present"
+assert_contains "$(cat "$multi_b")" "Line C" "clause-add --text-file: line C present"
+
+# 7d) clause-add validates inputs
+EXP new clause-badline --kind clause-add --file CLAUDE.md \
+  --after-line "abc" --text "x" --task t --verify true \
+  --repo "$big_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "clause-add rejects non-integer --after-line"
+EXP new clause-nofile --kind clause-add --file does-not-exist.md \
+  --after-line 0 --text "x" --task t --verify true \
+  --repo "$big_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "clause-add rejects missing --file"
+EXP new clause-notext --kind clause-add --file CLAUDE.md \
+  --after-line 0 --task t --verify true \
+  --repo "$big_repo" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "clause-add requires --text or --text-file"
 
 # ── merge ─────────────────────────────────────────────────────
 # Synthesize a B-wins runs.jsonl for the prompt-debt experiment, analyze, merge.

@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.11.2
+version: 0.12.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -285,10 +285,24 @@ Build the unified list by combining:
 
 When a `MODEL` is known, cross-reference its model card / release notes before declaring a prompt-debt `HIT` actionable — confirm the pattern is *still* debt on that model. Prefer briefing sources for the cross-reference; fall back to the web.
 
-**Present** as a one-line scorecard, then a ranked recommendation list. Each recommendation is a hypothesis: **what** (the change), **where** (file + line/manifest), **why** (cite the audit line *or* the briefing item — link the `source_articles` URL for the latter), and the **expected effect** (`est.` and directional unless measured). Split into two groups:
+**Present** as a one-line scorecard, then a ranked recommendation list. Each recommendation is a hypothesis: **what** (the change), **where** (file + line/manifest), **why** (cite the audit line *or* the briefing item — link the `source_articles` URL for the latter), and the **expected effect** (`est.` and directional unless measured). Sort findings into three buckets — the audit is not just a hypothesis generator, it's also a hypothesis *filter*:
 
-- **Apply now** — deletions/simplifications, supply-chain gate, security patches. Low-risk and deterministic. On the user's yes, make the edit (show a diff first; for the gate, write/append the `<AUDIT> gate ...` snippet to `.npmrc`).
-- **`[Experiment]`** _(beta)_ — anything whose payoff must be *proven*: a model change, a major dependency/framework upgrade, a behavioral rewrite. State the A/B that *would* settle it ("A = current, B = proposed; measure tokens + test pass-rate over N runs"). If the user says "let's test that", **scaffold the spec from the finding payload** with `header-experiment new --kind ...` (see "Experiments" section below) — don't make the user retype what the audit already told us. The standard ledger dispositions apply per finding: `dismissed` if they reject this specific experiment, `wanted` if they want this one but aren't running it locally right now, `snoozed` for "not now."
+- **`[Apply now]`** — strictly deterministic, low-risk: supply-chain gate, security patches, obvious bug fixes, doc typos. On the user's yes, make the edit (show a diff first; for the gate, write/append the `<AUDIT> gate ...` snippet to `.npmrc`). No verification beyond the diff.
+- **`[Apply with review]`** — small-magnitude changes whose effect is observable from the diff alone: deletions of cargo-cult phrases (`as an AI language model`, `take a deep breath`, role puffery), trimming redundant role/persona boilerplate, doc cleanups, minor lint-style edits in CLAUDE.md / AGENTS.md. The user is the verifier — show the diff, get approval, apply. Optionally, run **one sanity replicate** (`header-experiment new --kind ... && header-experiment run <id> --k 1`) to confirm tests still pass; skip the full bootstrap A/B — the diff is the proof.
+- **`[Experiment]`** _(beta)_ — only when the payoff is BOTH non-deterministic AND has enough magnitude to justify the experiment's own spend. Model swaps, subagent delegation toggles, fast-mode-instruction toggles, mandatory-skill rules, major framework migrations, behavior rewrites. If the user says "let's test that", **scaffold the spec from the finding payload** with `header-experiment new --kind ...` (see "Experiments" section below) — don't make the user retype what the audit already told us. The standard ledger dispositions apply per finding: `dismissed` if they reject this specific experiment, `wanted` if they want this one but aren't running it locally right now, `snoozed` for "not now."
+
+**The dividing line between `[Apply with review]` and `[Experiment]` is a *ratio*, not a threshold.** What matters is **experiment cost vs. proven payoff** — and both sides are levers:
+
+- **Magnitude lever** (the "is the change big enough?" side). Use the rough estimator from `header-audit harness` — each `FILE` row prints `<bytes>` and `<est_tokens>`. If the affected lines are **<~5% of the file's bytes** AND the diff is a faithful preview of the effect (a CLAUDE.md deletion: yes, the diff IS the change; a model swap or "always route X through subagent Y" rule: no — diff is one line, effect lives outside it), default to `[Apply with review]`.
+- **Experiment-cost lever** (the "can we run it cheaply?" side). Even a tiny-magnitude question is fair game for `[Experiment]` if you make the experiment small:
+  - **Cheaper model adapter.** For prefix-only experiments (CLAUDE.md edits, AGENTS.md tweaks), the agent's model isn't what's being tested — the prefix effect transfers across models. Run via Haiku: `--adapter "<wrapper that invokes claude --model claude-haiku-4-5 --print --output-format json>"`. Typically 5-10× cheaper than the user's default Opus.
+  - **`--k 1`** when you want a sanity check, not a confidence interval. One replicate proves "this doesn't break," not "this is significantly better." Useful when paired with `[Apply with review]`.
+  - **Narrower verify.** `pytest tests/v2/test_just_the_module.py -x -q` instead of the full suite — exercise only what the change can affect.
+  - **Shorter task prompts.** A 10-turn focused task on a contained module gives the same statistical surface as a 76-turn coding marathon at ~7× less spend per replicate.
+
+**Decision rule in one sentence:** if the change is small AND the diff is faithful → `[Apply with review]` (don't even run an experiment). If the change is large OR the diff is opaque → `[Experiment]` is warranted; *then* spend on the cost-lever side until the ratio is defensible.
+
+**Quotable principle (don't lose this):** *don't run a $60 experiment to prove a $0.10 effect*. Experiments cost real tokens on API rates or real usage-limit headroom on a Claude subscription — either way, they're not free. Both magnitude and experiment-cost are levers; spend on either side until the ratio works.
 
 After presenting, ask which (if any) to implement. On selection, proceed with the implementation in the current project.
 
@@ -530,7 +544,7 @@ Surface:
   ```
 
   `TOOL npm too-old` / `TOOL pip too-old` → the gate is **silently ignored** until the tool is bumped locally **and in CI**.
-- **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`). Security patches → apply now. Major upgrades → `[Experiment]`.
+- **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`). Security patches → `[Apply now]`. Minor / patch upgrades with clean changelogs → `[Apply with review]` (one sanity replicate if you're nervous). Major upgrades where behavior may shift → `[Experiment]`.
 
 ### Record findings
 
