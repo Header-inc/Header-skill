@@ -146,6 +146,21 @@ if ! command -v claude >/dev/null 2>&1; then
   assert_exit 1 "$rc" "run without adapter → exit 1 when 'claude' is not on PATH"
 fi
 
+# ── run: cost gate refuses cleanly when no TTY + no --yes ────
+# Regression: an earlier version tried to read /dev/tty here. In agent
+# subshells /dev/tty exists but open() returns ENXIO (no controlling
+# terminal). The fix is to detect no-TTY with `[ -t 0 ]` and exit with a
+# helpful error pointing at --yes — NOT to error out via bash's "No such
+# device or address" redirect failure.
+no_tty_out="$(EXP run exp-1 </dev/null 2>&1)"; rc=$?
+assert_exit 1 "$rc" "run without --yes + no TTY → exit 1 (cleanly)"
+assert_not_contains "$no_tty_out" "No such device" \
+  "no-TTY refusal does NOT leak the /dev/tty 'No such device' error"
+assert_contains "$no_tty_out" "no TTY for confirmation" \
+  "no-TTY refusal explains the missing TTY"
+assert_contains "$no_tty_out" "--yes" \
+  "no-TTY refusal points at --yes so callers know how to authorize"
+
 # ── analyze: bootstrap CI, paired-by-task ────────────────────
 # Hand-author a noisy 5-task runs.jsonl: B is reliably cheaper everywhere,
 # success holds across the board. Verdict should be "B wins".

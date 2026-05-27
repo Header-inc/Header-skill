@@ -3,6 +3,33 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.11.2 — `header-experiment run`: clean refusal in agent subshells (no `/dev/tty` leak)
+
+Bug fix. `header-experiment run` without `--yes` (and without `--adapter`)
+previously tried to read the cost-gate confirmation from `/dev/tty`. In an
+agent subshell `/dev/tty` exists as a file but `open()` returns ENXIO (no
+controlling terminal), and bash's redirect-failure error escapes `read`'s
+`2>/dev/null`. The result was an ugly:
+
+```
+/.../header-experiment: line 818: /dev/tty: No such device or address
+header-experiment: aborted
+```
+
+`cmd_run` now checks `[ -t 0 ]` (same pattern `prompt_user` already used)
+and refuses with a helpful pointer:
+
+```
+header-experiment: no TTY for confirmation — re-run with --yes to authorize
+the spend non-interactively (or set --adapter to use a stub for testing)
+```
+
+So agents driving the runner in headless contexts get a clean signal of
+what's needed instead of a misleading "No such device" error.
+
+Tests: +4 regression assertions (no `No such device` leak; refusal message
+mentions `--yes`). All 11 suites green (104 in experiment, 358 total).
+
 ## 0.11.1 — `header-experiment`: audit-aware `new`, one-step `merge`
 
 Closes the audit → experiment → applied-change loop in code, not just in

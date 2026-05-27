@@ -811,11 +811,21 @@ cmd_run() {
   local n_runs=$(( ${#tasks[@]} * ${#arms[@]} * reps ))
 
   # Cost gate — refuse to run silently. The user's API budget pays for this.
+  # `[ -t 0 ]` is the right check: stdin is a real terminal iff we can prompt.
+  # `/dev/tty` lies (exists as a file but open returns ENXIO with no controlling
+  # terminal, and bash's redirect error message can't be suppressed by `read
+  # 2>/dev/null` because it's emitted by the shell layer, not the command).
+  # If there's no TTY, refuse explicitly and point at --yes so an agent /
+  # subshell caller knows exactly how to authorize the spend.
   if [ "$yes" -ne 1 ] && [ -z "$adapter" ]; then
     printf 'About to launch %d agent invocation(s): %d tasks × %d arms × %d replicates.\n' \
       "$n_runs" "${#tasks[@]}" "${#arms[@]}" "$reps" >&2
+    if [ ! -t 0 ]; then
+      err "no TTY for confirmation — re-run with --yes to authorize the spend non-interactively (or set --adapter to use a stub for testing)"
+      return 1
+    fi
     printf 'Each invocation spends real tokens. Continue? [y/N] ' >&2
-    local ans=""; read -r ans </dev/tty 2>/dev/null || ans=""
+    local ans=""; IFS= read -r ans
     case "$ans" in [yY]|[yY][eE][sS]) ;; *) err "aborted"; return 1 ;; esac
   fi
 
