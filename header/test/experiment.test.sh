@@ -526,6 +526,77 @@ EXP new clause-notext --kind clause-add --file CLAUDE.md \
   --repo "$big_repo" >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "clause-add requires --text or --text-file"
 
+# ── 0.12.1 fixes ─────────────────────────────────────────────
+
+# 8) Default timeout_s bumped 600 → 1200
+EXP new timeout-default --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$nw_repo" >/dev/null
+assert_contains "$(cat "$(exp_dir_for timeout-default)/spec")" "timeout_s: 1200" \
+  "new()-scaffolded spec defaults timeout_s to 1200 (was 600 in 0.11.x)"
+# define()-scaffolded specs also default to 1200 (with --task) and 1200 (without --task)
+EXP define timeout-define-1 --arm "A=opus" --arm "B=sonnet" >/dev/null
+assert_contains "$(cat "$(exp_dir_for timeout-define-1)/spec")" "timeout_s: 1200" \
+  "define() placeholder spec defaults timeout_s to 1200"
+
+# 9) Verify auto-detect nudge in new() output (only when verify was auto-detected)
+nudge_auto_out="$(EXP new vnudge-auto --arm A: --arm B: --task "x" \
+  --replicates 1 --repo "$nw_repo" 2>&1)"
+assert_contains "$nudge_auto_out" "auto-detected from your project manifest" \
+  "new prints verify-autodetect nudge when --verify is omitted"
+assert_contains "$nudge_auto_out" "REGRESSION check" \
+  "verify nudge calls out regression-vs-task-completion distinction"
+nudge_explicit_out="$(EXP new vnudge-explicit --arm A: --arm B: --task "x" \
+  --verify "pytest && jq ." --replicates 1 --repo "$nw_repo" 2>&1)"
+assert_not_contains "$nudge_explicit_out" "auto-detected from your project manifest" \
+  "verify nudge is suppressed when --verify is user-supplied"
+
+# 10) analyze drops agent_exit != 0 rows and records excluded_runs
+EXP new ex-timeout --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$nw_repo" >/dev/null
+cat > "$(exp_dir_for ex-timeout)/runs.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t1","arm":"A","rep":1,"cost_usd":0,"success":true,"agent_exit":124,"verify_exit":0}
+{"task":"t1","arm":"A","rep":2,"cost_usd":5.5,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t1","arm":"B","rep":0,"cost_usd":4.0,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t1","arm":"B","rep":1,"cost_usd":0,"success":true,"agent_exit":2,"verify_exit":0}
+{"task":"t1","arm":"B","rep":2,"cost_usd":4.5,"success":true,"agent_exit":0,"verify_exit":0}
+EOF
+EXP analyze ex-timeout --seed 7 --bootstrap 200 >/dev/null
+ex_result="$(cat "$(exp_dir_for ex-timeout)/result.json")"
+assert_contains "$ex_result" '"excluded_runs": 2' \
+  "analyze records excluded_runs:2 (both agent_exit=124 and agent_exit=2 dropped)"
+# A_mean is over the 2 clean A rows (5.0+5.5)/2 = 5.25, NOT (5.0+0+5.5)/3 = 3.5
+assert_contains "$ex_result" '"A_mean": 5.250000' \
+  "A_mean computed from clean rows only (excluded $0 timeout row)"
+assert_contains "$ex_result" '"B_mean": 4.250000' \
+  "B_mean computed from clean rows only (excluded $0 error row)"
+
+# 11) Report banner surfaces the exclusions
+ex_report_out="$(EXP report ex-timeout 2>&1)"
+assert_contains "$ex_report_out" "Excluded 2 of 6 runs" \
+  "report banner names the excluded count"
+assert_contains "$ex_report_out" "agent_exit ≠ 0" \
+  "report banner names the cause (agent_exit ≠ 0)"
+
+# 12) Report suppresses degenerate CI when verdict = underpowered
+# 1 paired task → underpowered → CI is mathematically a point. Don't print
+# the degenerate [x.xx, x.xx] numbers — they look precise but are misleading.
+EXP new under-1 --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$nw_repo" >/dev/null
+cat > "$(exp_dir_for under-1)/runs.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t1","arm":"B","rep":0,"cost_usd":3.5,"success":true,"agent_exit":0,"verify_exit":0}
+EOF
+EXP analyze under-1 --seed 7 --bootstrap 200 >/dev/null
+under_report_out="$(EXP report under-1 2>&1)"
+assert_contains "$under_report_out" "(insufficient data)" \
+  "underpowered report replaces CI numerics with 'insufficient data'"
+# The conservative-savings line is also suppressed for the same reason —
+# a CI that's a single point doesn't bound anything to be conservative about.
+assert_contains "$under_report_out" "Conservative savings rate: not computed" \
+  "underpowered report suppresses the conservative-savings number"
+# But result.json STILL carries the raw numbers — analysts can still see them
+under_result="$(cat "$(exp_dir_for under-1)/result.json")"
+assert_contains "$under_result" '"ci95":' \
+  "result.json still carries raw ci95 array (only the report suppresses it)"
+
 # ── merge ─────────────────────────────────────────────────────
 # Synthesize a B-wins runs.jsonl for the prompt-debt experiment, analyze, merge.
 synth_runs() {

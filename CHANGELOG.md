@@ -3,6 +3,52 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.12.1 — Four honesty fixes from a real-world 0.11.x run
+
+Real feedback from running the experiment engine on a `synthesize-engine`
+audit-driven A/B (the "slim CLAUDE.md" experiment from the 2026-05-27
+session). Four bugs that made the report dishonest in edge cases:
+
+1. **`analyze` averaged $0 timeout rows into the cost mean.** When a
+   replicate hit the agent-invocation `timeout_s` wall, claude was killed
+   before emitting the final JSON; `cost_usd` parsed as 0 with
+   `agent_exit=124`. Today `analyze` averaged that into the arm, dragging
+   the mean down and producing a misleading "B is $1.43 more expensive"
+   verdict. Now: rows with `agent_exit ≠ 0` are excluded; `result.json`
+   carries `excluded_runs: N`; `report` prints a banner ("Excluded 1 of 6
+   runs (agent_exit ≠ 0 — timeout or error). Cost/success means use clean
+   runs only.").
+
+2. **Degenerate CI printed as if it were precise.** A 1-paired-task analysis
+   makes the bootstrap mathematically degenerate — all resamples pick the
+   same point, so the CI collapses to `[1.43, 1.43]`. The verdict already
+   said "underpowered," but the CI line still printed those numbers as
+   though they meant something. Now: when `verdict ~ /^underpowered/`, the
+   report shows `(insufficient data)` for both the cost and success CIs,
+   and the conservative-savings line is suppressed ("not computed —
+   insufficient data"). Raw numbers stay in `result.json` for the record;
+   only the human-facing report suppresses them.
+
+3. **Default `timeout_s: 600` was too tight for realistic tasks.** Ten
+   minutes is fine for a 5-turn refactor; a 60-80-turn coding task hits
+   the wall. Default in scaffolded specs (`new` + `define`) bumped to
+   1200. `run`'s runtime fallback also raised to 1200. The cost gate
+   already names "shorter tasks" as a lever; the *default* shouldn't
+   punish people running realistic-sized ones.
+
+4. **`new`'s auto-detected verify is a regression check, not a
+   task-completion check.** `npm test` / `pytest` / `cargo test` answer
+   "does the suite still pass?" — they don't answer "did the change
+   actually happen?" When `--verify` is omitted and we auto-detect from
+   the manifest, `new` now prints a Note explaining the distinction with
+   an example: `verify: npm test && curl ... | jq '.new_field != null'`.
+   Nudge fires only on auto-detect; user-supplied verifiers stay quiet.
+
+Tests: +13 assertions (excluded-runs banner + math; underpowered CI
+suppression + result.json preservation; default timeout in both define
+and new templates; verify nudge presence on auto-detect, absence on
+explicit). 146 in experiment suite, 400 total; all 11 suites green.
+
 ## 0.12.0 — Cost-vs-magnitude gating: don't run a $60 experiment to prove a $0.10 effect
 
 Promoted from §13 open-question to a real design constraint after the

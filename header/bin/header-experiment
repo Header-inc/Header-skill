@@ -68,7 +68,7 @@
 #   [task:t1]
 #   prompt: tasks/t1.md           # the agent's task description (relative ok)
 #   verify: npm test              # shell cmd; exit 0 = success (Tier 1 oracle)
-#   timeout_s: 600
+#   timeout_s: 1200
 #
 # Env:
 #   HEADER_HOME                 state dir (default: $HOME/.header)
@@ -383,7 +383,7 @@ write_spec() {
       printf '[task:%s]\n' "$tid"
       printf 'prompt: %s\n' "$prompt"
       printf 'verify: %s\n' "$verify"
-      printf 'timeout_s: %s\n\n' "${timeout:-600}"
+      printf 'timeout_s: %s\n\n' "${timeout:-1200}"
     done
   } > "$out"
 }
@@ -439,7 +439,7 @@ cmd_define() {
       printf '# Replace with a real prompt file + verifier (Tier-1 oracle: exit 0 = pass).\n'
       printf 'prompt: tasks/example.md\n'
       printf 'verify: true\n'
-      printf 'timeout_s: 600\n'
+      printf 'timeout_s: 1200\n'
     else
       local t tid pv prompt verify
       for t in "${tasks[@]}"; do
@@ -449,7 +449,7 @@ cmd_define() {
         printf '[task:%s]\n' "$tid"
         printf 'prompt: %s\n' "$prompt"
         printf 'verify: %s\n' "$verify"
-        printf 'timeout_s: 600\n\n'
+        printf 'timeout_s: 1200\n\n'
       done
     fi
   } > "$spec"
@@ -622,10 +622,18 @@ USAGE
     task_arg="$(prompt_user "Task — file path (relative to repo) OR a one-line inline prompt" "")"
     [ -n "$task_arg" ] || { err "a task is required (use --task PATH-OR-INLINE)"; return 1; }
   fi
+  # Track whether verify came from auto-detection so we can nudge the user
+  # afterwards. Auto-detected verifiers (npm test / pytest / cargo test / ...)
+  # are REGRESSION checks: "the suite still passes". They are NOT task-completion
+  # checks ("the new field exists in the response"). For experiments where the
+  # arm is supposed to MAKE something happen, that distinction matters — the
+  # verifier needs to assert the change, not just absence of regressions.
+  local verify_autodetected=0
   if [ -z "$verify_arg" ]; then
     local guess; guess="$(auto_detect_verify "$repo")"
     verify_arg="$(prompt_user "Verify command (shell; exit 0 = success)" "$guess")"
     [ -n "$verify_arg" ] || verify_arg="$guess"
+    [ "$verify_arg" = "$guess" ] && verify_autodetected=1
   fi
   [ -n "$replicates" ] || replicates="$(prompt_user "Replicates per (task, arm)" "3")"
   [ -n "$margin" ]     || margin="${margin:-0.02}"
@@ -685,7 +693,7 @@ USAGE
     task_path="$(write_inline_task "$dir" "$task_id" "$task_arg")"
   fi
 
-  local tasks_blob; tasks_blob="${task_id}|${task_path}|${verify_arg}|600"
+  local tasks_blob; tasks_blob="${task_id}|${task_path}|${verify_arg}|1200"
 
   local spec="$dir/spec"
   write_spec "$spec" "$id" "$desc" "$repo" "$replicates" "${margin:-0.02}" "$arms_blob" "$tasks_blob" "$ledger_key"
@@ -706,6 +714,17 @@ USAGE
     model-swap)           echo "  Arms:      A=$from, B=$to" ;;
     *)                    echo "  Arms:      $(printf '%s\n' "$arms_blob" | awk -F'|' 'NF>0{print $1"="$2}' | paste -sd ", " -)" ;;
   esac
+  if [ "$verify_autodetected" -eq 1 ]; then
+    cat <<EOF
+
+  Note: 'verify' was auto-detected from your project manifest. That command
+  is a REGRESSION check ("the suite still passes"), not a TASK-COMPLETION
+  check. If your arm B is supposed to MAKE something happen (e.g. add a new
+  field, change a behaviour), extend 'verify' to assert the change:
+    e.g. verify: $verify_arg && curl -fsS http://localhost:8000/x | jq '.new_field != null'
+  Edit ~/.header/experiments/$id/spec → [task:t1] → verify: ...
+EOF
+  fi
   echo ""
   echo "  Next:"
   echo "    header-experiment run $id --aa     # noise-floor / harness check FIRST"
@@ -1015,7 +1034,7 @@ EOF
         prompt="$(spec_section_get "$spec" task "$task" prompt)"
         verify="$(spec_section_get "$spec" task "$task" verify)"
         timeout_s="$(spec_section_get "$spec" task "$task" timeout_s)"
-        [ -n "$timeout_s" ] || timeout_s="600"
+        [ -n "$timeout_s" ] || timeout_s="1200"
         local prompt_abs; prompt_abs="$(resolve_task_path "$repo" "$dir" "$prompt")"
         step=$(( step + 1 ))
         printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$step" "$n_runs" "$task" "$arm" "$r" >&2
@@ -1080,6 +1099,12 @@ cmd_analyze() {
     {
       task = jstr($0,"task"); arm = jstr($0,"arm")
       if (task=="" || arm=="") next
+      # Drop rows where the agent itself failed (timeout = 124, other nonzero
+      # exits). On a kill the JSON has no total_cost_usd → cost_usd parses as
+      # 0; averaging $0 rows into a real arm produces a misleading "B is
+      # cheaper" verdict. Filter here, report the count so the user knows.
+      agent_exit = jnum($0,"agent_exit")
+      if (agent_exit != 0) { Excluded++; next }
       cost = jnum($0,"cost_usd"); succ = jbool($0,"success")
       key = task SUBSEP arm
       Reps[key]++; SumC[key]+=cost; SumS[key]+=succ
@@ -1087,7 +1112,13 @@ cmd_analyze() {
       if (!(arm  in Aseen)) { Aseen[arm]=1;  Arms[++na]=arm }
     }
     END {
-      if (na < 2) { print "analyze: need 2 arms in runs.jsonl" > "/dev/stderr"; exit 1 }
+      if (na < 2) {
+        if (Excluded > 0)
+          printf "analyze: need 2 arms in runs.jsonl (only %d after excluding %d agent-error row(s))\n", na, Excluded > "/dev/stderr"
+        else
+          print "analyze: need 2 arms in runs.jsonl" > "/dev/stderr"
+        exit 1
+      }
       A = Arms[1]; B = Arms[2]
       # Per-task means per arm; per-task pair-diff (B − A).
       n_paired = 0
@@ -1163,6 +1194,7 @@ cmd_analyze() {
       printf "  \"arms\": [\"%s\", \"%s\"],\n", A, B >> out_file
       printf "  \"tasks_paired\": %d,\n", n_paired >> out_file
       printf "  \"n_per_arm\": [%d, %d],\n", n_per_arm_A, n_per_arm_B >> out_file
+      printf "  \"excluded_runs\": %d,\n", Excluded+0 >> out_file
       printf "  \"bootstrap_iters\": %d,\n", boots >> out_file
       printf "  \"non_inferiority_margin\": %s,\n", margin >> out_file
       printf "  \"cost\": {\n" >> out_file
@@ -1226,7 +1258,16 @@ cmd_report() {
       gsub(/^[[:space:]]+|[[:space:]]+$|"/,"",A); gsub(/^[[:space:]]+|[[:space:]]+$|"/,"",B)
       tasks = jnum(blob,"tasks_paired"); boots = jnum(blob,"bootstrap_iters")
       margin = jnum(blob,"non_inferiority_margin")
+      excluded = jnum(blob,"excluded_runs")
       verdict = jstr(blob,"verdict"); reason = jstr(blob,"reason")
+      n_per_arm_pair = jpair(blob,"n_per_arm")
+      split(n_per_arm_pair, NPA, ","); n_a = NPA[1]+0; n_b = NPA[2]+0
+      # Suppress the bootstrap CI string when paired tasks make it degenerate.
+      # 1 task → all bootstrap resamples are identical (the CI collapses to a
+      # point). The verdict already flags this as "underpowered"; the CI line
+      # should match by saying "insufficient data," not by printing apparent
+      # precision that misleads.
+      ci_degenerate = (verdict ~ /^underpowered/) ? 1 : 0
 
       # Cost block — pull from the {} after "cost":
       cb = blob; sub(/.*"cost":[[:space:]]*{/,"",cb); sub(/}.*/,"",cb)
@@ -1238,22 +1279,36 @@ cmd_report() {
       spair = jpair(sb_,"ci95"); split(spair, SI, ","); slo=SI[1]+0; shi=SI[2]+0
 
       printf "\nExperiment report — %s\n", (mode=="aa" ? "A/A (noise floor)" : "A vs B")
-      printf "  Arms: %s vs %s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n\n", A, B, tasks, boots, margin
+      printf "  Arms: %s vs %s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n", A, B, tasks, boots, margin
+      if (excluded > 0) {
+        total_intended = n_a + n_b + excluded
+        printf "  Excluded %d of %d runs (agent_exit ≠ 0 — timeout or error). Cost/success means use clean runs only.\n", excluded, total_intended
+      }
+      printf "\n"
       diff_label = sprintf("%s − %s", B, A)
       printf "  COST (USD, paired per-task means)\n"
       printf "    %s mean: %.4f\n", A, ca
       printf "    %s mean: %.4f\n", B, cbm
-      printf "    %s   : %.4f   95%% CI [%.4f, %.4f]\n\n", diff_label, cd, clo, chi
+      if (ci_degenerate)
+        printf "    %s   : %.4f   95%% CI (insufficient data)\n\n", diff_label, cd
+      else
+        printf "    %s   : %.4f   95%% CI [%.4f, %.4f]\n\n", diff_label, cd, clo, chi
       printf "  SUCCESS (rate, paired per-task means)\n"
       printf "    %s rate: %.3f\n", A, sar
       printf "    %s rate: %.3f\n", B, sbr
-      printf "    %s  : %+.3f   95%% CI [%+.3f, %+.3f]\n\n", diff_label, sd, slo, shi
+      if (ci_degenerate)
+        printf "    %s  : %+.3f   95%% CI (insufficient data)\n\n", diff_label, sd
+      else
+        printf "    %s  : %+.3f   95%% CI [%+.3f, %+.3f]\n\n", diff_label, sd, slo, shi
       printf "  Verdict: %s\n", verdict
       if (reason != "") printf "    %s\n", reason
       printf "\n"
       if (mode != "aa") {
         printf "  Decision rule (design doc §6.5): merge B iff cost CI upper bound < 0 AND success lower bound ≥ −δ.\n"
-        printf "  Conservative savings rate: max(0, -upper_CI(diff_cost)) = %.4f USD/task — never bill the optimistic tail.\n", (chi < 0 ? -chi : 0)
+        if (ci_degenerate)
+          printf "  Conservative savings rate: not computed (insufficient data — need ≥2 paired tasks for a CI).\n"
+        else
+          printf "  Conservative savings rate: max(0, -upper_CI(diff_cost)) = %.4f USD/task — never bill the optimistic tail.\n", (chi < 0 ? -chi : 0)
       } else {
         printf "  A/A interpretation: a clean A/A has a cost CI containing 0. If it doesn'\''t, ordering /\n"
         printf "  cache warmup / temporal drift is contaminating the pipeline — fix before trusting the A/B.\n"
