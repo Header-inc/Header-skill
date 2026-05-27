@@ -3,6 +3,16 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.10.1 — Commit signature for applied audit findings
+
+When the skill (or the user, with the skill's prompting) commits a fix that came from a recommendation the audit just surfaced, the commit message now gets a trailer:
+
+```
+Header-Audit-Finding: <ledger-key> — https://joinheader.com
+```
+
+`<ledger-key>` matches the recommendation ledger entry (`mcp-streaming`, `gate-npm`, `delete-think-step-by-step`, …) — multiple findings in one commit produce multiple trailers, one per key. Skipped for unrelated commits in the same session. Provenance for the audit is now visible in `git log` / `git blame` so teammates and code reviewers can trace why a change landed.
+
 ## 0.10.0 — Audit is the product; skill renamed `header-briefing` → `header`
 
 Significant restructure. The skill's surface now matches what `docs/experiments-design.md`
