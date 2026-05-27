@@ -14,7 +14,7 @@ sb="$(make_sandbox)"
 env -i PATH="$PATH" HOME="$sb" sh "$INSTALLER" >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "install.sh exits 0"
 
-dest="$sb/.claude/skills/header-briefing"
+dest="$sb/.claude/skills/header"
 assert_eq "yes" "$([ -f "$dest/SKILL.md" ] && echo yes || echo no)" "SKILL.md installed"
 assert_eq "yes" "$([ -f "$dest/VERSION" ] && echo yes || echo no)" "VERSION installed"
 assert_eq "yes" "$([ -x "$dest/bin/header-config" ] && echo yes || echo no)" \
@@ -33,5 +33,18 @@ assert_eq "yes" "$([ -f "$dest/SKILL.md" ] && echo yes || echo no)" \
   "skill still present and intact after re-run"
 assert_eq "" "$(ls -d "$dest".* 2>/dev/null)" \
   "no .new/.bak staging dirs left behind after the atomic swap"
+
+# Legacy header-briefing/ at the same skills root must be removed by the install.
+# Migration guard: a 0.9.x install must not coexist with the 0.10.0+ header/.
+sb="$(make_sandbox)"
+legacy="$sb/.claude/skills/header-briefing"
+mkdir -p "$legacy/bin"
+printf 'stale\n' > "$legacy/SKILL.md"
+env -i PATH="$PATH" HOME="$sb" sh "$INSTALLER" >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "install.sh exits 0 with a legacy header-briefing/ present"
+assert_eq "yes" "$([ -f "$sb/.claude/skills/header/SKILL.md" ] && echo yes || echo no)" \
+  "new header/ installed alongside the legacy folder"
+assert_eq "no" "$([ -e "$legacy" ] && echo yes || echo no)" \
+  "legacy header-briefing/ is removed after install (no stale /header-briefing command)"
 
 t_done

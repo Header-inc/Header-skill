@@ -1,18 +1,24 @@
 #!/usr/bin/env sh
-# install.sh — install the Header briefing skill.
+# install.sh — install the Header skill.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
 #   ./install.sh                 # from a clone of this repo
 #
-# Installs the header-briefing/ skill folder into your agent's skills directory
-# (Claude Code, plus Codex if `codex` is on PATH). Idempotent — re-run to update.
+# Installs the header/ skill folder into your agent's skills directory (Claude
+# Code, plus Codex if `codex` is on PATH). Idempotent — re-run to update.
+#
+# Migration: as of 0.10.0 the skill renamed from "header-briefing" to "header".
+# After a successful install of header/, this script removes any legacy
+# header-briefing/ directory from the same skills root so the old /header-briefing
+# command stops appearing. User state lives under ~/.header/ and is untouched.
 #
 # POSIX sh — no bashisms (it is commonly run piped to `sh`).
 set -eu
 
 REPO_URL="https://github.com/Header-inc/Header-skill.git"
 TARBALL_URL="https://github.com/Header-inc/Header-skill/archive/refs/heads/main.tar.gz"
-SKILL_NAME="header-briefing"
+SKILL_NAME="header"
+LEGACY_SKILL_NAME="header-briefing"
 
 log() { printf '  %s\n' "$1"; }
 
@@ -84,9 +90,18 @@ for base in $TARGETS; do
     mv "$staging" "$dest"
     log "Installed -> $dest"
   fi
+  # Remove the legacy header-briefing/ install at this same skills root, if any.
+  # The new header/ is now live; the old folder would only register a stale
+  # /header-briefing command pointing at outdated content. State at ~/.header/ is
+  # outside the skill dir and is untouched.
+  legacy="$base/$LEGACY_SKILL_NAME"
+  if [ -d "$legacy" ]; then
+    rm -rf "$legacy"
+    log "Removed legacy -> $legacy"
+  fi
 done
 
 [ -n "$CLEANUP" ] && rm -rf "$CLEANUP"
 
 log ""
-log "Done. Start a new agent session, then run: /header-briefing"
+log "Done. Start a new agent session, then run: /header"

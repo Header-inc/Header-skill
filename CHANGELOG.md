@@ -1,7 +1,87 @@
 # Changelog
 
-Notable changes to the Header briefing skill. Format roughly follows
+Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
+
+## 0.10.0 — Audit is the product; skill renamed `header-briefing` → `header`
+
+Significant restructure. The skill's surface now matches what `docs/experiments-design.md`
+already said about the thesis: the briefing is the **distribution wedge**, not the product.
+The product is the audit + (soon) experiments.
+
+- **Renamed `/header-briefing` → `/header`.** The skill folder is now `header/` (was
+  `header-briefing/`) and `name: header` in the frontmatter. `/header-audit` and
+  `/header-briefing` remain in `when_to_use` so natural-language invocation keeps working.
+- **`install.sh` migrates 0.9.x installs.** After a successful install of `~/.claude/skills/header/`
+  (and `~/.codex/skills/header/` when codex is detected), the installer removes any
+  legacy `~/.claude/skills/header-briefing/` at the same skills root — the old command
+  no longer registers. User state at `~/.header/` is outside the skill dir and is
+  preserved (config, credentials, ledger, repo bindings, prices, telemetry).
+- **Recommended bump to `min_supported: 0.10.0`** on the server-side `/api/v2/skill/version`
+  response. Pre-0.10.0 clients are still functional for the briefing-fetch flow, but the
+  refactor changed the preamble's mode signal (`HEADER_MODE` → `HEADER_INSTALL`), and the
+  audit-led flow expects the new `bin/` layout to be the source of truth — forcing the
+  upgrade via `UPDATE_REQUIRED` aligns every client on the new surface.
+
+### Audit-led flow (default)
+
+- **Every invocation runs the audit.** `header-audit harness` + `header-audit deps` always
+  run; the briefing is **input** to the audit, not the primary output. Items in the
+  briefing's `key_developments` about the project's stack become recommendations alongside
+  the local scans.
+- **Cross-reference is the headline.** Step 4 builds one ranked recommendation list out of
+  audit findings + briefing items + known issues, split into **apply-now** vs
+  **`[Experiment · coming soon]`** (the latter still beta; the audit section header is no
+  longer labelled beta).
+- **Dropped the `key_developments` output modifier.** `summary` and `sources` modifiers
+  remain for the "just the news / just the links" use case; the default invocation is
+  always the full audit + recommendations.
+
+### Onboarding restructure
+
+- **No more standing "audit offer" — the audit just runs.** Today the skill offered the
+  audit after every briefing; in 0.10.0 the audit is the default flow, so the offer
+  disappears. `AUDIT_OFFER: due` is gone from the preamble.
+- **Custom-topic offer follows the audit (once per repo).** Framed as the upsell — "these
+  recommendations came from a generic topic; we can tailor a topic to *this* repo so future
+  audits pull in sources about your stack." Three-way choice (Yes / Not for this repo / No,
+  never ask). Gated by per-repo `TOPIC_OFFERED`. The signup funnel collapses into the
+  "Yes" branch — no separate funnel step.
+- **Per-repo offers chain in the briefing-generation wait.** When the user accepts the
+  custom topic, the briefing generates server-side (~minutes); the skill fills that wait
+  with the bind-to-repo, schedule, and team-config offers (each gated by their per-repo
+  flags as before). Same gating, less dead air.
+- **Telemetry consent fires last, once per machine.**
+
+### Classic mode removed
+
+- **Deprecated `HEADER_MODE: classic` entirely.** Classic mode was the codex-review
+  honesty-fix for passive-rule harnesses (no shell, no interactive turn) — but the audit
+  requires `bin/header-audit` to run, so a passive-rule harness can't deliver the product
+  anyway. The preamble now echoes `HEADER_INSTALL: ok` or `HEADER_INSTALL: missing`; on
+  missing, the skill **refuses to run** and prints one-line install instructions. No
+  fallback flow.
+- Every "skip in classic mode" caveat in the SKILL.md disappears. `preamble.test.sh` no
+  longer tests for `HEADER_MODE: classic`.
+
+### Documentation
+
+- `README.md` and `llms.txt` lead with audit/optimize positioning. The briefing is
+  documented as input to the audit, not as the headline deliverable. All
+  `~/.claude/skills/header-briefing/` paths updated to `~/.claude/skills/header/`.
+- `MANUAL-VERIFICATION.md` rewritten: Scenario D is now "install missing (refusal)" instead
+  of "classic mode (graceful degradation)"; Scenarios A-C reflect the audit-led + custom-topic
+  flow; new Part 2 step verifies the install-time migration of a legacy `header-briefing/`.
+- `.gitignore`, `.githooks/pre-commit`, `.github/workflows/test.yml` updated to the new
+  `header/` path.
+
+### Why now
+
+`docs/experiments-design.md` (added in 0.8.x) commits to the thesis: continuous
+hypothesis → experiment → merge-back. The audit *is* the hypothesis generator; the briefing
+is the daily input feed; the experiment runner is the destination. The skill's surface had
+been straddling "news reader with an audit offer" and "audit with a news feed" — 0.10.0
+commits to the latter.
 
 ## 0.9.2 — `npx skills` as the recommended install
 

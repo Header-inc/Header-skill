@@ -23,4 +23,4 @@ jobs:
         run: python3 -m pip install --quiet --user pyyaml || true
 
       - name: Run skill test suite
-        run: bash header-briefing/test/run.sh
+        run: bash header/test/run.sh

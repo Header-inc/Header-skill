@@ -13,7 +13,7 @@ PREAMBLE="$(awk '
   inpre && incode               { print }
 ' "$SKILL_DIR/SKILL.md")"
 
-assert_contains "$PREAMBLE" "HEADER_MODE:" "preamble bash block extracted from SKILL.md"
+assert_contains "$PREAMBLE" "HEADER_INSTALL:" "preamble bash block extracted from SKILL.md"
 
 # run_preamble <skill_dir_token> <home> [EXTRA_ENV=val ...]
 # Substitutes {SKILL_DIR}, runs the block in a clean env, returns stdout+stderr.
@@ -24,26 +24,26 @@ run_preamble() {
   env -i PATH="$PATH" HOME="$home" HEADER_HOME="$home/.header" "$@" bash -c "$block" 2>&1
 }
 
-# ── classic mode: nothing resolves ────────────────────────────
+# ── install missing: nothing resolves ─────────────────────────
 sb="$(make_sandbox)"
 out="$(run_preamble "$sb/nope" "$sb")"
-assert_contains "$out" "HEADER_MODE: classic" "no bin/ anywhere → classic mode"
-assert_contains "$out" "HEADER_NOTICE:" "classic mode prints the reinstall notice"
+assert_contains "$out" "HEADER_INSTALL: missing" "no bin/ anywhere → HEADER_INSTALL: missing"
+assert_contains "$out" "HEADER_NOTICE:" "missing install prints the reinstall notice"
 
-# ── enterprise via {SKILL_DIR} ────────────────────────────────
+# ── install ok via {SKILL_DIR} ────────────────────────────────
 sb="$(make_sandbox)"
 out="$(run_preamble "$SKILL_DIR" "$sb")"
-assert_contains "$out" "HEADER_MODE: enterprise" "{SKILL_DIR} with bin/ → enterprise mode"
+assert_contains "$out" "HEADER_INSTALL: ok" "{SKILL_DIR} with bin/ → HEADER_INSTALL: ok"
 assert_contains "$out" "HEADER_BIN: $SKILL_DIR/bin/header-config" "HEADER_BIN echoes the resolved header-config path"
-assert_eq "yes" "$([ -d "$sb/.header" ] && echo yes || echo no)" "enterprise mode creates ~/.header"
+assert_eq "yes" "$([ -d "$sb/.header" ] && echo yes || echo no)" "ok install creates ~/.header"
 
-# ── enterprise via a hardcoded fallback path ──────────────────
+# ── install ok via a hardcoded fallback path ──────────────────
 sb="$(make_sandbox)"
-mkdir -p "$sb/.claude/skills/header-briefing/bin"
-cp "$SKILL_DIR/bin/header-config" "$sb/.claude/skills/header-briefing/bin/header-config"
-chmod +x "$sb/.claude/skills/header-briefing/bin/header-config"
+mkdir -p "$sb/.claude/skills/header/bin"
+cp "$SKILL_DIR/bin/header-config" "$sb/.claude/skills/header/bin/header-config"
+chmod +x "$sb/.claude/skills/header/bin/header-config"
 out="$(run_preamble "$sb/bogus-not-real" "$sb")"
-assert_contains "$out" "HEADER_MODE: enterprise" "fallback path ~/.claude/skills/... resolves → enterprise"
+assert_contains "$out" "HEADER_INSTALL: ok" "fallback path ~/.claude/skills/header → ok"
 
 # ── interactivity — ★ non-interactive regression ──────────────
 sb="$(make_sandbox)"
