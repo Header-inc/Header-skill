@@ -1,8 +1,11 @@
 # Experiments & Cost Analytics — design spec
 
 Status: draft / for review. **Phase 1 (`bin/header-cost`) shipped** (v0.8.0–0.8.2; now states API-vs-subscription
-cost basis). Verifiers & task mining (§11) and the `header-experiment` interface (§12) are **specified, not
-built**. The runner (Phase 2+) is not yet implemented.
+cost basis). **Phase 2 MVP (`bin/header-experiment`) shipped as beta** (v0.11.0): `define / validate / run / analyze /
+report` with worktree-isolated runs, paired-by-task bootstrap CIs, an A/A noise-floor mode, and the §6.5
+decision rule. Verifiers & task mining (§11) and the `merge` subcommand (§12) are **specified, not yet built**;
+the runner currently expects user-authored task specs and the local Claude Code headless adapter
+(`claude --print --output-format json`) or a custom adapter via `$HEADER_EXPERIMENT_ADAPTER`.
 Aligns with the Header pre-seed thesis: *automated experimentation for AI coding agents.*
 Relates to: `bin/header-audit` (hypothesis generation), `bin/header-ledger`
 (`wanted`/`applied`), `bin/header-telemetry` (`experiment_interest`), the team-config layer
@@ -334,10 +337,16 @@ Engineering pragmatism and the thesis happen to agree. Each step is the next sen
    same tokens is a guess) — it just points at experiments. *Without a trustworthy number there is no Pro
    revenue, so the meter must not emit guesses.* Next: feed it real usage automatically (OTEL / a usage log)
    and wire per-model spend into the audit so routing *candidates* (to be proven, not projected) surface.
-2. **A/A harness + measurement plumbing** — the foundation: capture usage, isolate runs, estimate σ,
-   validate the harness. This is what makes "statistically significant" real (and billable).
-3. **Prompt-debt experiment (MVP) + significance-gated merge-back** — first end-to-end loop, closing on
-   the deck's "merge wins back into the harness configuration."
+2. **A/A harness + measurement plumbing** — ✅ **shipped as beta in `bin/header-experiment` (v0.11.0)**:
+   per-run worktree isolation, usage capture from the Claude Code headless adapter, paired-by-task
+   bootstrap CIs, and `run --aa` as the noise-floor / harness-validation mode. What makes
+   "statistically significant" real (and billable). Next: σ estimation surfaced in `analyze`, automatic
+   replication-size suggestion from observed σ + MDE.
+3. **Prompt-debt experiment (MVP) + significance-gated merge-back** — the analyze/report side of the loop
+   is shipped: the §6.5 decision rule (cost CI < 0 AND success non-inferior within δ) prints in every
+   report. The runnable A/B for prompt-debt deletion works today *if* the user authors a task with a
+   verifier; **the gap is `header-experiment merge`** (auto-apply the winning arm's diff to the harness,
+   gated and review-able) — closing on the deck's "merge wins back into the harness configuration."
 4. **Cross-customer proven-changes library** — the moat. Pull this *earlier* than pure eng-sequencing
    suggests, because aggregation is the defensibility vs Cursor/Kiro/model providers. Lead with the two
    learnings the deck names: **model migrations + dependency upgrades.**
@@ -517,8 +526,9 @@ ensemble). New task types add a verifier without touching the runner.
 - `header-cost` → real usage capture + cost basis (API vs subscription).
 - `header-ledger` / `header-telemetry` → record outcomes + consent-gated aggregate submit (the moat).
 
-**Status: design only.** Build order: this lands as Phase 2/3 in §10, *after* `header-cost` (shipped) and
-the A/A harness. The verifier MVP (§11) is the first runnable slice.
+**Status: MVP shipped as beta (v0.11.0).** The runnable subcommands are `define / validate / run / analyze /
+report` (with `--aa`); `mine` (§11) and `merge` are still spec-only. Build order: this lands as Phase 2 in §10,
+*after* `header-cost` (shipped). The verifier MVP (§11) is the next runnable slice.
 
 ---
 

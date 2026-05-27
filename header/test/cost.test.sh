@@ -120,10 +120,11 @@ assert_contains "$hdr" "USD at API rates" "report header is labelled API rates"
 assert_contains "$(printf '%s\n' '{"model":"opus","input_tokens":1,"output_tokens":1}' | COST report --json 2>/dev/null)" \
   '"basis":"api_rates"' "report --json carries the basis field"
 
-# ── savings: NO projection — only the experiments pointer ─────
+# ── savings: NO projection — only the experiment-loop pointer ─
 # Projections without measurement are guesses; the tool must never emit one.
 sav="$(printf '%s\n' '{"model":"opus","input_tokens":1000000,"output_tokens":1000000}' | COST savings --from opus --to sonnet 2>&1)"
-assert_contains     "$sav" "experiments are coming soon" "savings points at experiments instead of guessing"
+assert_contains     "$sav" "header-experiment"      "savings points at header-experiment for a real A/B"
+assert_contains     "$sav" "measured spend only"    "savings restates that header-cost reports measured only"
 assert_not_contains "$sav" "%"          "savings prints no percentage"
 assert_not_contains "$sav" "Projection" "savings makes no projection claim"
 assert_not_contains "$sav" "savings:"   "savings prints no savings figure"

@@ -81,7 +81,7 @@ Every invocation:
 1. **Runs the audit** locally — `header-audit harness` (prompt-config debt, `CLAUDE.md`/`AGENTS.md` size, model declaration, cargo-cult patterns, Bash-tool permission posture) and `header-audit deps` (ecosystems, install-cooldown gate, supply-chain posture).
 2. **Fetches the latest briefing** for the resolved topic (arg > personal `REPO_TOPIC` > committed `TEAM_TOPIC` > default `Self Improving Agent`).
 3. **Cross-references** the briefing's `key_developments` + `summary` against your actual stack (read from package manifests, `CLAUDE.md`, README, recent git activity).
-4. **Surfaces unified recommendations** — a scorecard plus a ranked list. Findings split into **apply-now** (deletions, the supply-chain gate, security patches — deterministic, low-risk) and **`[Experiment · coming soon]`** _(beta)_ — changes whose payoff must be proven (model swaps, major upgrades, behavioral rewrites). Experiment execution isn't built yet; the skill records which experiments you want so they're prioritized.
+4. **Surfaces unified recommendations** — a scorecard plus a ranked list. Findings split into **apply-now** (deletions, the supply-chain gate, security patches — deterministic, low-risk) and **`[Experiment]`** _(beta)_ — changes whose payoff must be proven (model swaps, major upgrades, behavioral rewrites). For these, `header-experiment` (see below) runs a local A/B against your tasks; the skill itself doesn't auto-experiment yet.
 5. **Offers to implement** the apply-now items right there.
 
 Your project data never leaves the machine — the audit and the cross-reference are local; only the briefing is fetched from `joinheader.com`.
@@ -110,7 +110,22 @@ The first piece of the optimization platform: a local "billing meter" that repor
 find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
 ```
 
-`report` ranks spend by model — real token counts × verified prices, with cache writes priced by their real 5-minute/1-hour duration and legacy Opus (3.x/4.0/4.1) priced apart from current Opus. It does **not** guess what switching models would save: a price re-rating of the same tokens is a projection, not a measurement, so `header-cost savings` only points at the experiment loop (*"Header experiments are coming soon…"*) that would actually prove a switch. Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report` always prints which prices it used and how fresh.
+`report` ranks spend by model — real token counts × verified prices, with cache writes priced by their real 5-minute/1-hour duration and legacy Opus (3.x/4.0/4.1) priced apart from current Opus. It does **not** guess what switching models would save: a price re-rating of the same tokens is a projection, not a measurement, so `header-cost savings` only points at the experiment loop (`header-experiment`, below) that would actually prove a switch. Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report` always prints which prices it used and how fresh.
+
+### Experiments (beta — MVP, local-only)
+
+```bash
+header-experiment define my-exp
+# edit ~/.header/experiments/my-exp/spec: arms (model + optional overrides), tasks (prompt + verify), replicates
+header-experiment validate my-exp
+header-experiment run my-exp --aa      # noise-floor / harness check FIRST
+header-experiment run my-exp           # the A/B
+header-experiment analyze my-exp && header-experiment report my-exp
+```
+
+The first runnable slice of the optimization-by-experimentation loop. Each `(task × arm × replicate)` runs in an isolated `git worktree` at a pinned commit; `--aa` validates the harness has no ordering / cache-warmup / drift confound before you trust any A/B. Stats: paired-by-task **bootstrap 95% CI on per-task cost differences**, with **success rate non-inferiority** (lower CI bound ≥ −δ, default δ = 2%) as the merge gate. Verdict is one of `B wins (cost lower, success non-inferior)` / `A wins` / `no proven win` / `underpowered` / `A/A BIASED` — and the report prints the **conservative savings rate** = `max(0, -upper_CI(diff_cost))` so the number you quote survives an audit.
+
+Out of scope for the MVP (planned in [ROADMAP](ROADMAP.md)): mining tasks from git history, auto-applying the winning arm's diff, LLM judges, and cross-customer aggregate submission. Local-only by design — nothing leaves the machine.
 
 **Billing basis:** the `$` figures are **API (pay-per-token) rates** (the tool says so). On a Claude subscription (Pro $20 / Max $100 / $200 a month) you don't pay these — the `$` is a shadow/API-equivalent number and your real constraint is **usage limits**, so spend reads as cap consumption rather than dollars off a bill.
 

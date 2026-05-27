@@ -3,6 +3,49 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.11.0 — `header-experiment` MVP (beta): local A/B + A/A for harness changes
+
+The first runnable slice of the optimization-by-experimentation loop. **Beta —
+local-only, interface may still shift.** New helper `bin/header-experiment` with
+five subcommands:
+
+- `define <id>` — scaffold a spec (flat `key: value` lines + repeated `[arm:X]` /
+  `[task:Y]` sections) under `~/.header/experiments/<id>/`.
+- `validate <id>` — lint the spec.
+- `run <id> [--aa] [--k N] [--yes] [--adapter CMD]` — execute the matrix in
+  isolated `git worktree`s at a pinned commit. Each `(task × arm × replicate)`
+  invokes the agent (default: `claude --print --output-format json`), parses
+  usage from the JSON, then runs the user-specified `verify` command as the
+  Tier-1 oracle (exit 0 = success). `--aa` is the noise-floor / harness validator
+  (§3 of the experiments design); a tests-only stub adapter is wired via
+  `$HEADER_EXPERIMENT_ADAPTER` so the test suite never spends real tokens.
+- `analyze <id> [--aa]` — pair by task, bootstrap CI (default 2000 iters,
+  seedable) on per-task differences for cost (USD) and success rate.
+- `report <id> [--aa]` — pretty scorecard with the §6.5 decision rule (merge B
+  iff cost CI upper bound < 0 AND success lower bound ≥ −δ) plus a
+  **conservative savings rate** = `max(0, -upper_CI(diff_cost))` so we never
+  bill the optimistic tail.
+
+**Cost gate.** `run` refuses to launch silently — it states the invocation count
+(`tasks × arms × replicates`) and prompts for confirmation. `--yes` skips it.
+
+**Verdicts** are explicit about the failure modes that look like wins:
+- `underpowered` — `<5` paired tasks; the bootstrap is too tight to call.
+- `no proven win` — cost favorable but success regressed beyond δ, or cost CI
+  contains 0.
+- `A/A BIASED` — cost CI for an A/A excludes 0; the harness is contaminated
+  (ordering / cache warmup / temporal drift), fix it before trusting the A/B.
+
+**Explicit cuts (not yet built; tracked in [ROADMAP](ROADMAP.md)):**
+- `header-experiment mine` — git-history task mining (§11 of design).
+- `header-experiment merge` — auto-apply the winning arm's diff to the harness.
+- LLM judges, multi-comparison FDR / sequential analysis, cross-customer
+  aggregate submit, non-Claude adapter presets.
+
+`SKILL.md` gains a short "Experiments" section pointing the agent at the
+four-step user-driven loop; the `[Experiment]` label (formerly `[Experiment ·
+coming soon]`) now points at this MVP for users who want to drive a local A/B.
+
 ## 0.10.2 — Custom-topic offer: per-repo only, no global opt-out
 
 The post-audit custom-topic offer now has three options, and **none of them

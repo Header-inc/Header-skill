@@ -1,0 +1,795 @@
+#!/usr/bin/env bash
+# header-experiment — BETA. Local A/B (and A/A) experimentation for AI-agent
+# harness changes. Runs the loop the rest of the skill is built around:
+#
+#   define → run → analyze → report
+#
+# Each run executes (task × arm × replicate) in an isolated worktree at a pinned
+# commit, captures real usage via the Claude Code headless adapter
+# (`claude -p --output-format json`), then runs a user-specified verifier. The
+# analyser pairs by task, bootstraps a 95% CI on per-task differences, and emits
+# a verdict against the deck's rule: B wins only if cost CI < 0 AND success is
+# non-inferior within δ. Local-only — nothing leaves the machine.
+#
+# MVP scope (out: git-history mining; auto-merge of the winning arm; LLM judges;
+# FDR / sequential analysis; non-Claude adapters; cross-customer aggregate
+# submit). All planned — see docs/experiments-design.md §§11–12.
+#
+# Usage:
+#   header-experiment define <id> [--description T] [--arm LABEL=model] ...
+#                               Scaffold ~/.header/experiments/<id>/ with a
+#                               template `spec` file (flat key:value + repeated
+#                               [arm:X] / [task:Y] sections — edit by hand).
+#   header-experiment validate <id>
+#                               Lint the spec: at least one task, ≥2 arms,
+#                               replicates ≥1, paths resolvable.
+#   header-experiment run <id> [--aa] [--k N] [--yes] [--seed N] [--adapter CMD]
+#                               Execute the matrix. --aa runs arm A vs itself
+#                               (the noise-floor / harness validator, §3 of the
+#                               design). --k overrides replicates. --yes skips
+#                               the cost-gate prompt. --adapter overrides
+#                               $HEADER_EXPERIMENT_ADAPTER (a script that
+#                               replaces `claude` for testing).
+#   header-experiment analyze <id> [--aa] [--seed N] [--bootstrap N]
+#                               Pair by task, bootstrap CI on B − A for cost
+#                               (continuous) and success (proportion). Write
+#                               result.json (or result-aa.json).
+#   header-experiment report <id> [--aa]
+#                               Pretty scorecard. Per-arm means, per-task diffs,
+#                               CIs, verdict.
+#
+# Files (one experiment dir per id):
+#   ~/.header/experiments/<id>/
+#     spec                  # editable: flat key:value + [arm:X] / [task:Y]
+#     runs.jsonl            # one JSON record per (task,arm,rep) — append-only
+#     runs-aa.jsonl         # same, for --aa mode
+#     result.json           # written by analyze
+#     result-aa.json        # written by analyze --aa
+#     logs/                 # per-run agent stdout/stderr
+#     arms/A/, arms/B/      # OPTIONAL: override files copied into the worktree
+#     tasks/                # OPTIONAL: prompt files (or use absolute paths)
+#
+# Spec format (one example — edit to taste):
+#   id: my-exp
+#   description: opus vs sonnet on auth refactor
+#   repo: .                       # absolute, or relative to the spec dir
+#   commit: HEAD                  # git ref; pinned per design doc §5
+#   replicates: 3
+#   non_inferiority_margin: 0.02  # δ for success-rate non-inferiority (2%)
+#
+#   [arm:A]
+#   model: claude-opus-4-7
+#   overrides_dir:                # blank = no overrides (control)
+#
+#   [arm:B]
+#   model: claude-sonnet-4-6
+#   overrides_dir: arms/B         # optional: dir of files copied into worktree
+#
+#   [task:t1]
+#   prompt: tasks/t1.md           # the agent's task description (relative ok)
+#   verify: npm test              # shell cmd; exit 0 = success (Tier 1 oracle)
+#   timeout_s: 600
+#
+# Env:
+#   HEADER_HOME                 state dir (default: $HOME/.header)
+#   HEADER_EXPERIMENT_ADAPTER   override the agent invocation (testing). When
+#                               set, the runner calls:
+#                                 $HEADER_EXPERIMENT_ADAPTER <task_id> <arm> <rep> <prompt_file>
+#                               in the worktree CWD; the adapter must print one
+#                               JSON object on stdout with at least
+#                               {"input_tokens":N,"output_tokens":N,...,
+#                                "total_cost_usd":F,"model":"..."}.
+#                               Defaults to a real `claude -p` invocation.
+#
+# BETA — interface and output shape will change. Local-only by design (the
+# customer-infra runner is the on-thesis architecture; see design doc §7.3).
+set -uo pipefail
+
+STATE_DIR="${HEADER_HOME:-$HOME/.header}"
+EXP_ROOT="$STATE_DIR/experiments"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+HC_BIN="$SELF_DIR/header-cost"
+
+json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+now_iso()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
+now_epoch()  { date +%s; }
+err()        { printf 'header-experiment: %s\n' "$*" >&2; }
+die()        { err "$*"; exit 1; }
+
+# beta_banner — printed to stderr on the user-facing subcommands so it's clear
+# the verdict / interface / file shapes are not yet frozen.
+beta_banner() {
+  echo "header-experiment is BETA — interface & output shapes may change. Local-only; nothing leaves the machine." >&2
+}
+
+# spec_path / exp_dir — locate the spec for an id; create the dir on define only.
+exp_dir() { printf '%s/%s' "$EXP_ROOT" "$1"; }
+spec_path() { printf '%s/spec' "$(exp_dir "$1")"; }
+
+# spec_get_scalar <spec> <key> — read a top-level (pre-section) value. Returns
+# empty if not set. Top-level = lines before the first `[section]`.
+spec_get_scalar() {
+  awk -v key="$2" '
+    BEGIN { in_section=0 }
+    /^\[/ { in_section=1; next }
+    in_section { next }
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    {
+      i = index($0, ":"); if (i==0) next
+      k = substr($0, 1, i-1); v = substr($0, i+1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      if (k == key) { print v; exit }
+    }' "$1"
+}
+
+# spec_list_sections <spec> <prefix> — list section labels matching [prefix:LABEL]
+# in declaration order (e.g. spec_list_sections /tmp/spec arm  →  "A\nB").
+spec_list_sections() {
+  awk -v pfx="$2" '
+    {
+      if (match($0, /^\[[^]]+\]/)) {
+        s = substr($0, RSTART+1, RLENGTH-2)
+        n = split(s, parts, ":")
+        if (n==2 && parts[1]==pfx) print parts[2]
+      }
+    }' "$1"
+}
+
+# spec_section_get <spec> <prefix> <label> <key> — read a value from
+# [prefix:label]. Returns empty if missing. Stops at the next [section] or EOF.
+spec_section_get() {
+  awk -v pfx="$2" -v lbl="$3" -v key="$4" '
+    BEGIN { in_section=0 }
+    {
+      if (match($0, /^\[[^]]+\]/)) {
+        s = substr($0, RSTART+1, RLENGTH-2)
+        n = split(s, parts, ":")
+        in_section = (n==2 && parts[1]==pfx && parts[2]==lbl) ? 1 : 0
+        next
+      }
+      if (!in_section) next
+      if ($0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next
+      i = index($0, ":"); if (i==0) next
+      k = substr($0, 1, i-1); v = substr($0, i+1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      if (k == key) { print v; exit }
+    }' "$1"
+}
+
+# resolve_path <base_dir> <maybe_relative_path>  → absolute path. Empty in → empty out.
+resolve_path() {
+  case "${2:-}" in
+    ''|-) printf '' ;;
+    /*)   printf '%s' "$2" ;;
+    *)    printf '%s/%s' "$1" "$2" ;;
+  esac
+}
+
+# ── DEFINE ────────────────────────────────────────────────────
+cmd_define() {
+  local id="" desc="" arms=() tasks=() replicates="3" margin="0.02"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --description) desc="${2:-}"; shift 2 ;;
+      --arm)         arms+=("${2:-}"); shift 2 ;;
+      --task)        tasks+=("${2:-}"); shift 2 ;;
+      --replicates)  replicates="${2:-3}"; shift 2 ;;
+      --margin)      margin="${2:-0.02}"; shift 2 ;;
+      -h|--help)     echo "Usage: header-experiment define <id> [--description T] [--arm L=model] [--task ID=prompt:verify] [--replicates N] [--margin F]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  # id is a directory name — keep it safe.
+  case "$id" in *[!a-zA-Z0-9_.-]*) err "id must be [a-zA-Z0-9_.-]+ (got '$id')"; return 1 ;; esac
+
+  local dir; dir="$(exp_dir "$id")"
+  [ -e "$dir" ] && { err "experiment '$id' already exists ($dir)"; return 1; }
+  mkdir -p "$dir/logs" "$dir/tasks" "$dir/arms"
+
+  # Default to a 2-arm prompt-debt template if user passed no arms — it's the
+  # MVP wedge from the design doc (§8) and makes the file copy-pasteable.
+  [ "${#arms[@]}" -eq 0 ] && arms=("A=" "B=")
+
+  local spec="$dir/spec"
+  {
+    printf '# header-experiment spec — see ~/.header/experiments/%s/\n' "$id"
+    printf '# Flat "key: value" lines. Sections: [arm:LABEL] and [task:ID].\n'
+    printf '# Edit freely; `header-experiment validate %s` checks it.\n\n' "$id"
+    printf 'id: %s\n' "$id"
+    [ -n "$desc" ] && printf 'description: %s\n' "$desc" || printf 'description: (set me)\n'
+    printf 'repo: .\n'
+    printf 'commit: HEAD\n'
+    printf 'replicates: %s\n' "$replicates"
+    printf 'non_inferiority_margin: %s\n' "$margin"
+    printf '\n'
+    local a kv label model
+    for a in "${arms[@]}"; do
+      label="${a%%=*}"; model="${a#*=}"
+      [ "$label" = "$a" ] && model=""
+      printf '[arm:%s]\n' "$label"
+      printf 'model: %s\n' "$model"
+      printf 'overrides_dir: \n\n'
+    done
+    if [ "${#tasks[@]}" -eq 0 ]; then
+      printf '[task:example]\n'
+      printf '# Replace with a real prompt file + verifier (Tier-1 oracle: exit 0 = pass).\n'
+      printf 'prompt: tasks/example.md\n'
+      printf 'verify: true\n'
+      printf 'timeout_s: 600\n'
+    else
+      local t tid pv prompt verify
+      for t in "${tasks[@]}"; do
+        tid="${t%%=*}"; pv="${t#*=}"
+        prompt="${pv%%:*}"; verify="${pv#*:}"
+        [ "$verify" = "$pv" ] && verify="true"
+        printf '[task:%s]\n' "$tid"
+        printf 'prompt: %s\n' "$prompt"
+        printf 'verify: %s\n' "$verify"
+        printf 'timeout_s: 600\n\n'
+      done
+    fi
+  } > "$spec"
+
+  echo "Wrote $spec"
+  echo "  edit the spec (set repo, commit, model per arm, prompt + verify per task), then:"
+  echo "    header-experiment validate $id"
+  echo "    header-experiment run $id --aa     # noise-floor / harness check first"
+  echo "    header-experiment run $id          # the A/B"
+  echo "    header-experiment analyze $id && header-experiment report $id"
+}
+
+# ── VALIDATE ──────────────────────────────────────────────────
+cmd_validate() {
+  local id="${1:-}"; [ -n "$id" ] || { err "<id> required"; return 1; }
+  local spec; spec="$(spec_path "$id")"
+  [ -f "$spec" ] || { err "no spec at $spec (run 'define $id' first)"; return 1; }
+  local dir; dir="$(exp_dir "$id")"
+
+  local rc=0
+  local rep margin commit repo
+  rep="$(spec_get_scalar "$spec" replicates)"
+  margin="$(spec_get_scalar "$spec" non_inferiority_margin)"
+  commit="$(spec_get_scalar "$spec" commit)"
+  repo="$(spec_get_scalar "$spec" repo)"
+
+  case "$rep" in ''|*[!0-9]*) err "replicates must be a positive integer (got '$rep')"; rc=1 ;; esac
+  [ "${rep:-0}" -ge 1 ] 2>/dev/null || { err "replicates must be ≥1"; rc=1; }
+
+  awk -v m="$margin" 'BEGIN{
+    if (m=="") { print "non_inferiority_margin missing" > "/dev/stderr"; exit 1 }
+    if (m+0 < 0 || m+0 > 1) { printf "non_inferiority_margin out of range (got %s)\n", m > "/dev/stderr"; exit 1 }
+  }' || rc=1
+
+  local repo_abs; repo_abs="$(resolve_path "$dir" "${repo:-.}")"
+  [ -d "$repo_abs" ] || { err "repo not found: $repo_abs"; rc=1; }
+
+  local arms_list tasks_list
+  arms_list="$(spec_list_sections "$spec" arm)"
+  tasks_list="$(spec_list_sections "$spec" task)"
+  local n_arms n_tasks
+  n_arms="$(printf '%s\n' "$arms_list" | grep -c .)"; n_arms="${n_arms:-0}"
+  n_tasks="$(printf '%s\n' "$tasks_list" | grep -c .)"; n_tasks="${n_tasks:-0}"
+  [ "$n_arms" -ge 2 ] || { err "need ≥2 arms (got $n_arms)"; rc=1; }
+  [ "$n_tasks" -ge 1 ] || { err "need ≥1 task (got $n_tasks)"; rc=1; }
+
+  local label
+  for label in $arms_list; do
+    [ -n "$label" ] || continue
+    # model can be empty (use claude default); just check the section exists by reading any key
+    :
+  done
+
+  local tid
+  for tid in $tasks_list; do
+    [ -n "$tid" ] || continue
+    local prompt verify
+    prompt="$(spec_section_get "$spec" task "$tid" prompt)"
+    verify="$(spec_section_get "$spec" task "$tid" verify)"
+    [ -n "$prompt" ] || { err "task $tid: prompt is required"; rc=1; }
+    [ -n "$verify" ] || { err "task $tid: verify is required (use 'true' for no-op)"; rc=1; }
+    local prompt_abs; prompt_abs="$(resolve_path "$dir" "$prompt")"
+    [ -f "$prompt_abs" ] || { err "task $tid: prompt file not found: $prompt_abs"; rc=1; }
+  done
+
+  if [ "$rc" -eq 0 ]; then
+    echo "OK — $n_arms arm(s), $n_tasks task(s), replicates=$rep, δ=$margin, commit=$commit"
+  fi
+  return "$rc"
+}
+
+# ── RUN ───────────────────────────────────────────────────────
+# run_one — execute one (task, arm, rep). Print one JSON line to stdout (append
+# this to runs[-aa].jsonl). Side effect: writes the agent + verifier logs.
+run_one() {
+  local exp_dir="$1" repo="$2" commit="$3" task_id="$4" arm_label="$5" rep="$6"
+  local model="$7" overrides_dir="$8" prompt_file="$9" verify_cmd="${10}" timeout_s="${11}"
+  local adapter="${12:-}"
+
+  local logs="$exp_dir/logs"
+  mkdir -p "$logs"
+  local log_base="$logs/${task_id}-${arm_label}-${rep}"
+  local agent_log="${log_base}.json" agent_err="${log_base}.err"
+  local verify_log="${log_base}.verify"
+
+  # Build the worktree. Prefer `git worktree add` (cheap, references the same
+  # objects; isolation per design doc §7). Fall back to a copy. `git worktree
+  # add` refuses an existing path, so we reserve a unique name without creating.
+  local wt
+  wt="$(mktemp -d "${TMPDIR:-/tmp}/header-exp.XXXXXX")" && rm -rf "$wt"
+  local using_worktree=0
+  if (cd "$repo" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1); then
+    if (cd "$repo" && git worktree add --detach -q "$wt" "${commit:-HEAD}" 2>/dev/null); then
+      using_worktree=1
+    elif (cd "$repo" && git worktree add --detach -q "$wt" HEAD 2>/dev/null); then
+      using_worktree=1
+    fi
+  fi
+  if [ "$using_worktree" -eq 0 ]; then
+    cp -a "$repo" "$wt" 2>/dev/null || die "could not isolate repo $repo"
+  fi
+  # Apply overrides (files in $overrides_dir overwrite their counterparts in $wt).
+  if [ -n "$overrides_dir" ] && [ -d "$overrides_dir" ]; then
+    # cp -a preserves modes; trailing /. copies the dir contents (not the dir itself).
+    cp -a "$overrides_dir"/. "$wt"/ 2>/dev/null || true
+  fi
+
+  # Invoke the agent. The adapter seam: tests set $HEADER_EXPERIMENT_ADAPTER to
+  # a stub script. Real use → `claude -p`. The adapter must emit a single JSON
+  # object on stdout with at least input_tokens / output_tokens (cost optional).
+  local start end latency
+  start="$(now_epoch)"
+  local agent_rc=0
+  if [ -n "$adapter" ]; then
+    ( cd "$wt" && "$adapter" "$task_id" "$arm_label" "$rep" "$prompt_file" ) > "$agent_log" 2> "$agent_err"
+    agent_rc=$?
+  else
+    # Real run via claude headless. `--print` is the headless mode; combined
+    # with --output-format json it prints one summary object. We pipe the
+    # prompt on stdin (most portable across versions) and rely on the JSON for
+    # usage. timeout(1) caps wall-clock.
+    local extra_args=()
+    [ -n "$model" ] && extra_args+=(--model "$model")
+    if command -v timeout >/dev/null 2>&1; then
+      ( cd "$wt" && timeout "${timeout_s}s" claude --print --output-format json \
+          --permission-mode bypassPermissions "${extra_args[@]}" \
+          < "$prompt_file" ) > "$agent_log" 2> "$agent_err"
+      agent_rc=$?
+    else
+      ( cd "$wt" && claude --print --output-format json \
+          --permission-mode bypassPermissions "${extra_args[@]}" \
+          < "$prompt_file" ) > "$agent_log" 2> "$agent_err"
+      agent_rc=$?
+    fi
+  fi
+  end="$(now_epoch)"; latency=$(( end - start ))
+
+  # Verifier — Tier-1 oracle: exit 0 = pass. Run AFTER the agent so it can see
+  # the agent's edits. Run in the worktree so the agent's CWD changes don't
+  # affect us.
+  local verify_rc=0
+  if [ -n "$verify_cmd" ] && [ "$verify_cmd" != "-" ]; then
+    if command -v timeout >/dev/null 2>&1; then
+      ( cd "$wt" && timeout "${timeout_s}s" bash -c "$verify_cmd" ) > "$verify_log" 2>&1
+      verify_rc=$?
+    else
+      ( cd "$wt" && bash -c "$verify_cmd" ) > "$verify_log" 2>&1
+      verify_rc=$?
+    fi
+  fi
+  local success="false"; [ "$verify_rc" -eq 0 ] && success="true"
+
+  # Cleanup
+  if [ "$using_worktree" -eq 1 ]; then
+    (cd "$repo" && git worktree remove --force "$wt" >/dev/null 2>&1) || rm -rf "$wt"
+  else
+    rm -rf "$wt"
+  fi
+
+  # Parse usage from the agent log. Schema is the Claude Code headless one;
+  # adapters may emit a flatter variant. Match either shape.
+  awk -v ts="$(now_iso)" -v task="$task_id" -v arm="$arm_label" -v rep="$rep" \
+      -v lat="$latency" -v success="$success" -v agent_rc="$agent_rc" \
+      -v verify_rc="$verify_rc" -v default_model="$model" \
+      -v agent_log="$agent_log" '
+    function jnum(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*-?[0-9.]+"
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return s+0 } return 0 }
+    function jstr(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*\"[^\"]*\""
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*"/,"",s); sub(/"$/,"",s); return s } return "" }
+    {
+      # Accumulate across lines so stream-json output also works.
+      m = jstr($0,"model"); if (m!="") model = m
+      v = jnum($0,"input_tokens");                 if (v>0) inp += v
+      v = jnum($0,"output_tokens");                if (v>0) outp += v
+      v = jnum($0,"cache_read_input_tokens");      if (v>0) cr += v
+      v = jnum($0,"cache_read_tokens");            if (v>0) cr += v
+      v = jnum($0,"cache_creation_input_tokens");  if (v>0) cw += v
+      v = jnum($0,"cache_write_tokens");           if (v>0) cw += v
+      v = jnum($0,"ephemeral_5m_input_tokens");    if (v>0) cw5_explicit += v
+      v = jnum($0,"ephemeral_1h_input_tokens");    if (v>0) cw1_explicit += v
+      v = jnum($0,"total_cost_usd");               if (v>0) cost = v
+      v = jnum($0,"cost_usd");                     if (v>0 && cost==0) cost = v
+    }
+    END {
+      if (model=="") model = default_model
+      # Prefer the explicit 5m/1h split when present; otherwise lump under cw5.
+      cw5 = (cw5_explicit>0 || cw1_explicit>0) ? cw5_explicit : cw
+      cw1 = cw1_explicit
+      printf "{\"ts\":\"%s\",\"task\":\"%s\",\"arm\":\"%s\",\"rep\":%d,\"model\":\"%s\",", \
+        ts, task, arm, rep+0, model
+      printf "\"input_tokens\":%d,\"output_tokens\":%d,\"cache_read_tokens\":%d,", inp+0, outp+0, cr+0
+      printf "\"cache_write_5m\":%d,\"cache_write_1h\":%d,", cw5+0, cw1+0
+      printf "\"cost_usd\":%.6f,\"latency_s\":%d,", cost+0, lat+0
+      printf "\"success\":%s,\"agent_exit\":%d,\"verify_exit\":%d,", success, agent_rc+0, verify_rc+0
+      printf "\"log\":\"%s\"}\n", agent_log
+    }' "$agent_log"
+}
+
+cmd_run() {
+  local id="" aa=0 k_override="" yes=0 seed="" adapter="${HEADER_EXPERIMENT_ADAPTER:-}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --aa)      aa=1; shift ;;
+      --k)       k_override="${2:-}"; shift 2 ;;
+      --yes|-y)  yes=1; shift ;;
+      --seed)    seed="${2:-}"; shift 2 ;;
+      --adapter) adapter="${2:-}"; shift 2 ;;
+      -h|--help) echo "Usage: header-experiment run <id> [--aa] [--k N] [--yes] [--seed N] [--adapter CMD]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  local spec; spec="$(spec_path "$id")"
+  [ -f "$spec" ] || { err "no spec at $spec — run 'define $id' first"; return 1; }
+  cmd_validate "$id" >/dev/null || { err "spec failed validation — run 'header-experiment validate $id'"; return 1; }
+
+  beta_banner
+  local dir; dir="$(exp_dir "$id")"
+  local repo; repo="$(resolve_path "$dir" "$(spec_get_scalar "$spec" repo)")"
+  local commit; commit="$(spec_get_scalar "$spec" commit)"; [ -n "$commit" ] || commit="HEAD"
+  local reps;   reps="$(spec_get_scalar "$spec" replicates)"
+  [ -n "$k_override" ] && reps="$k_override"
+
+  # Resolve real commit hash for the run record. If repo isn't git, leave it.
+  local commit_resolved="$commit"
+  if (cd "$repo" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1); then
+    commit_resolved="$(cd "$repo" && git rev-parse --short "$commit" 2>/dev/null || echo "$commit")"
+  fi
+
+  # Resolve arms.
+  local arms_list; arms_list="$(spec_list_sections "$spec" arm)"
+  local first_arm="" arms=()
+  local L
+  for L in $arms_list; do
+    [ -n "$L" ] || continue
+    [ -z "$first_arm" ] && first_arm="$L"
+    arms+=("$L")
+  done
+
+  # In A/A, override arms to be [A, A] using the first arm's config but
+  # relabel the second slot as A2 so the analyser can pair them.
+  if [ "$aa" -eq 1 ]; then
+    arms=("$first_arm" "${first_arm}_2")
+  fi
+
+  # Resolve tasks.
+  local tasks_list; tasks_list="$(spec_list_sections "$spec" task)"
+  local tasks=()
+  local T
+  for T in $tasks_list; do [ -n "$T" ] && tasks+=("$T"); done
+
+  local n_runs=$(( ${#tasks[@]} * ${#arms[@]} * reps ))
+
+  # Cost gate — refuse to run silently. The user's API budget pays for this.
+  if [ "$yes" -ne 1 ] && [ -z "$adapter" ]; then
+    printf 'About to launch %d agent invocation(s): %d tasks × %d arms × %d replicates.\n' \
+      "$n_runs" "${#tasks[@]}" "${#arms[@]}" "$reps" >&2
+    printf 'Each invocation spends real tokens. Continue? [y/N] ' >&2
+    local ans=""; read -r ans </dev/tty 2>/dev/null || ans=""
+    case "$ans" in [yY]|[yY][eE][sS]) ;; *) err "aborted"; return 1 ;; esac
+  fi
+
+  # Check the adapter or claude is available. Fail fast.
+  if [ -z "$adapter" ] && ! command -v claude >/dev/null 2>&1; then
+    err "the default adapter needs 'claude' on PATH (or set --adapter / \$HEADER_EXPERIMENT_ADAPTER)"
+    return 1
+  fi
+
+  local out_file
+  out_file="$dir/$([ "$aa" -eq 1 ] && echo runs-aa.jsonl || echo runs.jsonl)"
+  : > "$out_file"
+
+  # Order: per task, interleave arms within a replicate (§6.2). Cache warmup
+  # and time-of-day drift hit both arms symmetrically. We don't randomize task
+  # order yet — keep it deterministic for now; users can shuffle the spec.
+  echo "Running $n_runs invocation(s) → $out_file" >&2
+  local step=0 r task arm a_idx
+  for (( r=0; r<reps; r++ )); do
+    for task in "${tasks[@]}"; do
+      for (( a_idx=0; a_idx<${#arms[@]}; a_idx++ )); do
+        arm="${arms[$a_idx]}"
+        # Resolve the arm's config. In A/A both slots use first_arm's config.
+        local arm_for_config="$arm"
+        [ "$aa" -eq 1 ] && arm_for_config="$first_arm"
+        local model overrides
+        model="$(spec_section_get "$spec" arm "$arm_for_config" model)"
+        overrides="$(spec_section_get "$spec" arm "$arm_for_config" overrides_dir)"
+        local overrides_abs=""; [ -n "$overrides" ] && overrides_abs="$(resolve_path "$dir" "$overrides")"
+        local prompt verify timeout_s
+        prompt="$(spec_section_get "$spec" task "$task" prompt)"
+        verify="$(spec_section_get "$spec" task "$task" verify)"
+        timeout_s="$(spec_section_get "$spec" task "$task" timeout_s)"
+        [ -n "$timeout_s" ] || timeout_s="600"
+        local prompt_abs; prompt_abs="$(resolve_path "$dir" "$prompt")"
+        step=$(( step + 1 ))
+        printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$step" "$n_runs" "$task" "$arm" "$r" >&2
+        run_one "$dir" "$repo" "$commit_resolved" "$task" "$arm" "$r" \
+                "$model" "$overrides_abs" "$prompt_abs" "$verify" "$timeout_s" \
+                "$adapter" >> "$out_file"
+      done
+    done
+  done
+
+  echo "Done. Next:  header-experiment analyze $id$([ "$aa" -eq 1 ] && echo ' --aa')" >&2
+}
+
+# ── ANALYZE ───────────────────────────────────────────────────
+# The honest stat per design-doc §6: pair by task (per-task means of B and A),
+# bootstrap the per-task differences. CI = 2.5 / 97.5 percentiles of resampled
+# means. Verdict = §6.5: cost CI < 0 AND success diff CI ≥ −δ.
+cmd_analyze() {
+  local id="" aa=0 seed="42" boots="2000"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --aa)        aa=1; shift ;;
+      --seed)      seed="${2:-42}"; shift 2 ;;
+      --bootstrap) boots="${2:-2000}"; shift 2 ;;
+      -h|--help)   echo "Usage: header-experiment analyze <id> [--aa] [--seed N] [--bootstrap N]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  local dir; dir="$(exp_dir "$id")"
+  local spec="$dir/spec"
+  [ -f "$spec" ] || { err "no spec for $id"; return 1; }
+  local margin; margin="$(spec_get_scalar "$spec" non_inferiority_margin)"
+  [ -n "$margin" ] || margin="0.02"
+
+  local runs_file out_file mode
+  if [ "$aa" -eq 1 ]; then
+    runs_file="$dir/runs-aa.jsonl"; out_file="$dir/result-aa.json"; mode="aa"
+  else
+    runs_file="$dir/runs.jsonl"; out_file="$dir/result.json"; mode="ab"
+  fi
+  [ -f "$runs_file" ] && [ -s "$runs_file" ] || { err "no runs at $runs_file (run first)"; return 1; }
+
+  awk -v seed="$seed" -v boots="$boots" -v margin="$margin" -v mode="$mode" \
+      -v out_file="$out_file" '
+    function jnum(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*-?[0-9.]+"
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return s+0 } return 0 }
+    function jstr(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*\"[^\"]*\""
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*"/,"",s); sub(/"$/,"",s); return s } return "" }
+    function jbool(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*(true|false)"
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return (s=="true"?1:0) } return 0 }
+    function pct(arr,n,p,  i,sorted,j,t){
+      # arr is 1-indexed length n, contains sample means. Return p-th percentile.
+      for (i=1;i<=n;i++) sorted[i]=arr[i]
+      # selection sort (n is small: bootstraps); fine for our sizes.
+      for (i=1;i<=n-1;i++) for (j=i+1;j<=n;j++) if (sorted[j]<sorted[i]) { t=sorted[i]; sorted[i]=sorted[j]; sorted[j]=t }
+      i = int(p * (n-1)) + 1
+      if (i<1) i=1; if (i>n) i=n
+      return sorted[i]
+    }
+    function mean(arr,n,  i,s){ s=0; for(i=1;i<=n;i++) s+=arr[i]; return (n>0?s/n:0) }
+    {
+      task = jstr($0,"task"); arm = jstr($0,"arm")
+      if (task=="" || arm=="") next
+      cost = jnum($0,"cost_usd"); succ = jbool($0,"success")
+      key = task SUBSEP arm
+      Reps[key]++; SumC[key]+=cost; SumS[key]+=succ
+      if (!(task in Tseen)) { Tseen[task]=1; Tasks[++nt]=task }
+      if (!(arm  in Aseen)) { Aseen[arm]=1;  Arms[++na]=arm }
+    }
+    END {
+      if (na < 2) { print "analyze: need 2 arms in runs.jsonl" > "/dev/stderr"; exit 1 }
+      A = Arms[1]; B = Arms[2]
+      # Per-task means per arm; per-task pair-diff (B − A).
+      n_paired = 0
+      n_per_arm_A = 0; n_per_arm_B = 0
+      for (i=1;i<=nt;i++) {
+        t = Tasks[i]
+        kA = t SUBSEP A; kB = t SUBSEP B
+        if (!(kA in Reps) || !(kB in Reps)) continue
+        ma = SumC[kA]/Reps[kA]; mb = SumC[kB]/Reps[kB]
+        sa = SumS[kA]/Reps[kA]; sb = SumS[kB]/Reps[kB]
+        n_paired++
+        DiffC[n_paired] = mb - ma
+        DiffS[n_paired] = sb - sa
+        MA[n_paired] = ma; MB[n_paired] = mb
+        SA[n_paired] = sa; SB[n_paired] = sb
+        TaskOrder[n_paired] = t
+        n_per_arm_A += Reps[kA]; n_per_arm_B += Reps[kB]
+      }
+      if (n_paired == 0) { print "analyze: no tasks have records from both arms" > "/dev/stderr"; exit 1 }
+      cost_mean_diff = mean(DiffC, n_paired)
+      succ_mean_diff = mean(DiffS, n_paired)
+      cost_A_mean = mean(MA, n_paired); cost_B_mean = mean(MB, n_paired)
+      succ_A_rate = mean(SA, n_paired); succ_B_rate = mean(SB, n_paired)
+
+      # Bootstrap on per-task diffs (the analysis unit is the task — §4).
+      srand(seed)
+      for (b=1;b<=boots;b++) {
+        sc = 0; ss = 0
+        for (j=1;j<=n_paired;j++) {
+          idx = int(rand() * n_paired) + 1
+          if (idx<1) idx=1; if (idx>n_paired) idx=n_paired
+          sc += DiffC[idx]; ss += DiffS[idx]
+        }
+        BC[b] = sc / n_paired
+        BS[b] = ss / n_paired
+      }
+      cost_lo = pct(BC, boots, 0.025); cost_hi = pct(BC, boots, 0.975)
+      succ_lo = pct(BS, boots, 0.025); succ_hi = pct(BS, boots, 0.975)
+
+      cost_favorable = (cost_hi < 0) ? 1 : 0
+      # Non-inferiority: lower bound of success-diff CI ≥ −δ (margin).
+      succ_non_inferior = (succ_lo >= -margin) ? 1 : 0
+
+      verdict = "no proven win"
+      reason = ""
+      if (n_paired < 5) {
+        verdict = "underpowered"
+        reason = sprintf("only %d task pair(s) — need more before a decision", n_paired)
+      } else if (cost_favorable && succ_non_inferior) {
+        verdict = "B wins (cost lower, success non-inferior)"
+      } else if (!cost_favorable && cost_lo > 0) {
+        verdict = "A wins (B is more expensive)"
+      } else if (!cost_favorable) {
+        verdict = "no proven win"
+        reason = "cost CI contains 0 — effect not separable from noise"
+      } else if (cost_favorable && !succ_non_inferior) {
+        verdict = "no proven win"
+        reason = sprintf("success regressed beyond δ=%.3f (lower CI %.3f)", margin, succ_lo)
+      }
+
+      # A/A check: if mode=aa, surface whether the harness is clean. A/A should
+      # have a CI containing 0 for cost; if it doesn'\''t, the pipeline is biased.
+      if (mode == "aa") {
+        aa_clean = (cost_lo <= 0 && cost_hi >= 0) ? 1 : 0
+        verdict = aa_clean ? "A/A OK — harness clean" \
+                            : "A/A BIASED — fix the harness before trusting any A/B"
+        reason = ""
+      }
+
+      # Emit result.json. Multi-line for legibility; jq-parseable.
+      printf "{\n" > out_file
+      printf "  \"mode\": \"%s\",\n", mode >> out_file
+      printf "  \"arms\": [\"%s\", \"%s\"],\n", A, B >> out_file
+      printf "  \"tasks_paired\": %d,\n", n_paired >> out_file
+      printf "  \"n_per_arm\": [%d, %d],\n", n_per_arm_A, n_per_arm_B >> out_file
+      printf "  \"bootstrap_iters\": %d,\n", boots >> out_file
+      printf "  \"non_inferiority_margin\": %s,\n", margin >> out_file
+      printf "  \"cost\": {\n" >> out_file
+      printf "    \"A_mean\": %.6f,\n", cost_A_mean >> out_file
+      printf "    \"B_mean\": %.6f,\n", cost_B_mean >> out_file
+      printf "    \"diff_mean_BA\": %.6f,\n", cost_mean_diff >> out_file
+      printf "    \"ci95\": [%.6f, %.6f],\n", cost_lo, cost_hi >> out_file
+      printf "    \"favorable\": %s\n", (cost_favorable?"true":"false") >> out_file
+      printf "  },\n" >> out_file
+      printf "  \"success\": {\n" >> out_file
+      printf "    \"A_rate\": %.4f,\n", succ_A_rate >> out_file
+      printf "    \"B_rate\": %.4f,\n", succ_B_rate >> out_file
+      printf "    \"diff_BA\": %.4f,\n", succ_mean_diff >> out_file
+      printf "    \"ci95\": [%.4f, %.4f],\n", succ_lo, succ_hi >> out_file
+      printf "    \"non_inferior\": %s\n", (succ_non_inferior?"true":"false") >> out_file
+      printf "  },\n" >> out_file
+      printf "  \"per_task\": [\n" >> out_file
+      for (j=1;j<=n_paired;j++) {
+        printf "    {\"task\":\"%s\",\"A_cost\":%.6f,\"B_cost\":%.6f,\"diff_cost\":%.6f,\"A_succ\":%.4f,\"B_succ\":%.4f}%s\n", \
+          TaskOrder[j], MA[j], MB[j], DiffC[j], SA[j], SB[j], (j<n_paired?",":"") >> out_file
+      }
+      printf "  ],\n" >> out_file
+      printf "  \"verdict\": \"%s\"", verdict >> out_file
+      if (reason != "") printf ",\n  \"reason\": \"%s\"\n", reason >> out_file
+      else              printf "\n" >> out_file
+      printf "}\n" >> out_file
+
+      printf "Wrote %s\n", out_file
+    }' "$runs_file"
+}
+
+# ── REPORT ────────────────────────────────────────────────────
+cmd_report() {
+  local id="" aa=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --aa)      aa=1; shift ;;
+      -h|--help) echo "Usage: header-experiment report <id> [--aa]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  local dir; dir="$(exp_dir "$id")"
+  local rf; rf="$dir/$([ "$aa" -eq 1 ] && echo result-aa.json || echo result.json)"
+  [ -f "$rf" ] || { err "no result at $rf — run 'analyze $id$([ "$aa" -eq 1 ] && echo ' --aa')' first"; return 1; }
+
+  beta_banner
+
+  awk '
+    function jnum(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*-?[0-9.eE+-]+"
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return s+0 } return 0 }
+    function jstr(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*\"[^\"]*\""
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*"/,"",s); sub(/"$/,"",s); return s } return "" }
+    function jpair(line,key,  re,s,a){ re="\""key"\"[ \t]*:[ \t]*\\[[^]]*\\]"
+      if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*\[/,"",s); sub(/\]$/,"",s); return s } return "" }
+    { all = all $0 "\n" }
+    END {
+      blob = all
+      mode = jstr(blob,"mode")
+      arms_pair = jpair(blob,"arms"); split(arms_pair, AR, ","); A=AR[1]; B=AR[2]
+      gsub(/^[[:space:]]+|[[:space:]]+$|"/,"",A); gsub(/^[[:space:]]+|[[:space:]]+$|"/,"",B)
+      tasks = jnum(blob,"tasks_paired"); boots = jnum(blob,"bootstrap_iters")
+      margin = jnum(blob,"non_inferiority_margin")
+      verdict = jstr(blob,"verdict"); reason = jstr(blob,"reason")
+
+      # Cost block — pull from the {} after "cost":
+      cb = blob; sub(/.*"cost":[[:space:]]*{/,"",cb); sub(/}.*/,"",cb)
+      ca = jnum(cb,"A_mean"); cbm = jnum(cb,"B_mean"); cd = jnum(cb,"diff_mean_BA")
+      cpair = jpair(cb,"ci95"); split(cpair, CI, ","); clo=CI[1]+0; chi=CI[2]+0
+
+      sb_ = blob; sub(/.*"success":[[:space:]]*{/,"",sb_); sub(/}.*/,"",sb_)
+      sar = jnum(sb_,"A_rate"); sbr = jnum(sb_,"B_rate"); sd = jnum(sb_,"diff_BA")
+      spair = jpair(sb_,"ci95"); split(spair, SI, ","); slo=SI[1]+0; shi=SI[2]+0
+
+      printf "\nExperiment report — %s\n", (mode=="aa" ? "A/A (noise floor)" : "A vs B")
+      printf "  Arms: %s vs %s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n\n", A, B, tasks, boots, margin
+      diff_label = sprintf("%s − %s", B, A)
+      printf "  COST (USD, paired per-task means)\n"
+      printf "    %s mean: %.4f\n", A, ca
+      printf "    %s mean: %.4f\n", B, cbm
+      printf "    %s   : %.4f   95%% CI [%.4f, %.4f]\n\n", diff_label, cd, clo, chi
+      printf "  SUCCESS (rate, paired per-task means)\n"
+      printf "    %s rate: %.3f\n", A, sar
+      printf "    %s rate: %.3f\n", B, sbr
+      printf "    %s  : %+.3f   95%% CI [%+.3f, %+.3f]\n\n", diff_label, sd, slo, shi
+      printf "  Verdict: %s\n", verdict
+      if (reason != "") printf "    %s\n", reason
+      printf "\n"
+      if (mode != "aa") {
+        printf "  Decision rule (design doc §6.5): merge B iff cost CI upper bound < 0 AND success lower bound ≥ −δ.\n"
+        printf "  Conservative savings rate: max(0, -upper_CI(diff_cost)) = %.4f USD/task — never bill the optimistic tail.\n", (chi < 0 ? -chi : 0)
+      } else {
+        printf "  A/A interpretation: a clean A/A has a cost CI containing 0. If it doesn'\''t, ordering /\n"
+        printf "  cache warmup / temporal drift is contaminating the pipeline — fix before trusting the A/B.\n"
+      }
+    }' "$rf"
+}
+
+# ── dispatch ──────────────────────────────────────────────────
+usage() {
+  cat >&2 <<EOF
+Usage: header-experiment <command> ...
+
+  define <id>     scaffold a new experiment (writes ~/.header/experiments/<id>/spec)
+  validate <id>   lint the spec
+  run <id>        execute the matrix (--aa for noise-floor check, --yes to skip cost gate)
+  analyze <id>    write result.json (paired bootstrap CI, §6 of design)
+  report <id>     pretty scorecard
+
+BETA — see docs/experiments-design.md.
+EOF
+  exit 1
+}
+
+cmd="${1:-}"; shift 2>/dev/null || true
+case "$cmd" in
+  define)   cmd_define   "$@" ;;
+  validate) cmd_validate "$@" ;;
+  run)      cmd_run      "$@" ;;
+  analyze)  cmd_analyze  "$@" ;;
+  report)   cmd_report   "$@" ;;
+  ""|-h|--help) usage ;;
+  *) err "unknown subcommand '$cmd'"; usage ;;
+esac

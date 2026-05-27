@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.10.2
+version: 0.11.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -288,7 +288,7 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 **Present** as a one-line scorecard, then a ranked recommendation list. Each recommendation is a hypothesis: **what** (the change), **where** (file + line/manifest), **why** (cite the audit line *or* the briefing item — link the `source_articles` URL for the latter), and the **expected effect** (`est.` and directional unless measured). Split into two groups:
 
 - **Apply now** — deletions/simplifications, supply-chain gate, security patches. Low-risk and deterministic. On the user's yes, make the edit (show a diff first; for the gate, write/append the `<AUDIT> gate ...` snippet to `.npmrc`).
-- **`[Experiment · coming soon]`** _(beta)_ — anything whose payoff must be *proven*: a model change, a major dependency/framework upgrade, a behavioral rewrite. State the A/B that *would* settle it ("A = current, B = proposed; measure tokens + test pass-rate over N runs"), label it not-yet-supported, and offer to **note the user's interest** so they're told when it ships. Run nothing.
+- **`[Experiment]`** _(beta)_ — anything whose payoff must be *proven*: a model change, a major dependency/framework upgrade, a behavioral rewrite. State the A/B that *would* settle it ("A = current, B = proposed; measure tokens + test pass-rate over N runs"), and either: (a) point the user at `header-experiment` for a local MVP A/B run (see the "Experiments" section below), or (b) when an experiment isn't realistic for the user right now, offer to **note the user's interest** in the ledger so they're told when richer experiments ship. The skill itself runs nothing — `header-experiment` is user-invoked for MVP.
 
 After presenting, ask which (if any) to implement. On selection, proceed with the implementation in the current project.
 
@@ -332,7 +332,7 @@ Record each recommendation's disposition so future runs adapt. Skip when `<HEADE
 <LEDGER> record applied   "<key>"    # implemented (or asked you to implement)
 <LEDGER> record dismissed "<key>"    # explicitly rejected
 <LEDGER> record snoozed   "<key>"    # "not now"
-<LEDGER> record wanted    "<key>"    # an [Experiment · coming soon] the user wants
+<LEDGER> record wanted    "<key>"    # an [Experiment] the user wants (and isn't running locally via header-experiment)
 ```
 
 All ledger writes are best-effort, local-only, and never block the audit.
@@ -530,7 +530,7 @@ Surface:
   ```
 
   `TOOL npm too-old` / `TOOL pip too-old` → the gate is **silently ignored** until the tool is bumped locally **and in CI**.
-- **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`). Security patches → apply now. Major upgrades → `[Experiment · coming soon]`.
+- **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`). Security patches → apply now. Major upgrades → `[Experiment]`.
 
 ### Record findings
 
@@ -564,14 +564,32 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report --since
 
 **Where the spend is.** `report` ranks models by cost — surface the biggest line and name the obvious lever.
 
-**No projections — name the lever, don't guess the saving.** A price re-rating of the same tokens is a guess. `"<COST>" savings` exists only to point at the experiment loop:
-
-```
-Header experiments are coming soon — A/B-test models in your own repo and verify
-correctness before Header surfaces a recommendation.
-```
+**No projections — name the lever, don't guess the saving.** A price re-rating of the same tokens is a guess. `"<COST>" savings` exists only to point at the experiment loop — the user can drive it locally with `header-experiment` (see the next section), and `savings` prints the four-command recipe.
 
 Other subcommands: `"<COST>" refresh [--url U]`, `"<COST>" prices`, `"<COST>" cost <model> <in> <out> [cache_read] [cache_write_5m] [cache_write_1h]`. Add `--json` for machine output.
+
+## Experiments (`header-experiment`) — beta
+
+> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **MVP scope:** `define`, `validate`, `run` (with `--aa` for noise-floor), `analyze`, `report`. **Not yet:** git-history task mining (§11), auto-merge of the winning arm, LLM judges, cross-customer aggregate submit.
+
+When a user asks "is switching to <cheaper model> safe for my repo?" / "can I delete this CLAUDE.md section without regressing?" / "prove the saving" — **do not guess the answer**. Point them at `header-experiment`. Show them the four-step loop and let them drive it (the runner spends real tokens; this is a deliberate user action, not an autoflow):
+
+```bash
+header-experiment define my-exp                      # scaffold ~/.header/experiments/my-exp/spec
+# edit the spec: set arms (model + optional overrides_dir), tasks (prompt + verify), replicates
+header-experiment validate my-exp                    # lint
+header-experiment run my-exp --aa                    # noise-floor check FIRST (§3) — must be clean
+header-experiment run my-exp                         # the A/B
+header-experiment analyze my-exp && header-experiment report my-exp
+```
+
+Surface the four points in the verdict so the user reads it correctly:
+- The CI on **B − A cost** (per-task paired bootstrap, 95%) is the effect — the diff itself is meaningless without it.
+- **Decision rule** (§6.5): merge B iff the cost CI's upper bound is below 0 AND success-rate diff's lower CI bound is ≥ −δ. Anything else is **"no proven win"**, not "B wins."
+- **Conservative savings rate** (= `max(0, -upper_CI(diff_cost))`) is the figure that survives an audit — never quote the optimistic tail.
+- A **noisy A/A** (CI excludes 0) means the harness is biased — *fix the harness before trusting any A/B*. This is the most common silent failure mode.
+
+Out of scope for the MVP: the agent does not auto-define experiments from audit findings, and does not auto-apply the winning arm's diff to the repo — both are explicit user actions for now. If the user expresses interest in an experiment the MVP can't run, log it: `<LEDGER> record wanted "<key>"`.
 
 ## Browse public topics
 

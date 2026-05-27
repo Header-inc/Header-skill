@@ -241,7 +241,11 @@ case "$cmd" in
     # We do not print projections. A price re-rating of identical tokens is a
     # guess (the cheaper model uses different tokens at different quality); the
     # honest number comes from a real A/B + correctness check.
-    echo "Header experiments are coming soon — A/B-test models in your own repo and verify correctness before Header surfaces a recommendation."
+    echo "header-cost prints measured spend only — projections are guesses (same tokens, different model, different quality)."
+    echo "Run a real A/B with header-experiment (beta) to prove a switch:"
+    echo "  header-experiment define my-switch && header-experiment validate my-switch"
+    echo "  header-experiment run my-switch --aa && header-experiment run my-switch"
+    echo "  header-experiment analyze my-switch && header-experiment report my-switch"
     exit 0
     ;;
 
