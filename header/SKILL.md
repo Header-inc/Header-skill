@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.10.1
+version: 0.10.2
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -364,7 +364,7 @@ Once the audit + recommendations are delivered, in interactive mode, offer to **
 
 - `INTERACTIVE: yes`
 - `TOPIC_OFFERED: no` for this repo
-- `SIGNUP_STATE` is **not** `public-only` (the user hasn't opted out of accounts)
+- `SIGNUP_STATE` is **not** `public-only` (back-compat — honors older opt-out markers from 0.10.0/0.10.1; this skill no longer writes new ones)
 - `REPO_TOPIC` is empty (this repo isn't already bound to a custom topic)
 
 If any of those fails, skip this section and go straight to "Telemetry consent".
@@ -376,16 +376,10 @@ Ask (`AskUserQuestion` on Claude Code; numbered plain text elsewhere):
 > Want one for this repo?
 >
 > 1. **Yes — customize for this repo** (recommended for repos you'll work in repeatedly)
-> 2. Not for this repo
-> 3. No — I'm good with the generic feed, don't ask again
+> 2. Remind me next session
+> 3. Not for this repo — don't ask again
 
-**Always flip the per-repo flag** so this exact question fires only once per repo, whatever the answer:
-
-```bash
-"<REPO>" flag topic-offered set
-```
-
-(`<REPO>` is `header-repo`, next to the preamble's `HEADER_BIN`.)
+There is **no global "never ask anywhere" opt-out** — declines are per-repo only. Each repo is its own decision; "not for this repo" silences only here. (`<REPO>` is `header-repo`, next to the preamble's `HEADER_BIN`.)
 
 ### 1 — Yes, customize
 
@@ -458,23 +452,29 @@ The credentials file is **only ever read as data** (parsed via `grep`/`sed`); no
 
 If briefing creation hits `TOPIC_LIMIT_FREE` or any other `*_FREE` code, run the trial/upgrade flow (see "Tier limits and error handling"). On `*_QUOTA`, surface it and continue (the existing audit still landed).
 
-### 2 — Not for this repo
-
-Per-repo flag is already flipped above. Don't touch `SIGNUP_STATE`. Future repos still get asked.
-
-### 3 — No, don't ask again
-
-Per-repo flag is flipped; globally opt out:
+**Flip the per-repo flag** once the topic is created (or once the user finishes signup + topic creation in this flow). Do **not** flip it if the user picked option 2 or option 3 — those branches handle the flag themselves.
 
 ```bash
-printf 'public-only\n' > "${HEADER_HOME:-$HOME/.header}/.signup-state"
+"<REPO>" flag topic-offered set
 ```
 
-Public-default audits keep working. The user can re-enable later by deleting `~/.header/.signup-state`.
+### 2 — Remind me next session
+
+Don't flip the per-repo flag. Don't touch `SIGNUP_STATE`. The next session in this repo will re-ask with the same wording. Acknowledge briefly ("ok, I'll bring it up next time") and continue to "Telemetry consent".
+
+### 3 — Not for this repo, don't ask again
+
+Flip the per-repo flag — this repo never gets re-offered:
+
+```bash
+"<REPO>" flag topic-offered set
+```
+
+Other repos still get asked. Tell the user they can re-enable this repo with `header-repo flag topic-offered clear` if they change their mind. Public-default audits keep working unchanged.
 
 ### Resumption (deferred signup)
 
-On a later run where `SIGNUP_STATE: pending` and `TOPIC_OFFERED: no`, re-offer once with a softer pitch ("you started signup earlier — still want a custom topic for this repo?"). If they defer again, write `public-only` and stop nagging.
+On a later run where `SIGNUP_STATE: pending` and `TOPIC_OFFERED: no`, re-offer with a softer pitch ("you started signup earlier — still want a custom topic for this repo?"). Same three options, same gating. The user can keep deferring as long as they want — option 3 ("not for this repo") is how they silence it.
 
 ## Telemetry consent
 

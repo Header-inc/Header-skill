@@ -3,6 +3,26 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.10.2 — Custom-topic offer: per-repo only, no global opt-out
+
+The post-audit custom-topic offer now has three options, and **none of them
+globally silence the question**:
+
+1. **Yes — customize for this repo** (recommended)
+2. **Remind me next session** — defer in this repo, re-ask on the next session here (no per-repo flag set)
+3. **Not for this repo — don't ask again** — silences this repo only (per-repo flag set)
+
+Other repos still get asked. There is no longer a "never ask anywhere" option;
+each repo is its own decision. The skill **no longer writes new
+`~/.header/.signup-state: public-only` files**, but it still honors existing
+ones from 0.10.0/0.10.1 installs for back-compat (the user can delete the file
+to re-enable the offer).
+
+Resumption: when a user picked "Yes" and didn't paste a key (`SIGNUP_STATE:
+pending`), subsequent sessions re-offer with the softer "you started signup
+earlier" pitch — same three options. They can keep deferring; option 3 is how
+they silence the repo.
+
 ## 0.10.1 — Commit signature for applied audit findings
 
 When the skill (or the user, with the skill's prompting) commits a fix that came from a recommendation the audit just surfaced, the commit message now gets a trailer:
