@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.12.1
+version: 0.12.2
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -623,7 +623,11 @@ Concrete invocations by finding kind:
   ```
   Then prepare `~/.header/experiments/<id>/arms/B/` with the override files (copied into the worktree before the agent runs).
 
-`--task` accepts either a path (resolved relative to the repo first, then the experiment dir) or a one-line inline prompt (written to `<exp_dir>/tasks/t1.md`). If you have a real prior task transcript or a recent feature spec in the repo, use that — it's a more realistic measurement than a synthetic prompt.
+`--task` accepts either a path (resolved relative to the repo first, then the experiment dir) or a one-line inline prompt (written to `<exp_dir>/tasks/tN.md`). **`--task` is repeatable** — for crisper CIs target ≥3 tasks (the bootstrap CI's noise floor drops sharply moving from N=1 to N=3 to N=5). If you have real prior task transcripts or recent feature specs in the repo, use those — more realistic measurement than synthetic prompts.
+
+**Power tiering.** Analyses below 5 paired tasks aren't refused — they're caveated. N=1 paired-by-task is genuinely degenerate (CI is a single point); N=2-4 is wide-but-honest and surfaces a `WIDE CI / LIMITED POWER` flag in the report. **For an A/A noise-floor check with only 1 task × K replicates**, the runner switches to a within-task replicate-level bootstrap automatically, which gives real bias-detection power without needing multiple tasks.
+
+**Worktree isolation gotcha.** `git worktree add` only brings *tracked* files. If your verify command needs `venv/`, `node_modules/`, `.env`, or editable-installed packages, set `worktree_include: venv, .env, ...` in the spec — those paths get symlinked from the repo into each run's worktree. Without it, verify may silently test the parent repo's code instead of arm B's edits (the worst kind of false success).
 
 After the scaffold prints, walk the user through the four-step loop:
 

@@ -2,8 +2,8 @@
 
 Status: draft / for review.
 
-**What's shipped today (v0.12.0) — the audit → experiment → applied-change loop in code, with
-cost-vs-magnitude gating:**
+**What's shipped today (v0.12.2) — the audit → experiment → applied-change loop in code, with
+cost-vs-magnitude gating, soft power tiers, and worktree-isolation fixes:**
 - **Phase 1 — `bin/header-cost`** (v0.8.0+; v0.8.2+ states API-vs-subscription cost basis) — the
   realized-spend meter that prices §1's "billable savings."
 - **Phase 2 MVP — `bin/header-experiment`** (beta):
@@ -232,10 +232,19 @@ From the A/A σ and the effect you care about (e.g. ≥5% token reduction), comp
 power, α=0.05. Intuition: `N ∝ (σ/MDE)²`. Token data is high-variance and right-skewed → prefer
 log-transform or non-parametric tests, expect non-trivial N.
 
-**Implementation status (v0.11.1):** `analyze` does **not yet** compute power from σ. It flags
-`verdict = "underpowered"` when `paired tasks < 5` — a hand-picked floor that catches the
-single-task / two-task cases where any CI is nonsense, but is not a substitute for proper σ-driven
-sizing. The proper version is part of step 2 of §10's build order.
+**Implementation status (v0.12.2):** `analyze` does **not yet** compute power from σ, but the
+hand-picked-cutoff approach has been softened from a hard refusal to a power tier:
+- **N=1 paired tasks** (paired-by-task) → `verdict = "data degenerate"` — bootstrap resamples are
+  literally identical so the CI collapses to a single point; refuse to analyze.
+- **N=2-4 paired tasks** → analyze and emit verdict, but with a `WIDE CI / LIMITED POWER at N=n` flag
+  in both result.json reason and the report. CI is wide but honest, not degenerate.
+- **N ≥ 5 paired tasks** → standard verdict, no caveat.
+- **Mode = A/A with N=1 task** → switch to **replicate-level unpaired bootstrap** within that one
+  task (K samples per arm). The bias-detection question ("do A and A_2's cost distributions differ?")
+  is genuinely answerable at low task count if you have K replicates. `result.json` carries
+  `analysis_method: "replicate-level"` so consumers know.
+
+Proper σ-driven power sizing is still part of step 2 of §10's build order.
 
 ### 6.4 Tests by metric type
 

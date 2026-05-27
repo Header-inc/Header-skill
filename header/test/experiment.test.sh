@@ -247,8 +247,8 @@ write_task_prompt exp-tiny example
   printf '{"task":"t1","arm":"B","rep":0,"cost_usd":0.06,"success":true}\n'
 } > "$(exp_dir_for exp-tiny)/runs.jsonl"
 EXP analyze exp-tiny >/dev/null
-assert_contains "$(cat "$(exp_dir_for exp-tiny)/result.json")" '"verdict": "underpowered"' \
-  "1-task experiment → verdict underpowered (never \"B wins\")"
+assert_contains "$(cat "$(exp_dir_for exp-tiny)/result.json")" '"verdict": "data degenerate"' \
+  "1-task A/B experiment → verdict 'data degenerate' (paired-by-task CI is a single point at N=1; never \"B wins\")"
 
 # ── analyze --aa: harness validator ──────────────────────────
 EXP define exp-aa --arm "A=opus" --arm "B=sonnet" >/dev/null
@@ -576,9 +576,8 @@ assert_contains "$ex_report_out" "Excluded 2 of 6 runs" \
 assert_contains "$ex_report_out" "agent_exit ≠ 0" \
   "report banner names the cause (agent_exit ≠ 0)"
 
-# 12) Report suppresses degenerate CI when verdict = underpowered
-# 1 paired task → underpowered → CI is mathematically a point. Don't print
-# the degenerate [x.xx, x.xx] numbers — they look precise but are misleading.
+# 12) Report suppresses degenerate CI when N=1 paired task (paired-by-task)
+# Bootstrap on 1 task → CI collapses to a point. Don't print fake precision.
 EXP new under-1 --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$nw_repo" >/dev/null
 cat > "$(exp_dir_for under-1)/runs.jsonl" <<'EOF'
 {"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0,"verify_exit":0}
@@ -587,15 +586,181 @@ EOF
 EXP analyze under-1 --seed 7 --bootstrap 200 >/dev/null
 under_report_out="$(EXP report under-1 2>&1)"
 assert_contains "$under_report_out" "(insufficient data)" \
-  "underpowered report replaces CI numerics with 'insufficient data'"
-# The conservative-savings line is also suppressed for the same reason —
-# a CI that's a single point doesn't bound anything to be conservative about.
+  "N=1 paired-by-task report replaces CI numerics with 'insufficient data'"
 assert_contains "$under_report_out" "Conservative savings rate: not computed" \
-  "underpowered report suppresses the conservative-savings number"
-# But result.json STILL carries the raw numbers — analysts can still see them
+  "N=1 paired-by-task report suppresses the conservative-savings number"
+# result.json still carries the raw numbers — only the report suppresses them
 under_result="$(cat "$(exp_dir_for under-1)/result.json")"
 assert_contains "$under_result" '"ci95":' \
   "result.json still carries raw ci95 array (only the report suppresses it)"
+
+# ── 0.12.2 fixes ─────────────────────────────────────────────
+
+# 13) Soft gate — N=2-4 tasks gets a verdict + 'WIDE CI / LIMITED POWER',
+# not refused. The 0.12.1 hard cliff (refuse <5) was too strict.
+EXP new low3 --arm A: --arm B: --task "x" --verify true --repo "$nw_repo" >/dev/null
+cat > "$(exp_dir_for low3)/runs.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0}
+{"task":"t1","arm":"B","rep":0,"cost_usd":3.0,"success":true,"agent_exit":0}
+{"task":"t2","arm":"A","rep":0,"cost_usd":6.0,"success":true,"agent_exit":0}
+{"task":"t2","arm":"B","rep":0,"cost_usd":4.0,"success":true,"agent_exit":0}
+{"task":"t3","arm":"A","rep":0,"cost_usd":7.0,"success":true,"agent_exit":0}
+{"task":"t3","arm":"B","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0}
+EOF
+EXP analyze low3 --seed 7 --bootstrap 500 >/dev/null
+low3_result="$(cat "$(exp_dir_for low3)/result.json")"
+# N=3 should still get a verdict (not refused) but with the wide-CI caveat
+assert_contains "$low3_result" '"tasks_paired": 3'         "low-N analysis records the task count"
+assert_contains "$low3_result" '"analysis_method": "paired-by-task"' "low-N stays paired-by-task in A/B"
+low3_report="$(EXP report low3 2>&1)"
+assert_contains "$low3_report" "LIMITED POWER"             "report flags low-power at N=3"
+assert_contains "$low3_report" "N=3 paired task"           "report names the N count for context"
+# N=3 still shows a real CI (not 'insufficient data') — it's wide, not degenerate
+assert_not_contains "$low3_report" "(insufficient data)"   "N=3 CI is shown (wide but real); not suppressed"
+
+# 14) A/A replicate-level fallback when N=1 task × K replicates
+# This is the right analysis when you can only afford one task — the
+# bias detection question is "do A and A_2 have systematically different
+# cost distributions on this one task?", which is a 2-sample test on K reps.
+EXP new aa-rep --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$nw_repo" >/dev/null
+cat > "$(exp_dir_for aa-rep)/runs-aa.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A","rep":1,"cost_usd":5.2,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A","rep":2,"cost_usd":4.9,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A","rep":3,"cost_usd":5.1,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":0,"cost_usd":5.1,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":1,"cost_usd":5.3,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":2,"cost_usd":4.8,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":3,"cost_usd":5.2,"success":true,"agent_exit":0}
+EOF
+EXP analyze aa-rep --aa --seed 7 --bootstrap 500 >/dev/null
+aa_rep_result="$(cat "$(exp_dir_for aa-rep)/result-aa.json")"
+assert_contains "$aa_rep_result" '"analysis_method": "replicate-level"' \
+  "A/A N=1 × K reps switches to replicate-level analysis (not paired-by-task)"
+assert_contains "$aa_rep_result" '"verdict": "A/A OK' \
+  "A/A clean data with replicate-level analysis → 'A/A OK' verdict"
+aa_rep_report="$(EXP report aa-rep --aa 2>&1)"
+assert_contains "$aa_rep_report" "replicate-level bootstrap" \
+  "report banner names the replicate-level method"
+assert_contains "$aa_rep_report" "1 task × 4/4 reps" \
+  "report verdict shows the (1 task, K reps) shape"
+
+# 14b) A/A replicate-level can also DETECT bias when reps systematically diverge
+cat > "$(exp_dir_for aa-rep)/runs-aa.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A","rep":1,"cost_usd":5.1,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A","rep":2,"cost_usd":5.0,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A","rep":3,"cost_usd":5.1,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":0,"cost_usd":7.0,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":1,"cost_usd":7.2,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":2,"cost_usd":7.1,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":3,"cost_usd":7.3,"success":true,"agent_exit":0}
+EOF
+EXP analyze aa-rep --aa --seed 7 --bootstrap 500 >/dev/null
+aa_rep_biased="$(cat "$(exp_dir_for aa-rep)/result-aa.json")"
+assert_contains "$aa_rep_biased" '"verdict": "A/A BIASED' \
+  "A/A replicate-level detects systematic offset → 'A/A BIASED' verdict"
+
+# 14c) A/A replicate-level needs ≥2 reps per arm
+cat > "$(exp_dir_for aa-rep)/runs-aa.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":5.0,"success":true,"agent_exit":0}
+{"task":"t1","arm":"A_2","rep":0,"cost_usd":5.1,"success":true,"agent_exit":0}
+EOF
+EXP analyze aa-rep --aa --seed 7 >/dev/null
+aa_rep_too_few="$(cat "$(exp_dir_for aa-rep)/result-aa.json")"
+assert_contains "$aa_rep_too_few" '"verdict": "A/A data degenerate"' \
+  "A/A with only 1 task × 1 rep per arm → 'A/A data degenerate' (can't do replicate-level either)"
+
+# 15) Multi-task --task in new
+EXP new multi --arm A: --arm B: \
+  --task "Task one." --task "Task two." --task "Task three." \
+  --verify true --repo "$nw_repo" >/dev/null
+multi_spec="$(cat "$(exp_dir_for multi)/spec")"
+assert_contains "$multi_spec" "[task:t1]" "multi-task spec has t1"
+assert_contains "$multi_spec" "[task:t2]" "multi-task spec has t2"
+assert_contains "$multi_spec" "[task:t3]" "multi-task spec has t3"
+assert_eq "yes" "$([ -f "$(exp_dir_for multi)/tasks/t1.md" ] && echo yes || echo no)" \
+  "multi-task: t1.md written"
+assert_eq "yes" "$([ -f "$(exp_dir_for multi)/tasks/t2.md" ] && echo yes || echo no)" \
+  "multi-task: t2.md written"
+assert_eq "yes" "$([ -f "$(exp_dir_for multi)/tasks/t3.md" ] && echo yes || echo no)" \
+  "multi-task: t3.md written"
+EXP validate multi >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "multi-task spec validates"
+
+# 16) worktree_include — symlinks repo paths into the worktree before agent runs
+wi_repo="$sb/wi-repo"
+mkdir -p "$wi_repo/src" "$wi_repo/venv/bin"
+(cd "$wi_repo" && git init -q && git config user.email t@t && git config user.name t && \
+  echo 'src' > src/x.py && git add . && git commit -qm i)
+# venv is untracked — git worktree won't bring it
+echo 'fake' > "$wi_repo/venv/bin/pytest"
+echo "DATABASE_URL=fake" > "$wi_repo/.env"
+
+EXP new wi-exp --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$wi_repo" >/dev/null
+# Set worktree_include via sed (the wizard leaves it commented)
+sed -i '/^# worktree_include:/i worktree_include: venv, .env' "$(exp_dir_for wi-exp)/spec"
+
+# Stub adapter that asserts the symlinks are visible inside the worktree
+cat > "$sb/wi-adapter.sh" <<'STUB'
+#!/usr/bin/env bash
+[ -e venv/bin/pytest ] && v=ok || v=MISS
+[ -e .env ] && e=ok || e=MISS
+printf '{"type":"result","model":"stub","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1},"_check":"v=%s e=%s"}\n' "$v" "$e"
+STUB
+chmod +x "$sb/wi-adapter.sh"
+
+EXP run wi-exp --yes --adapter "$sb/wi-adapter.sh" --k 1 >/dev/null 2>&1
+log_a="$(exp_dir_for wi-exp)/logs/t1-A-0.json"
+assert_contains "$(cat "$log_a")" 'v=ok' "worktree_include symlinks venv/ into the worktree"
+assert_contains "$(cat "$log_a")" 'e=ok' "worktree_include symlinks .env into the worktree"
+# Missing path → skipped with a warning, doesn't fail the run
+sed -i 's/^worktree_include: venv, .env$/worktree_include: venv, .env, does-not-exist/' "$(exp_dir_for wi-exp)/spec"
+wi_missing_out="$(EXP run wi-exp --yes --adapter "$sb/wi-adapter.sh" --k 1 2>&1)"
+assert_contains "$wi_missing_out" "'does-not-exist' not found in repo" \
+  "worktree_include: missing paths are skipped with a warning, not fatal"
+
+# 16b) Default warning about worktree isolation when worktree_include is unset
+EXP new wi-default --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$wi_repo" >/dev/null
+wi_default_out="$(EXP run wi-default --yes --adapter "$sb/wi-adapter.sh" --k 1 2>&1)"
+assert_contains "$wi_default_out" "TRACKED files" \
+  "run prints worktree-isolation warning when worktree_include is unset"
+assert_contains "$wi_default_out" "worktree_include" \
+  "warning names the worktree_include field as the fix"
+
+# 17) Cache-read pricing nuance in magnitude estimate
+mag_nuance_out="$(EXP new mag-nuance --kind prompt-debt-deletion \
+  --file CLAUDE.md --lines "3" --task t --verify true --replicates 1 \
+  --repo "$big_repo" 2>&1)"
+assert_contains "$mag_nuance_out" "Pricing nuance" \
+  "magnitude estimate includes the cache-read pricing nuance"
+assert_contains "$mag_nuance_out" "cache reads" \
+  "pricing nuance names cache-read pricing"
+assert_contains "$mag_nuance_out" "ratio is preserved" \
+  "pricing nuance preserves the cost-vs-magnitude ratio framing"
+
+# 18) Pre-existing-enforcement nudge for CLAUDE.md / AGENTS.md edits
+enforce_out="$(EXP new enforce-claude --kind prompt-debt-deletion \
+  --file CLAUDE.md --lines "3" --task t --verify true --replicates 1 \
+  --repo "$big_repo" 2>&1)"
+assert_contains "$enforce_out" "pre-commit hooks" \
+  "CLAUDE.md prompt-debt scaffold mentions checking pre-commit hooks"
+assert_contains "$enforce_out" ".claude/settings.json" \
+  "CLAUDE.md prompt-debt scaffold mentions Claude Code hooks"
+assert_contains "$enforce_out" "redundant" \
+  "enforcement nudge calls out the 'CLAUDE.md text becomes redundant' failure mode"
+
+# Other-file deletions don't trigger the CLAUDE.md-specific nudge
+big_repo3="$sb/big-repo3"
+mkdir -p "$big_repo3" && (cd "$big_repo3" && git init -q && \
+  git config user.email t@t && git config user.name t)
+{ for i in $(seq 1 50); do echo "line $i"; done; } > "$big_repo3/random.md"
+(cd "$big_repo3" && git add . && git commit -qm i)
+other_out="$(EXP new enforce-other --kind prompt-debt-deletion \
+  --file random.md --lines "3" --task t --verify true --replicates 1 \
+  --repo "$big_repo3" 2>&1)"
+assert_not_contains "$other_out" "pre-commit hooks" \
+  "Non-CLAUDE.md deletions don't trigger the enforcement nudge"
 
 # ── merge ─────────────────────────────────────────────────────
 # Synthesize a B-wins runs.jsonl for the prompt-debt experiment, analyze, merge.

@@ -282,7 +282,34 @@ Magnitude estimate (arm B vs A):
 Reality check (the rule that matters more than statistical power):
   Experiments are honest when the proven payoff outweighs their own cost.
   Don't run a \$60 experiment to prove a \$0.10 effect.
+
+  Pricing nuance: prefix tokens live in the prompt cache and are priced at
+  ~10% of regular input rates on cache reads. So both the proven SAVINGS and
+  the experiment COST scale down together — the ratio is preserved, but the
+  headline dollar / headroom impact is smaller than the raw token count
+  suggests.
 EOF
+
+  # Pre-existing-enforcement nudge for CLAUDE.md / AGENTS.md edits — the
+  # specific class where the text being trimmed may already be redundant.
+  # Per the 2026-05-27 audit: pre-commit hooks / CI / .claude/settings.json
+  # hooks are often the real source of enforcement, making the CLAUDE.md
+  # text null-effect (and any experiment measuring it null-result).
+  local _basename; _basename="$(basename "$file_rel")"
+  case "$_basename" in
+    CLAUDE.md|AGENTS.md|CLAUDE.local.md|AGENTS.local.md)
+      cat >&2 <<EOF
+  Heads-up — before scaffolding this experiment, check whether other
+  mechanisms already enforce what those lines say:
+    · pre-commit hooks  →  .git/hooks/pre-commit, .githooks/, scripts/
+    · CI rules          →  .github/workflows/, .gitlab-ci.yml, CI configs
+    · Claude Code hooks →  .claude/settings.json (hooks: section)
+  If a hook is the real source of truth, the ${_basename} text is redundant —
+  the experiment will measure nothing because both arms behave identically.
+  Apply with review instead; or rescaffold targeting the actual enforcement.
+EOF
+      ;;
+  esac
   # 5% is the rough cutoff between "small enough to review" and "big enough to
   # bother proving" — see SKILL.md's audit categorisation. The number is a
   # rule of thumb, not a hard threshold; we just suggest, never block. And we
@@ -369,6 +396,10 @@ write_spec() {
     printf 'replicates: %s\n' "${reps:-3}"
     printf 'non_inferiority_margin: %s\n' "${margin:-0.02}"
     [ -n "$ledger_key" ] && printf 'ledger_key: %s\n' "$ledger_key"
+    printf '# worktree_include:                 # OPTIONAL — comma-sep paths (e.g. venv, .env)\n'
+    printf '                                    # symlinked from repo into each runs worktree.\n'
+    printf '                                    # Needed for editable installs / dotfiles that\n'
+    printf '                                    # git worktree does not bring along.\n'
     printf '\n'
     local label model ovd
     printf '%s\n' "$arms_blob" | while IFS='|' read -r label model ovd; do
@@ -505,10 +536,10 @@ cmd_define() {
 # next-step commands (--aa first, then A/B) when the spec is written.
 cmd_new() {
   local id="" kind="" file_arg="" lines="" from="" to=""
-  local task_arg="" verify_arg="" replicates="" margin="" desc="" ledger_key=""
+  local verify_arg="" replicates="" margin="" desc="" ledger_key=""
   local repo_arg=""
   local after_line="" text_arg="" text_file=""
-  local arms_in=()
+  local arms_in=() task_args=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind)        kind="${2:-}"; shift 2 ;;
@@ -520,7 +551,7 @@ cmd_new() {
       --from)        from="${2:-}"; shift 2 ;;
       --to)          to="${2:-}"; shift 2 ;;
       --arm)         arms_in+=("${2:-}"); shift 2 ;;
-      --task)        task_arg="${2:-}"; shift 2 ;;
+      --task)        task_args+=("${2:-}"); shift 2 ;;
       --verify)      verify_arg="${2:-}"; shift 2 ;;
       --replicates)  replicates="${2:-}"; shift 2 ;;
       --margin)      margin="${2:-}"; shift 2 ;;
@@ -617,10 +648,14 @@ USAGE
     esac
   fi
 
-  # Ask for the task + verify if not provided AND a TTY is around.
-  if [ -z "$task_arg" ]; then
-    task_arg="$(prompt_user "Task — file path (relative to repo) OR a one-line inline prompt" "")"
-    [ -n "$task_arg" ] || { err "a task is required (use --task PATH-OR-INLINE)"; return 1; }
+  # Ask for at least one task interactively if none were passed via --task.
+  # Repeated --task flags become t1, t2, t3, ... — important for getting above
+  # the soft N=2-4 "limited power" tier (≥5 paired tasks for crisp CIs).
+  if [ "${#task_args[@]}" -eq 0 ]; then
+    local _interactive_task
+    _interactive_task="$(prompt_user "Task — file path (relative to repo) OR a one-line inline prompt" "")"
+    [ -n "$_interactive_task" ] || { err "at least one task is required (use --task PATH-OR-INLINE; repeat for multi-task)"; return 1; }
+    task_args+=("$_interactive_task")
   fi
   # Track whether verify came from auto-detection so we can nudge the user
   # afterwards. Auto-detected verifiers (npm test / pytest / cargo test / ...)
@@ -681,19 +716,22 @@ USAGE
       ;;
   esac
 
-  # Resolve the task: if it's an existing file (in repo or absolute), use as-is.
-  # Otherwise treat as inline → write a .md under <exp_dir>/tasks/.
-  local task_path=""
-  local task_id="t1"
-  if [ -f "$task_arg" ]; then
-    task_path="$task_arg"
-  elif [ -f "$repo/$task_arg" ]; then
-    task_path="$task_arg"   # store as relative; resolve_task_path will find it under repo
-  else
-    task_path="$(write_inline_task "$dir" "$task_id" "$task_arg")"
-  fi
-
-  local tasks_blob; tasks_blob="${task_id}|${task_path}|${verify_arg}|1200"
+  # Resolve each task: existing file (absolute or repo-relative) → use as-is;
+  # otherwise inline prompt → write to <exp_dir>/tasks/tN.md. Number tasks t1,
+  # t2, ... in the order --task flags were given.
+  local tasks_blob="" _ta _tid _tpath _idx=0
+  for _ta in "${task_args[@]}"; do
+    _idx=$(( _idx + 1 ))
+    _tid="t${_idx}"
+    if [ -f "$_ta" ]; then
+      _tpath="$_ta"
+    elif [ -f "$repo/$_ta" ]; then
+      _tpath="$_ta"   # store as relative; resolve_task_path finds it under repo
+    else
+      _tpath="$(write_inline_task "$dir" "$_tid" "$_ta")"
+    fi
+    tasks_blob="${tasks_blob}${_tid}|${_tpath}|${verify_arg}|1200"$'\n'
+  done
 
   local spec="$dir/spec"
   write_spec "$spec" "$id" "$desc" "$repo" "$replicates" "${margin:-0.02}" "$arms_blob" "$tasks_blob" "$ledger_key"
@@ -706,7 +744,16 @@ USAGE
 
   echo "Wrote $spec"
   echo "  Repo:      $repo"
-  echo "  Task:      $task_path"
+  local _ntasks; _ntasks="$(printf '%s\n' "$tasks_blob" | grep -c .)"
+  if [ "$_ntasks" -eq 1 ]; then
+    echo "  Task:      $(printf '%s' "$tasks_blob" | head -1 | awk -F'|' '{print $2}')"
+  else
+    echo "  Tasks ($_ntasks):"
+    printf '%s\n' "$tasks_blob" | while IFS='|' read -r _tid _tpath _rest1 _rest2; do
+      [ -n "$_tid" ] || continue
+      echo "    $_tid:  $_tpath"
+    done
+  fi
   echo "  Verify:    $verify_arg"
   case "$kind" in
     prompt-debt-deletion) echo "  Arms:      A=control, B=$(basename "$file_arg") with lines [$lines] removed (arms/B/$file_arg)" ;;
@@ -820,6 +867,31 @@ run_one() {
   fi
   if [ "$using_worktree" -eq 0 ]; then
     cp -a "$repo" "$wt" 2>/dev/null || die "could not isolate repo $repo"
+  fi
+  # worktree_include: comma-separated list of repo-relative paths to symlink
+  # into the worktree (read from spec via dynamic-scope $WORKTREE_INCLUDE
+  # exported by cmd_run). Fixes a class of false-success bugs where the
+  # verify cmd needs venv/, node_modules/, .env, or editable installs that
+  # `git worktree add` doesn't bring along.
+  if [ -n "${WORKTREE_INCLUDE:-}" ]; then
+    local _p _pdir _old_ifs="$IFS"
+    IFS=','
+    for _p in $WORKTREE_INCLUDE; do
+      _p="$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -n "$_p" ] || continue
+      if [ ! -e "$repo/$_p" ]; then
+        echo "worktree_include: '$_p' not found in repo ($repo), skipping" >&2
+        continue
+      fi
+      if [ -e "$wt/$_p" ] && [ ! -L "$wt/$_p" ]; then
+        echo "worktree_include: '$_p' already exists in worktree (tracked file?), skipping" >&2
+        continue
+      fi
+      _pdir="$(dirname "$_p")"
+      [ "$_pdir" != "." ] && mkdir -p "$wt/$_pdir"
+      ln -sf "$repo/$_p" "$wt/$_p"
+    done
+    IFS="$_old_ifs"
   fi
   # Apply overrides (files in $overrides_dir overwrite their counterparts in $wt).
   if [ -n "$overrides_dir" ] && [ -d "$overrides_dir" ]; then
@@ -942,6 +1014,10 @@ cmd_run() {
   local commit; commit="$(spec_get_scalar "$spec" commit)"; [ -n "$commit" ] || commit="HEAD"
   local reps;   reps="$(spec_get_scalar "$spec" replicates)"
   [ -n "$k_override" ] && reps="$k_override"
+  # worktree_include: symlinked into each (task,arm,rep) worktree by run_one.
+  # Picked up via dynamic scope (run_one reads $WORKTREE_INCLUDE).
+  local WORKTREE_INCLUDE
+  WORKTREE_INCLUDE="$(spec_get_scalar "$spec" worktree_include)"
 
   # Resolve real commit hash for the run record. If repo isn't git, leave it.
   local commit_resolved="$commit"
@@ -972,6 +1048,22 @@ cmd_run() {
   for T in $tasks_list; do [ -n "$T" ] && tasks+=("$T"); done
 
   local n_runs=$(( ${#tasks[@]} * ${#arms[@]} * reps ))
+
+  # Worktree-isolation reminder. `git worktree add` only brings TRACKED files
+  # — no venv/, node_modules/, .env, or editable-installed packages. That's a
+  # silent source of "verify passed" lies (the verify ran against the parent
+  # repo's code, not arm B's edits). Print only when worktree_include is unset
+  # so configured users aren't lectured.
+  if [ -z "$WORKTREE_INCLUDE" ]; then
+    cat >&2 <<EOF
+Note: each run's git worktree contains only TRACKED files. If your verify
+needs venv/, node_modules/, .env, or editable-installed packages, set
+'worktree_include:' in the spec (comma-separated paths to symlink from repo,
+e.g. 'worktree_include: venv, .env'). Otherwise verify may silently test
+the parent repo's code rather than arm B's edits.
+
+EOF
+  fi
 
   # Cost gate — refuse to run silently. Speak BOTH billing modes (mirrors
   # header-cost's framing: subscription users don't pay $ per token, they spend
@@ -1107,7 +1199,13 @@ cmd_analyze() {
       if (agent_exit != 0) { Excluded++; next }
       cost = jnum($0,"cost_usd"); succ = jbool($0,"success")
       key = task SUBSEP arm
-      Reps[key]++; SumC[key]+=cost; SumS[key]+=succ
+      Reps[key]++
+      # Store individual replicate values so we can do replicate-level
+      # analysis when paired-by-task is degenerate (low-N A/A fallback).
+      Rep_i = Reps[key]
+      C[key, Rep_i] = cost
+      S[key, Rep_i] = succ
+      SumC[key]+=cost; SumS[key]+=succ
       if (!(task in Tseen)) { Tseen[task]=1; Tasks[++nt]=task }
       if (!(arm  in Aseen)) { Aseen[arm]=1;  Arms[++na]=arm }
     }
@@ -1161,19 +1259,31 @@ cmd_analyze() {
       cost_favorable = (cost_hi < 0) ? 1 : 0
       # Non-inferiority: lower bound of success-diff CI ≥ −δ (margin).
       succ_non_inferior = (succ_lo >= -margin) ? 1 : 0
+      # Power tiering — soft, not a hard cliff. The previous <5 cliff produced
+      # "underpowered" verdicts that read as refusals; in reality:
+      #   N=1 → truly degenerate (bootstrap resamples the same task → CI is a point)
+      #   2 ≤ N < 5 → wide CI but honest (~35 distinct resample outcomes at N=4)
+      #   N ≥ 5 → normal nonparametric inference
+      # A/A with N=1 has a special replicate-level fallback below.
+      analysis_method = "paired-by-task"
+      ci_degenerate = (n_paired <= 1) ? 1 : 0
+      low_power     = (n_paired >= 2 && n_paired < 5) ? 1 : 0
 
       verdict = "no proven win"
       reason = ""
-      if (n_paired < 5) {
-        verdict = "underpowered"
-        reason = sprintf("only %d task pair(s) — need more before a decision", n_paired)
+      if (ci_degenerate && mode != "aa") {
+        verdict = "data degenerate"
+        reason = sprintf("only %d task pair(s) — paired-by-task bootstrap CI is a single point; need ≥2 tasks", n_paired)
       } else if (cost_favorable && succ_non_inferior) {
         verdict = "B wins (cost lower, success non-inferior)"
+        if (low_power) reason = sprintf("WIDE CI / LIMITED POWER at N=%d paired task(s) — confirm with more tasks before merging", n_paired)
       } else if (!cost_favorable && cost_lo > 0) {
         verdict = "A wins (B is more expensive)"
+        if (low_power) reason = sprintf("WIDE CI / LIMITED POWER at N=%d paired task(s)", n_paired)
       } else if (!cost_favorable) {
         verdict = "no proven win"
         reason = "cost CI contains 0 — effect not separable from noise"
+        if (low_power) reason = reason " (and WIDE CI / LIMITED POWER at N=" n_paired " paired task(s))"
       } else if (cost_favorable && !succ_non_inferior) {
         verdict = "no proven win"
         reason = sprintf("success regressed beyond δ=%.3f (lower CI %.3f)", margin, succ_lo)
@@ -1181,11 +1291,58 @@ cmd_analyze() {
 
       # A/A check: if mode=aa, surface whether the harness is clean. A/A should
       # have a CI containing 0 for cost; if it doesn'\''t, the pipeline is biased.
+      # For N=1 paired task, paired-by-task is degenerate — switch to a
+      # replicate-level unpaired bootstrap on within-task cost values (the
+      # right analysis for "is the harness biased?" when you can only afford
+      # one task with K replicates per arm).
       if (mode == "aa") {
-        aa_clean = (cost_lo <= 0 && cost_hi >= 0) ? 1 : 0
-        verdict = aa_clean ? "A/A OK — harness clean" \
-                            : "A/A BIASED — fix the harness before trusting any A/B"
-        reason = ""
+        if (n_paired == 1) {
+          task1 = Tasks[1]
+          k_a_r = Reps[task1, A] + 0
+          k_b_r = Reps[task1, B] + 0
+          if (k_a_r < 2 || k_b_r < 2) {
+            verdict = "A/A data degenerate"
+            reason = sprintf("only %d task × %d/%d replicates — need ≥2 replicates per arm for replicate-level analysis", n_paired, k_a_r, k_b_r)
+            ci_degenerate = 1
+          } else {
+            # Recompute the cost CI via unpaired bootstrap on K replicates per
+            # arm (within the single task). The success-rate CI stays paired-by-task
+            # since 0/1 outcomes do not need replicate-level analysis.
+            srand(seed)
+            for (b=1; b<=boots; b++) {
+              sa_r = 0; sb_r = 0
+              for (j=1; j<=k_a_r; j++) {
+                idx = int(rand() * k_a_r) + 1
+                if (idx<1) idx=1; if (idx>k_a_r) idx=k_a_r
+                sa_r += C[task1, A, idx]
+              }
+              for (j=1; j<=k_b_r; j++) {
+                idx = int(rand() * k_b_r) + 1
+                if (idx<1) idx=1; if (idx>k_b_r) idx=k_b_r
+                sb_r += C[task1, B, idx]
+              }
+              BC[b] = (sb_r/k_b_r) - (sa_r/k_a_r)
+            }
+            cost_lo = pct(BC, boots, 0.025); cost_hi = pct(BC, boots, 0.975)
+            cost_mean_diff = (cost_B_mean - cost_A_mean)
+            analysis_method = "replicate-level"
+            ci_degenerate = 0
+            aa_clean = (cost_lo <= 0 && cost_hi >= 0) ? 1 : 0
+            verdict = aa_clean ? sprintf("A/A OK — harness clean (replicate-level, 1 task × %d/%d reps)", k_a_r, k_b_r) \
+                                : sprintf("A/A BIASED — fix the harness before trusting any A/B (replicate-level, 1 task × %d/%d reps)", k_a_r, k_b_r)
+            reason = ""
+          }
+        } else {
+          aa_clean = (cost_lo <= 0 && cost_hi >= 0) ? 1 : 0
+          if (low_power) {
+            verdict = aa_clean ? sprintf("A/A OK — harness clean (wide CI, limited power at N=%d)", n_paired) \
+                                : sprintf("A/A BIASED — fix the harness (wide CI, limited power at N=%d)", n_paired)
+          } else {
+            verdict = aa_clean ? "A/A OK — harness clean" \
+                                : "A/A BIASED — fix the harness before trusting any A/B"
+          }
+          reason = ""
+        }
       }
 
       # Emit result.json. Multi-line for legibility; jq-parseable.
@@ -1195,6 +1352,7 @@ cmd_analyze() {
       printf "  \"tasks_paired\": %d,\n", n_paired >> out_file
       printf "  \"n_per_arm\": [%d, %d],\n", n_per_arm_A, n_per_arm_B >> out_file
       printf "  \"excluded_runs\": %d,\n", Excluded+0 >> out_file
+      printf "  \"analysis_method\": \"%s\",\n", analysis_method >> out_file
       printf "  \"bootstrap_iters\": %d,\n", boots >> out_file
       printf "  \"non_inferiority_margin\": %s,\n", margin >> out_file
       printf "  \"cost\": {\n" >> out_file
@@ -1259,15 +1417,21 @@ cmd_report() {
       tasks = jnum(blob,"tasks_paired"); boots = jnum(blob,"bootstrap_iters")
       margin = jnum(blob,"non_inferiority_margin")
       excluded = jnum(blob,"excluded_runs")
+      analysis_method = jstr(blob,"analysis_method")
+      if (analysis_method == "") analysis_method = "paired-by-task"
       verdict = jstr(blob,"verdict"); reason = jstr(blob,"reason")
       n_per_arm_pair = jpair(blob,"n_per_arm")
       split(n_per_arm_pair, NPA, ","); n_a = NPA[1]+0; n_b = NPA[2]+0
-      # Suppress the bootstrap CI string when paired tasks make it degenerate.
-      # 1 task → all bootstrap resamples are identical (the CI collapses to a
-      # point). The verdict already flags this as "underpowered"; the CI line
-      # should match by saying "insufficient data," not by printing apparent
-      # precision that misleads.
-      ci_degenerate = (verdict ~ /^underpowered/) ? 1 : 0
+      # Suppress the bootstrap CI string only when the analysis is genuinely
+      # degenerate. Two cases:
+      #   1. paired-by-task with N=1 → resamples identical → CI collapses to point
+      #   2. verdict starts with "data degenerate" or "A/A data degenerate"
+      # For 2-4 paired tasks the CI is wide but real — show it with a caveat,
+      # do not suppress (would discard real information). The verdict carries
+      # the "WIDE CI / LIMITED POWER" caveat already.
+      ci_degenerate = ((tasks <= 1 && analysis_method == "paired-by-task") || \
+                       verdict ~ /degenerate/) ? 1 : 0
+      low_power = (tasks >= 2 && tasks < 5 && analysis_method == "paired-by-task") ? 1 : 0
 
       # Cost block — pull from the {} after "cost":
       cb = blob; sub(/.*"cost":[[:space:]]*{/,"",cb); sub(/}.*/,"",cb)
@@ -1280,6 +1444,11 @@ cmd_report() {
 
       printf "\nExperiment report — %s\n", (mode=="aa" ? "A/A (noise floor)" : "A vs B")
       printf "  Arms: %s vs %s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n", A, B, tasks, boots, margin
+      if (analysis_method == "replicate-level") {
+        printf "  Analysis: replicate-level bootstrap (N=1 task; bootstrap on within-task replicates per arm)\n"
+      } else if (low_power) {
+        printf "  Analysis: paired-by-task, LIMITED POWER — N=%d paired task(s), CI is real but wide; confirm with more tasks if the verdict matters\n", tasks
+      }
       if (excluded > 0) {
         total_intended = n_a + n_b + excluded
         printf "  Excluded %d of %d runs (agent_exit ≠ 0 — timeout or error). Cost/success means use clean runs only.\n", excluded, total_intended

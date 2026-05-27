@@ -3,6 +3,117 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.12.2 — Soft power gate, replicate-level A/A, worktree isolation fix, multi-task scaffold, audit nudges
+
+Five fixes from a second real-world experiment run that exposed the next
+layer of edge cases. The 0.12.1 "underpowered = refuse" cliff was too
+strict; the 0.11.x worktree isolation was actively misleading; `new` was
+single-task-only; and prompt-debt deletions on CLAUDE.md often measure
+nothing because hooks already enforce the behavior.
+
+### 1) Soft power gate (replaces the 0.12.1 `<5 → refuse` hard cliff)
+
+`<5 paired tasks` is no longer a refusal. Three power tiers:
+- **N=1 paired-by-task** — verdict `data degenerate` (genuinely refuse — the
+  bootstrap CI is mathematically a single point).
+- **N=2-4** — analyze normally but flag `WIDE CI / LIMITED POWER at N=n` in
+  the verdict + a banner in the report. CIs are wide but real; suppressing
+  them threw away honest information.
+- **N≥5** — standard verdict, no caveat.
+
+User-driven via the AskUserQuestion dialog: "Soften gate + replicate-level
+A/A fallback." Picks the right answer for both A/A bias-detection (small N
+fine if K is large) and A/B effect-detection (N gets tiered, not refused).
+
+### 2) Replicate-level A/A fallback (the right analysis for low-N harness checks)
+
+A/A asks *"is the harness biased?"* — really *"do A and A_2's cost
+distributions differ systematically?"* With N=1 task and K≥2 replicates per
+arm, that's a 2-sample question on K values per arm, not a paired-by-task
+question on 1 task. `analyze --aa` now switches to **unpaired bootstrap on
+within-task replicates** when tasks_paired==1. So `1 task × 10 reps` gives
+real bias-detection power (vs. the old false-positive `A/A BIASED` from a
+degenerate paired-by-task CI). `result.json` carries
+`analysis_method: "replicate-level"`; report banner names it. A/A with N=1
+and <2 reps per arm still hits `A/A data degenerate` (can't do either
+analysis with that little data).
+
+### 3) Worktree-include — fix the silent-success class of bugs
+
+`git worktree add --detach` brings only TRACKED files. No `venv/`,
+`node_modules/`, `.env`, or editable-installed packages. The 0.11.x runner
+silently let `pytest` execute against the *parent repo's* code (via the
+editable install resolving to the original path) — both arms passed, but
+arm B's actual edits were never tested. The worst kind of false-positive.
+
+Two-part fix:
+- New optional top-level spec field **`worktree_include: venv, .env, ...`**
+  — comma-separated repo-relative paths that get symlinked into each run's
+  worktree before the agent invokes. Skips paths that don't exist
+  (warning), skips paths that already exist as tracked files in the worktree
+  (warning).
+- When `worktree_include` is unset, `run` prints a one-line reminder before
+  the cost gate ("worktrees contain only TRACKED files; if your verify needs
+  venv/, .env, set worktree_include:"). When set, the reminder is
+  suppressed — configured users aren't lectured.
+- Scaffolded specs (`new`, `define`) get a commented `# worktree_include:`
+  placeholder so the field is discoverable when editing the spec.
+
+### 4) `--task` is now repeatable
+
+`new` was single-task only — every scaffolded experiment was N=1 by
+construction, which collided with the soft power gate (always
+`data degenerate` for A/B). Now `--task` is repeatable:
+
+```bash
+header-experiment new my-exp --arm A: --arm B: \
+  --task "Refactor X" --task "Refactor Y" --task "Refactor Z" \
+  --verify "pytest -x -q"
+```
+
+Each `--task` becomes a `[task:tN]` section (numbered t1, t2, t3 in flag
+order). Inline prompts get written to `<exp_dir>/tasks/tN.md`; file paths
+are stored as repo-relative. Interactive mode still asks for one task; for
+multi-task pass them all via flags.
+
+### 5) Two scaffold-time nudges
+
+**Cache-read pricing nuance** — in the magnitude estimate for
+`--kind prompt-debt-deletion`, surface that prefix tokens live in the prompt
+cache and price at ~10% of regular input rates on cache reads. Both proven
+savings AND experiment cost scale down by the same factor, so the
+cost-vs-magnitude ratio is preserved — but the headline dollar / headroom
+impact is smaller than the raw token count suggests.
+
+**Pre-existing enforcement nudge** — for prompt-debt deletions targeting
+CLAUDE.md / AGENTS.md (the actual case from the 2026-05-27 run), `new`
+prints: *"Before scaffolding: check whether other mechanisms already enforce
+what those lines say — pre-commit hooks (.git/hooks/), CI rules
+(.github/workflows/), Claude Code hooks (.claude/settings.json hooks: section).
+If a hook is the real source of truth, the CLAUDE.md text is redundant and
+the experiment will measure nothing because both arms behave identically."*
+Other-file deletions don't trigger it (kept narrow to the actual failure
+mode).
+
+### Tests
+
++30 assertions covering soft gate at N=2-4 (verdict + LIMITED POWER caveat,
+CI not suppressed), replicate-level A/A (clean + biased verdicts, "1 task
+× K reps" framing, <2-reps degenerate fallback), worktree_include
+(symlinks present in worktree, missing paths warned not fatal, default
+warning suppressed when configured), multi-task scaffold (t1/t2/t3
+sections + files), cache-read pricing nuance, CLAUDE.md enforcement nudge
+(present on CLAUDE.md, absent on other files). 176 in experiment suite,
+430 total; all 11 suites green.
+
+### Doc changes
+
+- SKILL.md "Experiments" section: power tiering explained,
+  `worktree_include` mentioned, `--task` repeatability called out.
+- `docs/experiments-design.md` §6.3: implementation status updated with the
+  three power tiers + replicate-level fallback. §0 status header bumped to
+  v0.12.2.
+
 ## 0.12.1 — Four honesty fixes from a real-world 0.11.x run
 
 Real feedback from running the experiment engine on a `synthesize-engine`
