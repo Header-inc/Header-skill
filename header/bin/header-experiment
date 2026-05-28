@@ -925,6 +925,14 @@ cmd_validate() {
   local sscope; sscope="$(spec_get_scalar "$spec" setup_scope)"
   case "$sscope" in ''|experiment|run) ;; *) err "setup_scope must be 'experiment' or 'run' (got '$sscope')"; rc=1 ;; esac
 
+  # Lifecycle keys MUST live in the top block. spec_get_scalar only reads lines
+  # before the first [section], so a setup:/teardown:/setup_scope: placed below
+  # one is silently ignored → NO infra is provisioned and the run hits the repo's
+  # real DB (false isolation — worse than not having the feature). Catch it loudly.
+  local misplaced
+  misplaced="$(awk '/^\[/{s=1} s && /^[[:space:]]*(setup|teardown|setup_scope)[[:space:]]*:/{print}' "$spec")"
+  [ -z "$misplaced" ] || { err "setup/teardown/setup_scope found BELOW a [section] — they must be in the top block (above the first [arm:...]/[task:...]), or they're silently ignored and no infra is provisioned. Move them up."; rc=1; }
+
   local arms_list tasks_list
   arms_list="$(spec_list_sections "$spec" arm)"
   tasks_list="$(spec_list_sections "$spec" task)"

@@ -1032,4 +1032,14 @@ assert_contains "$(EXP new guard-1 --kind prompt-debt-deletion --file CLAUDE.md 
   --task tiny --verify true --replicates 1 --repo "$ca_repo" 2>&1)" "guardrail-VALUE" \
   "#3 new --kind prompt-debt-deletion surfaces the guardrail-value recommendation for a mandate"
 
+# ── validate rejects lifecycle keys placed BELOW a [section] (silent no-op) ──
+# spec_get_scalar can't see them there → no infra provisioned → false DB isolation.
+EXP new life-misplaced --arm "A:" --arm "B:" --task "tiny" --verify true \
+  --replicates 1 --repo "$life_repo" >/dev/null 2>&1
+printf 'setup: echo DATABASE_URL=throwaway\n' >> "$(exp_dir_for life-misplaced)/spec"  # appended AFTER the sections
+EXP validate life-misplaced >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "#1 validate rejects setup/teardown placed below a [section] (silent no-op landmine)"
+assert_contains "$(EXP validate life-misplaced 2>&1)" "top block" \
+  "#1 misplacement error explains keys must be in the top block"
+
 t_done

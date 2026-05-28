@@ -37,6 +37,16 @@ that closes the audit → experiment → applied-change loop in code, not just i
   asks for confirmation, prints a suggested `git commit` with the
   `Header-Audit-Finding:` trailer when the experiment originated from an audit
   finding (`--ledger-key`). Doesn't auto-commit — user retains the final say.
+- **Ephemeral-infra lifecycle + discrimination/cost-axis/guardrail** (0.12.x–0.13.0) —
+  `setup:` / `teardown:` / `setup_scope:` provision an isolated DB/branch per
+  experiment (or per run for write isolation), inject its connection info into the
+  adapter + verifier, and tear it down via a guaranteed `EXIT`/`INT`/`TERM` trap.
+  `validate`/`run` warn when a prompt-debt deletion can't discriminate (success
+  axis); `report` warns on the cost axis (arm A not measurably costlier → the
+  adapter may not have performed the mandate); mandate deletions surface the
+  **guardrail-value** recommendation. Plus soft power tiers, replicate-level A/A,
+  `worktree_include`, and pre-spend honesty (degenerate-CI + the measured A/A
+  noise floor surfaced at the gate).
 
 **Next on this track (not yet built):**
 
@@ -44,31 +54,12 @@ that closes the audit → experiment → applied-change loop in code, not just i
   open problem. Turn the customer's own test suite into the oracle; mine
   FAIL_TO_PASS commits into task specs so users don't hand-author task prompts. The
   current MVP requires the user to write the prompt + name the verify command.
-- **Per-experiment ephemeral infra (`setup:` / `teardown:` lifecycle)** — the next
-  big capability, and the one that unblocks infra-dependent mandates (visual-verify,
-  curl-self-check). `worktree_include` handles *files*; stateful experiments need
-  *services*: provision an isolated DB (Neon branch, throwaway Postgres) per
-  experiment, inject its connection string into each run's worktree env, and
-  **guarantee teardown** (orphaned branches cost money and accrue). Open design
-  questions: **granularity** — read-only tasks share one branch; write tasks need
-  isolation per *run* (task×arm×rep), or arm A's writes contaminate arm B and
-  replicates contaminate each other, which multiplies branch count; **seeding**
-  (snapshot vs. migrate-from-scratch); and **cleanup on crash/interrupt**. Bonus:
-  tool-managed provisioning removes the hand-injected-`.env` ambiguity that makes
-  "is this the throwaway DB or prod?" a live footgun today.
-- **Cost-axis non-discrimination detection** — the discrimination warning guards
-  the *success* axis (does the task exercise the trimmed instruction?). Its twin on
-  the *cost* axis: if the run adapter never *performs* the mandated expensive work
-  (a one-shot headless `claude -p` won't boot a server + drive a browser), arm A's
-  cost collapses onto arm B's → a false "the mandate is free." The runner should
-  flag a per-arm cost delta that's implausibly small for a mandate that should be
-  expensive.
-- **Guardrail-value mode** — "is this mandate earning its cost?" decomposes into
-  *cost* (cheap: measure one execution) and *benefit* (tail-risk insurance —
-  unmeasurable at small N; a rare-event rate needs many realistic tasks or
-  historical bug replay, not a 1×4 A/B). The skill should make "measure the cost
-  directly, reason about the benefit qualitatively" the **default recommendation**
-  for guardrail-value questions, instead of scaffolding an underpowered A/B.
+- **Tool-managed infra provisioning** (the next step on the shipped `setup:`/
+  `teardown:` lifecycle) — a `--kind` / provider helper that creates+drops a Neon
+  branch (or docker Postgres) for you, so users don't hand-write the `setup:`
+  command or eyeball connection strings. Open design questions carried over:
+  **seeding** (snapshot vs. migrate-from-scratch) and surfacing orphaned-branch
+  cleanup if a crash outruns the teardown trap.
 - **σ-based power analysis** — A/A surfaces the per-metric noise floor; use it to
   size N (replicates × tasks) for a chosen MDE. Today the `<5 paired tasks →
   underpowered` cutoff is a hand-picked heuristic, not power-driven.

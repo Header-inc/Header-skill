@@ -562,7 +562,7 @@ team already trusts.
 
 ---
 
-## 12. `header-experiment` interfaces (spec — NOT yet built)
+## 12. `header-experiment` interfaces (spec — shipped in 0.11–0.13; see §14 for additions)
 
 Spec only — no implementation in this version. New helper `bin/header-experiment`, consistent with the other
 `bin/` tools, local-first, runs on customer infra. Four cooperating pieces: **miner → spec → runner →
@@ -663,3 +663,17 @@ the verifier MVP (§11) is the next runnable slice and unlocks "the user doesn't
   customer code. The hybrid split (§7.3) is the answer.
 - **Stat honesty at scale.** Many customers × many experiments × peeking = false-discovery minefield.
   FDR + fixed-N, or always-valid sequential, from day one on the backend.
+
+## 14. Addenda — shipped beyond the original design (0.12.x–0.13.0)
+
+Capabilities added during dogfooding that §§1–13 didn't cover. The §12 CLI is built; these extend it.
+
+- **Three-disposition gating** (0.12.0, see §6.8) — the audit classifies each finding `[Apply now]` / `[Apply with review]` / `[Experiment]` by the experiment-cost-vs-proven-payoff *ratio*, not raw magnitude.
+- **Discrimination guard — success axis** (0.12.3) — a prompt-debt deletion only measures something if the verify task *exercises* the deleted instruction. `validate`/`run` detect prompt-prefix (`CLAUDE.md`/`AGENTS.md`) deletions — including hand-rolled specs, by diffing arm overrides against the repo — and warn, escalating when the deleted text carries emphatic mandates (`MUST`/`NEVER`/`ALWAYS`, case-sensitive so sentence-case cargo-cult doesn't false-positive).
+- **Discrimination guard — cost axis** (0.13.0) — `report` flags a mandate-deletion A/B whose cost came back non-favorable: arm A wasn't measurably costlier than B, so either the mandate is genuinely cheap or the adapter never *performed* the mandated work (a one-shot headless run won't boot a server / drive a browser) — a false "the mandate is free."
+- **Guardrail-value mode** (0.13.0) — "is this mandate earning its cost?" is not an A/B: cost is cheap to measure (one execution), benefit is tail-risk insurance unmeasurable at small N. The tool recommends measuring cost directly.
+- **Pre-spend honesty** (0.12.3) — a 1-task A/B's degenerate CI is flagged at `validate`/`run` (not discovered at `analyze`); `--yes` discloses the cost/power framing (skips the prompt, not the disclosure); a prior `--aa` result's measured noise floor is surfaced at the A/B gate so a sub-noise effect is visible before spend.
+- **Soft power tiers + replicate-level A/A** (0.12.2) — N=1 → `data degenerate`, N=2–4 → `WIDE CI / LIMITED POWER` (analyzed, not refused), N≥5 → normal; A/A with 1 task × K reps uses a within-task replicate bootstrap for real bias detection.
+- **`worktree_include`** (0.12.2) — symlink `venv`/`.env`/etc into each worktree (the *files* layer).
+- **Ephemeral-infra lifecycle** (0.13.0) — `setup:` / `teardown:` / `setup_scope:` (experiment|run) provision an isolated *service* (DB/branch) per experiment or per run, inject connection info into the adapter+verifier, and tear down via a guaranteed `EXIT`/`INT`/`TERM` trap. Keys must live in the spec's top block; `validate` errors if they're misplaced below a section (they would silently no-op → false DB isolation).
+- **Exit-code hygiene** (0.12.4) — every `bin/` tool exits 0 on success paths and `--help`; only genuine usage/errors exit non-zero.

@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.13.0
+version: 0.13.1
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -586,7 +586,7 @@ Other subcommands: `"<COST>" refresh [--url U]`, `"<COST>" prices`, `"<COST>" co
 
 ## Experiments (`header-experiment`) — beta
 
-> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **MVP scope:** `new` (audit-aware scaffolder), `validate`, `run` (with `--aa` for noise-floor), `analyze`, `report`. **Not yet:** git-history task mining (§11), auto-merge of the winning arm, LLM judges, cross-customer aggregate submit.
+> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **Scope:** `new` (audit-aware scaffolder), `validate`, `run` (`--aa` noise-floor; `setup:`/`teardown:` ephemeral infra), `analyze`, `report`, `merge` (apply arm B after a B-wins verdict). **Not yet:** git-history task mining (§11), σ-based power analysis, LLM judges, cross-customer aggregate submit.
 
 ### From audit finding to scaffolded experiment
 
@@ -654,7 +654,7 @@ Surface these four points when interpreting the report:
 
 The runner spends real tokens — the cost gate confirms before launching. Don't auto-`--yes` for the user. Even with `--yes`, the runner still prints the full cost/power disclosure (it skips the confirmation *prompt*, not the disclosure), and if a prior `--aa` result exists it surfaces the **measured noise floor** at the A/B gate — so an effect smaller than the harness's own run-to-run noise is visible *before* the spend, not discovered at `analyze`.
 
-Out of scope for the MVP: auto-applying the winning arm's diff to the repo (this is a future `merge` subcommand; for now, when a user wins an experiment, show them the `arms/B/` diff and let them apply it manually).
+On a B-wins verdict, `header-experiment merge <id>` applies arm B's overrides to the repo — it shows the unified diff first, asks for confirmation, refuses any non-B-wins verdict unless `--force`, and prints a suggested `git commit` with the `Header-Audit-Finding:` trailer when the experiment came from an audit finding. It does **not** auto-commit; you retain the final say.
 
 ## Browse public topics
 

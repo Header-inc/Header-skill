@@ -3,6 +3,28 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.13.1 — Safety guard for misplaced lifecycle keys + post-0.13.0 doc sync
+
+**Landmine fix.** `setup:` / `teardown:` / `setup_scope:` are read by
+`spec_get_scalar`, which only sees the spec's top block — so a key placed *below*
+a `[section]` was silently ignored: no infra provisioned, and the run quietly hit
+the repo's real DB (false isolation, worse than not having the feature). `validate`
+now hard-errors on a lifecycle key found below the first `[section]`, naming the
+fix. Regression-tested.
+
+**Doc sync to 0.13.0 reality** (the prose had drifted behind the code):
+- `ROADMAP.md` — moved ephemeral-infra / cost-axis / guardrail-value out of "not
+  yet built" (they shipped in 0.12.x–0.13.0) into the shipped list; the remaining
+  "next" item is now tool-managed provisioning.
+- `SKILL.md` — fixed the experiments intro (`merge` + the `setup`/`teardown`
+  lifecycle are in scope) and a stale line calling `merge` "a future subcommand."
+- `README.md` — corrected the verdict list (`underpowered` → `data degenerate`
+  (N=1) + `WIDE CI / LIMITED POWER` at N=2–4) and added a one-line lifecycle note.
+- `llms.txt` — refreshed the `header-experiment` entry (pre-spend honesty,
+  both-axis discrimination, guardrail-value, ephemeral-infra lifecycle).
+- `docs/experiments-design.md` — un-stale'd §12's "(NOT yet built)" title and
+  added §14 cataloguing everything shipped beyond the original design.
+
 ## 0.13.0 — Experiment engine: ephemeral-infra lifecycle, cost-axis discrimination, guardrail-value mode
 
 Three experiment-engine milestones from the 0.12.5 field test, turning "the
