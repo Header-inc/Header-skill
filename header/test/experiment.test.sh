@@ -866,4 +866,90 @@ assert_contains "$swap_merge_out" "Update your default to 'claude-sonnet-4-6'" \
 assert_contains "$swap_merge_out" "header-ledger record applied \"route-boilerplate\"" \
   "merge on a model-swap still suggests the ledger record"
 
+# ════════════════════════════════════════════════════════════════════
+# 0.12.3 — pre-spend honesty: degenerate-CI warning (#1), --yes still
+# discloses (#2), measured noise-floor surfaced at the A/B gate (#3),
+# prompt-debt discrimination warning incl. hand-rolled specs (#4).
+# ════════════════════════════════════════════════════════════════════
+
+# Clean repo + 1-task spec for the gate tests.
+gate_repo="$sb/gate-repo"
+mkdir -p "$gate_repo" && (cd "$gate_repo" && git init -q && \
+  git config user.email t@t && git config user.name t && \
+  echo hi > a.txt && git add a.txt && git commit -qm init)
+EXP define gate-1 --arm "A=" --arm "B=" --replicates 2 >/dev/null
+write_task_prompt gate-1 example
+sed -i "s#^repo: .*#repo: $gate_repo#" "$(exp_dir_for gate-1)/spec"
+
+# #1 — validate WARNS (does not fail) that a 1-task A/B yields a degenerate CI.
+EXP validate gate-1 >/dev/null 2>&1; deg_rc=$?
+assert_exit 0 "$deg_rc" "#1 validate still passes (warn, not fail) for a 1-task spec"
+assert_contains "$(EXP validate gate-1 2>&1)" "DEGENERATE" \
+  "#1 validate warns a 1-task A/B yields a degenerate CI BEFORE any spend"
+
+# #2/#3 — the cost gate. claude is absent from /usr/bin:/bin, so the no-adapter
+# branch prints the disclosure then fails cleanly at the claude check — no real
+# agent is ever spawned. HEADER_EXPERIMENT_ADAPTER is cleared so it can't leak in.
+gate_out="$(HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_ADAPTER="" PATH="/usr/bin:/bin" "$HE" run gate-1 --yes 2>&1)"
+assert_contains "$gate_out" "About to launch" \
+  "#2 run --yes still prints the cost disclosure (skips the prompt, not the disclosure)"
+assert_contains "$gate_out" "authorized non-interactively" \
+  "#2 run --yes records that the spend was authorized (disclosure on the record)"
+assert_contains "$gate_out" "No A/A noise floor on record" \
+  "#3 A/B gate nudges to run --aa first when no A/A result exists"
+
+# #3 — with a prior A/A result on disk, the gate surfaces the MEASURED floor.
+cat > "$(exp_dir_for gate-1)/result-aa.json" <<'JSON'
+{ "mode": "aa", "cost": { "A_mean": 0.100000, "B_mean": 0.100000, "diff_mean_BA": 0.000000, "ci95": [-0.042000, 0.006000], "favorable": false }, "success": { "ci95": [0.0000, 0.0000] }, "verdict": "A/A OK" }
+JSON
+floor_out="$(HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_ADAPTER="" PATH="/usr/bin:/bin" "$HE" run gate-1 --yes 2>&1)"
+assert_contains "$floor_out" "Noise floor (from your A/A run)" \
+  "#3 A/B gate surfaces the measured noise floor when an A/A result exists"
+assert_contains "$floor_out" 'half-width ~$0.0240' \
+  "#3 noise-floor half-width = (0.006-(-0.042))/2 = 0.0240, computed from the A/A cost CI"
+
+# #4 — prompt-debt discrimination warning, caught even on a HAND-ROLLED spec.
+disc_repo="$sb/disc-repo"
+mkdir -p "$disc_repo" && (cd "$disc_repo" && git init -q && \
+  git config user.email t@t && git config user.name t)
+cat > "$disc_repo/CLAUDE.md" <<'EOF'
+# Rules
+You MUST run the test suite before every commit.
+Be concise and helpful.
+EOF
+echo '{"name":"x"}' > "$disc_repo/package.json"
+(cd "$disc_repo" && git add . && git commit -qm init)
+# Generic spec (no --kind), arm B overrides_dir = arms/B, materialized BY HAND
+# afterwards — exactly the path that bypasses new --kind's scaffold guardrails.
+EXP new disc-1 --arm "A:" --arm "B::arms/B" \
+  --task "tiny task" --verify "true" --replicates 2 --repo "$disc_repo" >/dev/null 2>&1
+mkdir -p "$(exp_dir_for disc-1)/arms/B"
+sed '2d' "$disc_repo/CLAUDE.md" > "$(exp_dir_for disc-1)/arms/B/CLAUDE.md"   # drop the MUST line
+disc_out="$(EXP validate disc-1 2>&1)"
+assert_contains "$disc_out" "Discrimination check" \
+  "#4 validate warns when an arm trims a CLAUDE.md (hand-rolled spec caught via diff)"
+assert_contains "$disc_out" "behavior MANDATES" \
+  "#4 validate escalates when the trimmed text carries an emphatic mandate (MUST)"
+# Sentence-case cargo-cult ('Always think...', "Don't...") warns but does NOT
+# escalate (fresh repo — don't reuse debt-1, which `merge` overwrites earlier).
+cc_repo="$sb/cc-repo"
+mkdir -p "$cc_repo" && (cd "$cc_repo" && git init -q && \
+  git config user.email t@t && git config user.name t)
+cat > "$cc_repo/CLAUDE.md" <<'EOF'
+# Rules
+Always think step by step.
+Don't hallucinate.
+Be helpful.
+EOF
+(cd "$cc_repo" && git add . && git commit -qm init)
+EXP new cc-1 --arm "A:" --arm "B::arms/B" \
+  --task "tiny" --verify "true" --replicates 2 --repo "$cc_repo" >/dev/null 2>&1
+mkdir -p "$(exp_dir_for cc-1)/arms/B"
+sed '2,3d' "$cc_repo/CLAUDE.md" > "$(exp_dir_for cc-1)/arms/B/CLAUDE.md"   # drop cargo-cult lines
+cc_out="$(EXP validate cc-1 2>&1)"
+assert_contains "$cc_out" "Discrimination check" \
+  "#4 validate warns for a cargo-cult trim too"
+assert_not_contains "$cc_out" "behavior MANDATES" \
+  "#4 no mandate escalation for sentence-case cargo-cult (Always/Don't are not MUST/NEVER)"
+
 t_done

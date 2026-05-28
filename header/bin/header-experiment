@@ -250,6 +250,82 @@ gen_prompt_debt_arm_b() {
   sed "$sed_expr" "$src" > "$arm_dir/$file_rel"
 }
 
+# mandate_keywords_in <text>  → echoes up to 3 lines of <text> that carry an
+# EMPHATIC behavior mandate (uppercase MUST / NEVER / ALWAYS / DO NOT / ...).
+# Case-sensitive on purpose: real CLAUDE.md mandates shout ("you MUST self-
+# verify"), while cargo-cult debt is sentence-case ("Always think step by step",
+# "Don't hallucinate"). Keying on the uppercase form keeps the escalation high-
+# precision so we don't cry wolf on every cargo-cult deletion.
+mandate_keywords_in() {
+  printf '%s\n' "$1" \
+    | grep -E '\b(MUST NOT|MUST|NEVER|ALWAYS|SHALL|DO NOT|REQUIRED|MANDATORY|NON-NEGOTIABLE)\b' \
+    | head -3
+}
+
+# print_discrimination_warning <file_label> <removed_text>
+# The deletion-side twin of the worktree false-success: a prompt-debt-deletion
+# experiment only measures something if the verify task EXERCISES the deleted
+# lines. Routes both cases honestly — pure cargo-cult → no experiment needed
+# ([Apply with review]); behavioral → the task must require the instruction to
+# fire, else "N-of-N both arms" proves the task was easy, not that the cut was
+# safe. Escalates when the deleted text carries an emphatic mandate (regression-
+# style verifiers are blind to adherence drift). All output to stderr.
+print_discrimination_warning() {
+  local flabel="$1" removed="$2" hits
+  cat >&2 <<EOF
+
+Discrimination check — this experiment trims $flabel (a prompt-prefix file):
+  An A/B here only measures something if your verify task EXERCISES the trimmed
+  lines. Two honest outcomes:
+    · Pure cargo-cult (no behavioral effect) → you don't need an experiment at
+      all; that's [Apply with review] — the diff is the proof.
+    · Actually affects behavior → your task must plausibly FAIL if the agent
+      ignores the trimmed lines. If it would pass either way, both arms behave
+      identically and "success non-inferior / N-of-N both arms" proves the task
+      was easy, not that the deletion was safe.
+EOF
+  hits="$(mandate_keywords_in "$removed")"
+  if [ -n "$hits" ]; then
+    cat >&2 <<EOF
+  ⚠ The trimmed text contains emphatic behavior MANDATES — e.g.:
+$(printf '%s\n' "$hits" | sed 's/^[[:space:]]*/        /')
+    A regression-style verify (npm test / pytest) is BLIND to adherence drift:
+    the suite passes in BOTH arms even if arm B quietly stops obeying the rule.
+    Either make verify ASSERT the mandated behavior, or treat this as
+    [Apply with review] rather than an experiment that can't see its own risk.
+EOF
+  fi
+}
+
+# check_prefix_deletion_discrimination <spec> <dir> <repo_abs>
+# Fires the discrimination warning for prompt-prefix (CLAUDE.md / AGENTS.md)
+# deletion experiments — including HAND-ROLLED specs (the common path for trims),
+# which bypass `new --kind prompt-debt-deletion`'s scaffold-time guardrails. We
+# detect them by diffing each arm's overrides_dir prompt-prefix files against the
+# repo's copy: lines present in the repo but absent in the override are the cut.
+# Warn-only (never changes validate's exit code).
+check_prefix_deletion_discrimination() {
+  local spec="$1" dir="$2" repo_abs="$3"
+  local arms_list; arms_list="$(spec_list_sections "$spec" arm)"
+  local label ovd ovd_abs ovf rel repo_f removed
+  for label in $arms_list; do
+    [ -n "$label" ] || continue
+    ovd="$(spec_section_get "$spec" arm "$label" overrides_dir)"
+    [ -n "$ovd" ] || continue
+    ovd_abs="$(resolve_path "$dir" "$ovd")"
+    [ -d "$ovd_abs" ] || continue
+    while IFS= read -r ovf; do
+      [ -n "$ovf" ] || continue
+      rel="${ovf#"$ovd_abs"/}"
+      repo_f="$repo_abs/$rel"
+      [ -f "$repo_f" ] || continue
+      removed="$(diff "$repo_f" "$ovf" 2>/dev/null | sed -n 's/^< //p')"
+      [ -n "$removed" ] || continue
+      print_discrimination_warning "arm '$label' → $rel" "$removed"
+    done < <(find "$ovd_abs" -type f \( -name 'CLAUDE.md' -o -name 'AGENTS.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.local.md' \) 2>/dev/null)
+  done
+}
+
 # magnitude_estimate_prompt_debt <repo> <file_rel> <lines>  → prints, to stderr,
 # a magnitude report for a prompt-debt-deletion scaffold: how many bytes/tokens
 # we'd strip, what fraction of the file that is, and whether [Apply with review]
@@ -266,9 +342,10 @@ magnitude_estimate_prompt_debt() {
   local sed_expr="" ln
   local IFS=','
   for ln in $lines; do sed_expr="${sed_expr}${ln}p;"; done
-  local removed_bytes
+  local removed_bytes removed_text
   removed_bytes="$(sed -n "$sed_expr" "$src" 2>/dev/null | wc -c | tr -d ' ')"
   [ -n "$removed_bytes" ] || removed_bytes=0
+  removed_text="$(sed -n "$sed_expr" "$src" 2>/dev/null)"
   # Integer percent — awk for the division (bash math is integer-only).
   local pct
   pct="$(awk -v r="$removed_bytes" -v t="$total_bytes" 'BEGIN{ if (t>0) printf "%.1f", (r*100)/t; else print "0.0" }')"
@@ -334,6 +411,9 @@ EOF
   Continuing to scaffold anyway (your call).
 EOF
   fi
+  # The deletion is, by construction, a prompt-prefix cut → remind the caller the
+  # verify task must exercise it (and escalate if a mandate is in the cut).
+  print_discrimination_warning "$file_rel" "$removed_text"
   echo "" >&2
 }
 
@@ -832,6 +912,29 @@ cmd_validate() {
     [ -f "$prompt_abs" ] || { err "task $tid: prompt file not found: $prompt_abs (checked $repo_abs and $dir)"; rc=1; }
   done
 
+  # ── pre-flight warnings (informational; never change the exit code) ──
+  # #1 — a 1-task A/B yields a DEGENERATE cost & success CI: the paired-by-task
+  # bootstrap resamples a single task, so the interval collapses to a point and
+  # `analyze` returns "data degenerate" (never "B wins"). Surface it HERE, before
+  # any spend — not at analyze time, after the tokens are gone. (A/A is the
+  # exception: with ≥2 replicates the runner falls back to a replicate-level
+  # bootstrap, so 1 task is legitimate for a noise-floor check.)
+  if [ "$rc" -eq 0 ] && [ "${n_tasks:-0}" -eq 1 ]; then
+    cat >&2 <<'EOF'
+
+Heads-up: 1 task. An A/B run will produce a DEGENERATE cost/success CI — the
+paired-by-task bootstrap resamples one task, so the interval is a point and
+`analyze` returns "data degenerate", never "B wins". Add ≥2 tasks (≥5 for crisp
+CIs) for a real effect estimate. A 1-task run still works as a pass/fail sanity
+check that arm B doesn't break — just don't read it as a measured effect.
+(A/A noise-floor runs are fine at 1 task × ≥2 replicates.)
+EOF
+  fi
+  # #4 — prompt-prefix (CLAUDE.md / AGENTS.md) deletion experiments measure
+  # nothing unless the verify task exercises the deleted lines. Fires for
+  # hand-rolled specs too (the common path for trims).
+  [ "$rc" -eq 0 ] && check_prefix_deletion_discrimination "$spec" "$dir" "$repo_abs"
+
   if [ "$rc" -eq 0 ]; then
     echo "OK — $n_arms arm(s), $n_tasks task(s), replicates=$rep, δ=$margin, commit=$commit"
   fi
@@ -1073,7 +1176,12 @@ EOF
   # `/dev/tty` lies (it exists as a file but open() returns ENXIO with no
   # controlling terminal, and bash's redirect error message can't be suppressed
   # by `read 2>/dev/null` because it's emitted by the shell layer).
-  if [ "$yes" -ne 1 ] && [ -z "$adapter" ]; then
+  # Cost gate + pre-flight disclosure. The whole block is skipped only when
+  # --adapter is set (stub / testing → no real spend). --yes skips the
+  # confirmation PROMPT, not the disclosure: the spend rationale and any "this
+  # won't be measurable" warning belong on the record BEFORE tokens burn, not
+  # discovered at analyze time.
+  if [ -z "$adapter" ]; then
     cat >&2 <<EOF
 About to launch $n_runs agent invocation(s): ${#tasks[@]} tasks × ${#arms[@]} arms × $reps replicates.
   · API / Console (pay-per-token): real \$ spend on tokens for each invocation.
@@ -1087,13 +1195,57 @@ Levers to make an experiment cheaper without losing its point:
   · narrow your verify cmd to the smallest test that covers the change
   · shorter task prompts (10-turn focused, not 76-turn coding marathons)
 EOF
-    if [ ! -t 0 ]; then
-      err "no TTY for confirmation — re-run with --yes to authorize the spend non-interactively (or set --adapter to use a stub for testing)"
-      return 1
+
+    # #1 echo — the degenerate-CI case is the last thing to miss before spend.
+    if [ "$aa" -eq 0 ] && [ "${#tasks[@]}" -eq 1 ]; then
+      cat >&2 <<'EOF'
+
+  Note: 1 task → this A/B's cost & success CI will be DEGENERATE (analyze returns
+  "data degenerate", never "B wins"). Add ≥2 tasks for a real CI, or read this run
+  as a pass/fail sanity check only.
+EOF
     fi
-    printf 'Continue? [y/N] ' >&2
-    local ans=""; IFS= read -r ans
-    case "$ans" in [yY]|[yY][eE][sS]) ;; *) err "aborted"; return 1 ;; esac
+
+    # #3 — surface the MEASURED noise floor (from a prior --aa run) at the A/B
+    # gate, so an effect that can't clear the harness's own run-to-run noise is
+    # visible NOW, not discovered at analyze. No A/A on record → nudge to run it.
+    if [ "$aa" -eq 0 ]; then
+      local aa_json="$dir/result-aa.json"
+      if [ -f "$aa_json" ]; then
+        local floor_ci floor_half
+        floor_ci="$(grep -o '"ci95"[^]]*]' "$aa_json" | head -1 | sed 's/.*\[//; s/].*//; s/ //g')"
+        floor_half="$(awk -F',' 'BEGIN{f="?"} {lo=$1+0; hi=$2+0; w=(hi-lo)/2; if(w<0)w=-w; f=sprintf("%.4f",w)} END{print f}' <<<"$floor_ci")"
+        cat >&2 <<EOF
+
+  Noise floor (from your A/A run): cost CI [$floor_ci] USD/task → half-width ~\$$floor_half/task.
+  An A/B cost effect smaller than ~\$$floor_half/task won't separate from noise (the
+  CI will straddle 0 → "no proven win"). Prefix-only trims often save a few cached
+  tokens/turn — frequently below this floor. If your expected per-task saving is
+  under it, the cost A/B can't prove the win: rely on the diff for cost and use
+  this run for the success / adherence check only.
+EOF
+      else
+        cat >&2 <<EOF
+
+  No A/A noise floor on record. Consider \`header-experiment run $id --aa\` FIRST —
+  it measures whether your effect is even larger than the harness's run-to-run
+  noise. Skipping it risks spending a full A/B to learn the effect was unmeasurable.
+EOF
+      fi
+    fi
+
+    if [ "$yes" -ne 1 ]; then
+      if [ ! -t 0 ]; then
+        err "no TTY for confirmation — re-run with --yes to authorize the spend non-interactively (or set --adapter to use a stub for testing)"
+        return 1
+      fi
+      printf '\nContinue? [y/N] ' >&2
+      local ans=""; IFS= read -r ans
+      case "$ans" in [yY]|[yY][eE][sS]) ;; *) err "aborted"; return 1 ;; esac
+    else
+      echo "" >&2
+      echo "(--yes given — spend authorized non-interactively; the disclosure above is for the record.)" >&2
+    fi
   fi
 
   # Check the adapter or claude is available. Fail fast.

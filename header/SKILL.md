@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.12.2
+version: 0.12.3
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -304,6 +304,8 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 
 **Quotable principle (don't lose this):** *don't run a $60 experiment to prove a $0.10 effect*. Experiments cost real tokens on API rates or real usage-limit headroom on a Claude subscription — either way, they're not free. Both magnitude and experiment-cost are levers; spend on either side until the ratio works.
 
+**If you re-classify mid-flight, say so.** A finding's disposition (`[Apply now]` / `[Apply with review]` / `[Experiment]`) is a claim to the user. If you announce one and then act under another — e.g. you flagged `[Experiment]`, then on a closer look decide the diff is faithful enough to just apply — **state the change and your reason before you act**, and let the user redirect. Silently applying under a disposition other than the one you announced reads as sleight of hand, even when the new call is correct. The common case: you scope a CLAUDE.md trim as `[Experiment]`, then realize it's small *and* diff-faithful → `[Apply with review]`. Say that out loud; don't just quietly apply it.
+
 After presenting, ask which (if any) to implement. On selection, proceed with the implementation in the current project.
 
 **Commit signature.** When you (or the user) commit a fix that came from a recommendation the audit just surfaced, append a trailer to the commit message so the change's provenance is visible in `git log` / `git blame`:
@@ -603,7 +605,7 @@ Concrete invocations by finding kind:
     --task <task-prompt-or-path> \
     --verify <verify-cmd>
   ```
-  Arm A = current state. Arm B = the file with those lines stripped (the wizard does the sed for you and writes `arms/B/<file>`).
+  Arm A = current state. Arm B = the file with those lines stripped (the wizard does the sed for you and writes `arms/B/<file>`). **The verify task must exercise the deleted lines** — see the discrimination gotcha below; a generic `npm test` won't catch adherence drift.
 - **Model swap** (audit/briefing-derived: "consider routing this task class to a cheaper model"):
   ```bash
   header-experiment new "<ledger-key>-$(date +%Y%m%d-%H%M%S)" \
@@ -629,6 +631,8 @@ Concrete invocations by finding kind:
 
 **Worktree isolation gotcha.** `git worktree add` only brings *tracked* files. If your verify command needs `venv/`, `node_modules/`, `.env`, or editable-installed packages, set `worktree_include: venv, .env, ...` in the spec — those paths get symlinked from the repo into each run's worktree. Without it, verify may silently test the parent repo's code instead of arm B's edits (the worst kind of false success).
 
+**Discrimination gotcha (prompt-debt deletions) — the deletion-side twin of the worktree trap.** A trim experiment only measures something if the verify task *exercises the trimmed instruction*. Delete a `MUST self-verify` line, then run a task that never needed self-verification, and you get "3/3 both arms" — which proves the task was easy, not that the cut was safe. The failure is on **both** axes, not just cost: the cost CI is sub-noise *and* the success rate is non-discriminating, so no outcome of the experiment can move the decision. Worse, a regression-style verify (`npm test`) is **blind to adherence drift** — the suite passes in both arms even if arm B quietly stops obeying the rule. Before running, ask: *would this task plausibly fail if the agent ignored the deleted lines?* If no, the experiment can't see its own risk — either pick a task that **requires the instruction to fire** (for infra-dependent mandates like "self-verify via curl" or "visual-check the page", that often means a task the worktree can't support, which is itself the signal to use `[Apply with review]`), or treat the change as `[Apply with review]` (the diff is the evidence). `validate` and `run` print this warning automatically when an arm trims a `CLAUDE.md`/`AGENTS.md` — detected by diffing the override against the repo, so **hand-rolled specs are caught too** — and escalate when the deleted text carries emphatic mandates (`MUST`/`NEVER`/`ALWAYS`).
+
 After the scaffold prints, walk the user through the four-step loop:
 
 ```bash
@@ -644,7 +648,7 @@ Surface these four points when interpreting the report:
 - **Conservative savings rate** (= `max(0, -upper_CI(diff_cost))`) is the figure that survives an audit — never quote the optimistic tail.
 - A **noisy A/A** (CI excludes 0) means the harness is biased — *fix the harness before trusting any A/B*. This is the most common silent failure mode.
 
-The runner spends real tokens — the cost gate confirms before launching. Don't auto-`--yes` for the user.
+The runner spends real tokens — the cost gate confirms before launching. Don't auto-`--yes` for the user. Even with `--yes`, the runner still prints the full cost/power disclosure (it skips the confirmation *prompt*, not the disclosure), and if a prior `--aa` result exists it surfaces the **measured noise floor** at the A/B gate — so an effect smaller than the harness's own run-to-run noise is visible *before* the spend, not discovered at `analyze`.
 
 Out of scope for the MVP: auto-applying the winning arm's diff to the repo (this is a future `merge` subcommand; for now, when a user wins an experiment, show them the `arms/B/` diff and let them apply it manually).
 

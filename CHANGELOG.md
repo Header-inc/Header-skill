@@ -3,6 +3,65 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.12.3 — Pre-spend honesty: catch a doomed experiment before the tokens burn, not at `analyze`
+
+Five fixes from a real 0.12.2 run — a CLAUDE.md trim that got scaffolded as an
+A/B, run to completion (12 Haiku sessions), and only revealed at `analyze` time
+that it could never have measured anything. Every fix moves a warning that
+already existed *after* the spend to *before* it, and closes the gap that let a
+hand-rolled spec skip the guardrails entirely.
+
+### 1) `validate` warns on the degenerate 1-task CI (before any spend)
+
+A 1-task A/B is mathematically degenerate — the paired-by-task bootstrap
+resamples a single task, so the cost & success CI collapse to a point and
+`analyze` returns `data degenerate`, never `B wins`. That verdict already
+existed, but only *after* the run. `validate` (and `run`'s pre-flight) now say
+so up front: add ≥2 tasks for a real CI, or read the run as a pass/fail sanity
+check. (A/A noise-floor runs are still fine at 1 task × ≥2 replicates — the
+replicate-level fallback covers them.)
+
+### 2) `--yes` skips the prompt, not the disclosure
+
+`--yes` previously skipped the *entire* cost gate — so an authorized
+non-interactive run printed nothing, and the "don't run a \$60 experiment to
+prove a \$0.10 effect" framing never made it onto the record. Now the disclosure
+always prints when there's no `--adapter`; `--yes` only suppresses the
+interactive confirmation, and prints `(--yes given — spend authorized…)` so the
+rationale is logged before the tokens burn.
+
+### 3) The measured noise floor is surfaced at the A/B gate
+
+`run --aa` measures the harness's run-to-run noise floor, but nothing fed that
+back into the A/B decision — you'd discover your effect was sub-noise only at
+`analyze`. Now, if a `result-aa.json` exists, the A/B gate prints the measured
+cost-CI half-width: *"an effect smaller than ~\$X/task won't separate from
+noise."* No A/A on record → it nudges you to run `--aa` first. (Groundwork for
+the ROADMAP's σ-based power analysis; the comparison is surfaced, not yet
+auto-enforced.)
+
+### 4) Prompt-debt discrimination warning — incl. hand-rolled specs
+
+The biggest gap. A trim experiment only measures something if the verify task
+*exercises the trimmed instruction*; otherwise both arms behave identically and
+"3/3 both arms" proves the task was easy, not that the cut was safe — and a
+regression-style verify (`npm test`) is blind to adherence drift. The 0.12.2
+guardrails lived only in `new --kind prompt-debt-deletion`, so the real run's
+**hand-rolled** spec bypassed them all. `validate`/`run` now detect prompt-prefix
+deletions generically — by diffing each arm's `overrides_dir` `CLAUDE.md`/
+`AGENTS.md` against the repo's copy — and warn that the task must exercise the
+cut. When the deleted text carries an emphatic mandate (`MUST`/`NEVER`/`ALWAYS`,
+case-sensitive so sentence-case cargo-cult like "Always think step by step"
+doesn't cry wolf), it escalates: a regression verify can't see adherence drift.
+The scaffold path (the magnitude estimator) prints the same warning.
+
+### 5) Honesty rule — announce a disposition change mid-flight
+
+SKILL.md now codifies the root cause of the whole episode: if you flag a finding
+`[Experiment]` and then act under `[Apply with review]` (or vice versa), say so
+and why *before* acting. Silently applying under a different disposition than the
+one you announced reads as sleight of hand, even when the new call is right.
+
 ## 0.12.2 — Soft power gate, replicate-level A/A, worktree isolation fix, multi-task scaffold, audit nudges
 
 Five fixes from a second real-world experiment run that exposed the next
