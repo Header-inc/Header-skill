@@ -10,6 +10,10 @@
 #       ("wanted" = the user asked for the experiment behind a hypothesis —
 #        captures demand for the experimentation platform, still local-only.)
 #   header-ledger status <key> [--repo R]            latest action for <key>, or "none"
+#   header-ledger get <key> [--repo R]               latest FULL JSON record for
+#       <key> (the whole ledger line — title, briefing_id, topic_id, source_url),
+#       or nothing. Used to recover a finding's provenance (e.g. when syncing an
+#       experiment that tests it to the cloud).
 #   header-ledger list [--action A] [--since-days N] [--repo R]
 #       latest-disposition rows: <action>\t<key>\t<title>
 #
@@ -71,6 +75,24 @@ case "$cmd" in
     echo "${latest:-none}"
     ;;
 
+  get)
+    key="${1:-}"
+    shift 2>/dev/null || true
+    repo=""
+    while [ $# -gt 0 ]; do case "$1" in --repo) repo="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    [ -n "$repo" ] || repo="$(repo_id)"
+    { [ -n "$key" ] && [ -f "$LEDGER" ]; } || exit 0
+    # Latest full line matching repo + key (append-only ⇒ last wins). Prints the
+    # raw JSON record so callers recover a finding's provenance (title, briefing,
+    # topic, source) in one shot. A valid query with no match is success (empty
+    # output, exit 0) — not an error — so capture, then print.
+    latest="$(grep -F "\"repo\":\"$(json_escape "$repo")\"" "$LEDGER" 2>/dev/null \
+      | grep -F "\"key\":\"$(json_escape "$key")\"" \
+      | tail -1)"
+    [ -n "$latest" ] && printf '%s\n' "$latest"
+    exit 0
+    ;;
+
   list)
     action=""; since_days=""; repo=""
     while [ $# -gt 0 ]; do
@@ -107,11 +129,11 @@ case "$cmd" in
     ;;
 
   -h|--help)
-    echo "Usage: header-ledger {record|status|list} ..."
+    echo "Usage: header-ledger {record|status|get|list} ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-ledger {record|status|list} ..." >&2
+    echo "Usage: header-ledger {record|status|get|list} ..." >&2
     exit 1
     ;;
 esac

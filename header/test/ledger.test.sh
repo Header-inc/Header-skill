@@ -61,6 +61,22 @@ HEADER_HOME="$HH" "$LG" record applied weird-key --repo r4 --title 'A & B / C "q
 st="$(HEADER_HOME="$HH" "$LG" status weird-key --repo r4)"
 assert_eq "applied" "$st" "title with metacharacters does not corrupt the record"
 
+# ── get returns the full JSON record (provenance recovery) ─────
+HEADER_HOME="$HH" "$LG" record surfaced prov-key --repo r6 \
+  --title "Has provenance" --briefing b-99 --topic t-99 --source "https://ex.com/a"
+rec="$(HEADER_HOME="$HH" "$LG" get prov-key --repo r6)"
+assert_contains "$rec" '"key":"prov-key"'            "get returns the matching record"
+assert_contains "$rec" '"briefing_id":"b-99"'        "get carries briefing_id"
+assert_contains "$rec" '"topic_id":"t-99"'           "get carries topic_id"
+assert_contains "$rec" '"source_url":"https://ex.com/a"' "get carries source_url"
+# latest wins, and a no-match query is success (empty, exit 0)
+HEADER_HOME="$HH" "$LG" record wanted prov-key --repo r6 --title "Now wanted"
+assert_contains "$(HEADER_HOME="$HH" "$LG" get prov-key --repo r6)" '"action":"wanted"' \
+  "get returns the latest record for a key"
+rc=0; empty="$(HEADER_HOME="$HH" "$LG" get no-such-key --repo r6)" || rc=$?
+assert_exit 0 "$rc" "get with no match → exit 0"
+assert_eq "" "$empty" "get with no match → empty output"
+
 # ── ledger:false disables recording ───────────────────────────
 sb2="$(make_sandbox)"
 HEADER_HOME="$sb2/.header" "$SKILL_DIR/bin/header-config" set ledger false

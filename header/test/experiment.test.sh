@@ -11,7 +11,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/run.sh"
 
 HE="$SKILL_DIR/bin/header-experiment"
 sb="$(make_sandbox)"
-EXP() { HEADER_HOME="$sb/.header" "$HE" "$@"; }
+# NOSYNC: these tests exercise experiment logic, not cloud sync — keep auto-sync
+# (and any network egress) out of the way. push/auto-sync have their own suite.
+EXP() { HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 "$HE" "$@"; }
 
 # ── helpers ──────────────────────────────────────────────────
 exp_dir_for() { printf '%s/.header/experiments/%s' "$sb" "$1"; }

@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.13.1
+version: 0.14.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -656,6 +656,31 @@ The runner spends real tokens — the cost gate confirms before launching. Don't
 
 On a B-wins verdict, `header-experiment merge <id>` applies arm B's overrides to the repo — it shows the unified diff first, asks for confirmation, refuses any non-B-wins verdict unless `--force`, and prints a suggested `git commit` with the `Header-Audit-Finding:` trailer when the experiment came from an audit finding. It does **not** auto-commit; you retain the final say.
 
+### Sync experiments to your account — beta, automatic when a key is present
+
+Experiments sync to the user's Header account so they show up in the web UI — a live-updating record of *which experiment, testing which hypothesis, from which goal/topic/briefing, on which repo and machine, and how it came out*. Nothing runs server-side; the runner stays local. This is the user's own identified dashboard, distinct from the (still-anonymized, still-future) cross-customer aggregate submit.
+
+**It is automatic, not a prompt.** Every lifecycle change — `new`, `define`, `validate` (the "I edited the spec" hook), `run`, `analyze`, `merge` — fires a background sync, gated on:
+
+- **`HAS_KEY: yes`** (and `experiment_sync` is `auto`, the default) → the tool syncs and prints a faint `⤴ dashboard: …` status line. **Don't ask permission per edit** — the user opted in by configuring a key. Surface the line if useful; mention the dashboard URL on success.
+- **`HAS_KEY: no`** → the tool prints a one-time per-experiment recommendation to connect an account. **Reinforce it** — route through the post-audit signup flow — but never block the experiment. Recommend, don't require.
+
+The lifecycle `status` (`defined → run → analyzed → merged`) is part of every sync, so the UI shows each experiment's last-known state. A local `~/.header/experiments/<id>/.last-sync` marker (`<iso> <http_code>`) records the last sync result for offline inspection.
+
+**Opt-out.** `header-config set experiment_sync off` disables all auto-sync (manual `push` still works); `HEADER_EXPERIMENT_NOSYNC=1` disables it for one invocation / CI. `experiment_sync` is **personal-only** — a committed team config cannot turn it on for teammates.
+
+**The privacy contract — say it plainly.** Sync sends metadata only: the experiment id/kind/description, arm models + override **paths** (not contents), task **titles** + a sha256 + byte count, the hypothesis (the audit finding), the topic/goal/briefing it traces to, the repo's git-remote identity + commit, the machine (install id + hostname/os/arch), and the analyzed result (verdict + CIs). **Task prompt bodies, override file contents, and agent logs never leave the machine.** Task titles resolve authored → derived → id: if a `[task:…]` block has a `title:` line you (or the user) wrote, it's sent verbatim (zero-leak); otherwise a one-line summary is *derived* from the prompt's first heading (descriptive, low-leak); otherwise the task id is the floor. **If the prompt's first line could embed sensitive specifics, author a `title:` first** so the synced label is one you control.
+
+**Help the lineage along.** Auto-sync recovers the hypothesis + topic + briefing from the recommendation ledger via the spec's `ledger_key`. When the session resolved a topic/goal/briefing the ledger doesn't have, a manual `push` can supply them (flags win over the ledger):
+
+```bash
+header-experiment push <id> --topic <topic_id> --goal <goal_id> --briefing <briefing_id>
+header-experiment push <id> --dry-run    # print the exact JSON payload (no key needed)
+header-experiment push --all             # sync every local experiment now
+```
+
+**Errors (auto-sync is always best-effort).** No key → recommend + skip (never an error). `404`/`405` → endpoint not live for this account yet; the status line says so, the experiment is safe locally, and it retries on the next edit. A `*_FREE` code → dashboard sync is Pro; run the trial/upgrade flow (see "Tier limits"). Sync never blocks or fails the experiment loop.
+
 ## Browse public topics
 
 List all public topics:
@@ -792,7 +817,7 @@ The post-audit flow offers to scaffold this when a topic is created in a shared 
 git add .header/config && git commit -m "Add Header team config"
 ```
 
-**Team-relevant settings only.** Because the file is committed, only the allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Personal preferences and **anything consent- or code-related** (`telemetry`, `auto_update`, `auto_tune`, `update_check`) are **ignored** by design — `header-config team-show` makes its effective contents auditable.
+**Team-relevant settings only.** Because the file is committed, only the allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Personal preferences and **anything consent-, code-, or egress-related** (`telemetry`, `auto_update`, `auto_tune`, `update_check`, `experiment_sync`) are **ignored** by design — `header-config team-show` makes its effective contents auditable.
 
 **Precedence.** `TEAM_TOPIC` sits **below** a personal `REPO_TOPIC` and **below** any env var, but **above** the personal default. Same for `staleness_days` and `language`.
 
@@ -931,6 +956,54 @@ curl -sS -w "\n%{http_code}" -X PUT https://joinheader.com/api/v2/goals/{goal_id
   -d '{"description": "Updated focus areas...", "keywords": ["MCP", "agent memory"]}'
 ```
 
+### Sync an experiment (`POST /api/v2/experiments`)
+
+Account-scoped, idempotent **upsert** keyed by `client_key` (`<installation_id>:<experiment_id>`) so re-syncing the same experiment as it progresses (defined → run → analyzed → merged) updates one record. Driven automatically by `header-experiment` on each lifecycle change when a key is present (and by manual `push`); this is the underlying contract. **Metadata only — never code, prompt bodies, override contents, or logs.**
+
+```bash
+curl -sS -w "\n%{http_code}" -X POST https://joinheader.com/api/v2/experiments \
+  -H "Authorization: Bearer $HEADER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "v": 1,
+  "client_key": "<installation_id>:<experiment_id>",
+  "skill_version": "0.14.0",
+  "submitted_at": "2026-05-28T18:22:45Z",
+  "experiment": {
+    "id": "slim-claude-md-20260527-141627",
+    "kind": "harness-change",            // harness-change | model-swap | generic
+    "description": "Slim CLAUDE.md: compress 4 skill-redundant sections…",
+    "status": "analyzed",                // defined | run | analyzed
+    "replicates": 3,
+    "non_inferiority_margin": 0.02,
+    "commit_ref": "HEAD",
+    "arms": [
+      {"label":"A","model":"","role":"control","overrides":null},
+      {"label":"B","model":"","role":"treatment","overrides":"arms/B"}
+    ],
+    "tasks": [
+      {"id":"t1","title":"Add a briefing_count field to the v2 Goal model",
+       "title_source":"derived","verify":"pytest tests/v2/ -x -q",
+       "prompt_ref":"tasks/t1.md","prompt_sha256":"b2938df7…","prompt_bytes":308}
+    ]
+  },
+  "hypothesis": {                        // null when the experiment traces to no finding
+    "ledger_key":"slim-claude-md",
+    "title":"Slim CLAUDE.md — 644 lines / ~9,739 tokens loaded every turn",
+    "source_url":"https://www.youtube.com/watch?v=…",
+    "disposition":"wanted"
+  },
+  "audit_basis": {"topic_id":"1991163f-…","goal_id":"","briefing_id":"3c9b6bbd-…"},
+  "repo":    {"key":"github.com/me/repo","name":"repo","branch":"main","commit":"5214a29"},
+  "machine": {"installation_id":"<uuid>","hostname":"…","os":"linux","arch":"x86_64"},
+  "result":  { /* result.json verbatim: verdict, cost/success CIs, per_task — or null */ }
+}
+JSON
+```
+
+Expected success response (`200`/`201`): `{"id":"<server_id>","client_key":"…","url":"https://joinheader.com/experiments/<server_id>","status":"stored"}`. Surface the `url`. `goal_id` may be empty — the server can resolve the goal from `briefing_id` (a briefing belongs to a goal), or the client supplies it via `--goal`. Free-tier callers may get `EXPERIMENT_SYNC_FREE` (Pro-only) — run the trial/upgrade flow.
+
 ### Goal auto-tuning
 
 Feed what the user applies/dismisses (the ledger) back into the goal so future briefings sharpen. Requires an API key + a custom goal; opt-in via `auto_tune`.
@@ -1024,3 +1097,14 @@ Don't auto-retry blindly; inform the user before retrying.
 | `source_count` | int | Number of source groups |
 | `total_source_count` | int | Total individual sources |
 | `subscriber_count` | int | Number of subscribers |
+
+### ExperimentSyncResponse (`POST /api/v2/experiments`)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | string | Server-assigned experiment record id |
+| `client_key` | string | Echoes the request's idempotency key (`<installation_id>:<experiment_id>`) |
+| `url` | string | Web UI link to the synced experiment — surface this to the user |
+| `status` | string | `stored` (created or updated) |
+
+The request body is the `header-experiment push` payload documented under "Sync an experiment (`POST /api/v2/experiments`)". The receiving endpoint is **not yet live** — `push` makes the call today so the contract is exercised; the backend implements the handler against this shape.

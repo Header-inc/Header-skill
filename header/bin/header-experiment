@@ -80,15 +80,29 @@
 #                               {"input_tokens":N,"output_tokens":N,...,
 #                                "total_cost_usd":F,"model":"..."}.
 #                               Defaults to a real `claude -p` invocation.
+#   HEADER_API_BASE             API host for `push` (default https://joinheader.com).
+#   HEADER_EXPERIMENTS_URL      override the full experiments endpoint.
+#   HEADER_EXPERIMENT_NOSYNC    when set, disables auto-sync entirely (test/CI guard).
 #
-# BETA — interface and output shape will change. Local-only by design (the
-# customer-infra runner is the on-thesis architecture; see design doc §7.3).
+# Auto-sync: each lifecycle change (new/define/validate/run/analyze/merge) syncs
+# the experiment's metadata to the user's account when an API key is present and
+# config `experiment_sync` is `auto` (the default) — see `push`. No key → a once-
+# per-experiment recommendation. `experiment_sync off` disables it.
+#
+# BETA — interface and output shape will change. The runner is local by design
+# (customer-infra runner is the on-thesis architecture, design doc §7.3); the only
+# egress is the opt-in/auto `push` of experiment METADATA (never code).
 set -uo pipefail
 
 STATE_DIR="${HEADER_HOME:-$HOME/.header}"
 EXP_ROOT="$STATE_DIR/experiments"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 HC_BIN="$SELF_DIR/header-cost"
+LEDGER_BIN="$SELF_DIR/header-ledger"
+VERSION_FILE="$(cd "$SELF_DIR/.." && pwd)/VERSION"
+# Cloud sync (the `push` subcommand). Account-scoped, API-key-gated, opt-in.
+API_BASE="${HEADER_API_BASE:-https://joinheader.com}"
+EXPERIMENTS_URL="${HEADER_EXPERIMENTS_URL:-$API_BASE/api/v2/experiments}"
 
 json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 now_iso()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -99,7 +113,7 @@ die()        { err "$*"; exit 1; }
 # beta_banner — printed to stderr on the user-facing subcommands so it's clear
 # the verdict / interface / file shapes are not yet frozen.
 beta_banner() {
-  echo "header-experiment is BETA — interface & output shapes may change. Local-only; nothing leaves the machine." >&2
+  echo "header-experiment is BETA — interface & output shapes may change. Experiments run locally; with an API key present each lifecycle edit auto-syncs its METADATA to your account (opt out: 'header-config set experiment_sync off')." >&2
 }
 
 # spec_path / exp_dir — locate the spec for an id; create the dir on define only.
@@ -608,6 +622,7 @@ cmd_define() {
   echo "    header-experiment run $id --aa     # noise-floor / harness check first"
   echo "    header-experiment run $id          # the A/B"
   echo "    header-experiment analyze $id && header-experiment report $id"
+  _autosync "$id"        # status: defined (auto when keyed; recommends otherwise)
 }
 
 # ── NEW (audit-aware wizard / one-shot scaffolder) ────────────
@@ -853,8 +868,13 @@ USAGE
   local spec="$dir/spec"
   write_spec "$spec" "$id" "$desc" "$repo" "$replicates" "${margin:-0.02}" "$arms_blob" "$tasks_blob" "$ledger_key"
 
-  # Sanity-check the result.
-  if ! cmd_validate "$id" >/dev/null 2>&1; then
+  # Sanity-check the result. Internal call — suppress its auto-sync; cmd_new
+  # fires one of its own at the end (set/unset explicitly: a prefix assignment
+  # on a shell function may persist after return).
+  _HE_INTERNAL_VALIDATE=1
+  cmd_validate "$id" >/dev/null 2>&1; local _v_rc=$?
+  unset _HE_INTERNAL_VALIDATE
+  if [ "$_v_rc" -ne 0 ]; then
     err "spec was written but failed validation — run 'header-experiment validate $id' to see why"
     return 1
   fi
@@ -894,6 +914,7 @@ EOF
   echo "    header-experiment run $id --aa     # noise-floor / harness check FIRST"
   echo "    header-experiment run $id          # the A/B"
   echo "    header-experiment analyze $id && header-experiment report $id"
+  _autosync "$id"        # status: defined (auto when keyed; recommends otherwise)
 }
 
 # ── VALIDATE ──────────────────────────────────────────────────
@@ -986,6 +1007,9 @@ EOF
 
   if [ "$rc" -eq 0 ]; then
     echo "OK — $n_arms arm(s), $n_tasks task(s), replicates=$rep, δ=$margin, commit=$commit"
+    # A top-level validate is the "I just edited the spec" hook — sync the edit.
+    # Skipped when cmd_new calls us internally (it syncs once on its own).
+    [ -z "${_HE_INTERNAL_VALIDATE:-}" ] && _autosync "$id"
   fi
   return "$rc"
 }
@@ -1437,6 +1461,7 @@ EOF
   rm -f "$dir/.run-env"
 
   echo "Done. Next:  header-experiment analyze $id$([ "$aa" -eq 1 ] && echo ' --aa')" >&2
+  if [ "$aa" -eq 0 ]; then _autosync "$id"; fi   # status: run (skip --aa noise-floor); never alters exit
 }
 
 # ── ANALYZE ───────────────────────────────────────────────────
@@ -1681,6 +1706,7 @@ cmd_analyze() {
 
       printf "Wrote %s\n", out_file
     }' "$runs_file"
+  if [ "$aa" -eq 0 ]; then _autosync "$id"; fi   # status: analyzed (skip --aa); never alters exit
 }
 
 # ── REPORT ────────────────────────────────────────────────────
@@ -1957,6 +1983,7 @@ EOF
     [ "$sub" != "." ] && mkdir -p "$repo/$sub"
     cp -a "$b_dir/$f" "$repo/$f"
   done <<< "$files"
+  : > "$dir/.merged" 2>/dev/null || true   # lifecycle marker → status: merged
 
   echo "Applied. Next steps:"
   echo "  cd $repo"
@@ -1970,9 +1997,352 @@ EOF
   else
     echo "  git add <changed files> && git commit"
   fi
+  _autosync "$id"        # status: merged
 }
 
 # ── dispatch ──────────────────────────────────────────────────
+# ── PUSH (cloud sync — opt-in, account-scoped, metadata only) ─────────────────
+# Send an experiment's lineage to the user's Header account so it shows up in the
+# web UI. NOT a runner — nothing executes server-side. NOT the cross-customer
+# aggregate submit (that's anonymized + still out, design §7.3); this is the
+# user's OWN identified experiments on their OWN dashboard. Gated on an API key.
+#
+# What goes: which experiment (id/kind/description/arms/status) · which hypothesis
+# (the audit finding, from the ledger) · what it was based on (topic + goal +
+# briefing) · what repo (normalized git remote + commit) · what machine
+# (installation id + host/os/arch) · the result (verdict + CIs), embedded verbatim.
+# What NEVER goes: task prompt BODIES, override file contents, agent logs, verify
+# output. Task prompts are identified by title (authored → derived → id) + a
+# sha256 + byte count, never the text.
+
+# num_or_null — emit a bare JSON number, or `null` for empty / non-numeric.
+num_or_null() { case "${1:-}" in ''|*[!0-9.]*) printf 'null' ;; *) printf '%s' "$1" ;; esac; }
+
+# sha256_of / bytes_of — best-effort content identity for a prompt file (so the
+# UI can dedupe identical prompts) WITHOUT shipping the body.
+sha256_of() {
+  if   command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum    >/dev/null 2>&1; then shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+  else printf ''; fi
+}
+bytes_of() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
+
+# normalize_remote — same stable host/path key header-repo uses (clone-agnostic).
+normalize_remote() {
+  printf '%s' "$1" | sed -E 's#\.git$##; s#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#^[^@/]*@##; s#:#/#'
+}
+
+# machine_install_id — the stable per-machine id (shared with header-telemetry's
+# file). Created on first need; this is identified, account-scoped sync, so a
+# machine id is expected — not the anonymity-sensitive telemetry path.
+machine_install_id() {
+  local f="$STATE_DIR/installation-id" id
+  [ -f "$f" ] && { cat "$f"; return; }
+  id="$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null \
+        || od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ -n "$id" ] && { mkdir -p "$STATE_DIR"; printf '%s' "$id" > "$f"; }
+  printf '%s' "$id"
+}
+
+# resolve_key — env first, then the credentials file (parsed, never sourced).
+resolve_key() {
+  if [ -n "${HEADER_API_KEY:-}" ]; then printf '%s' "$HEADER_API_KEY"; return; fi
+  sed -n 's/^HEADER_API_KEY=//p' "$STATE_DIR/credentials" 2>/dev/null | head -1
+}
+
+# infer_kind — read a `kind:` scalar if the spec carries one; else infer from the
+# arms (≥2 distinct models → model-swap; any arm has overrides → harness-change;
+# else generic). Good enough for a UI label; SKILL.md may persist a precise kind.
+infer_kind() {
+  local spec="$1" k lbl m o n_models any_ovd=0
+  k="$(spec_get_scalar "$spec" kind)"; [ -n "$k" ] && { printf '%s' "$k"; return; }
+  n_models="$(for lbl in $(spec_list_sections "$spec" arm); do spec_section_get "$spec" arm "$lbl" model; done | sed '/^$/d' | sort -u | grep -c .)"
+  for lbl in $(spec_list_sections "$spec" arm); do
+    o="$(spec_section_get "$spec" arm "$lbl" overrides_dir)"; [ -n "$o" ] && any_ovd=1
+  done
+  if   [ "${n_models:-0}" -ge 2 ]; then printf 'model-swap'
+  elif [ "$any_ovd" -eq 1 ];       then printf 'harness-change'
+  else                                  printf 'generic'; fi
+}
+
+# derive_task_title — a SAFE one-line summary of a prompt file: first markdown
+# heading, else first non-empty prose line; code fences skipped; whitespace
+# collapsed; truncated to 140 chars. Best-effort, low-leak — NOT the body. The
+# authored `title:` spec field is the zero-leak alternative.
+derive_task_title() {
+  local p="${1:-}"
+  [ -n "$p" ] && [ -f "$p" ] || return 0
+  awk '
+    function emit(s){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",s); gsub(/[[:cntrl:]]/," ",s)
+      if (s=="") return; if (length(s)>140) s=substr(s,1,137) "..."; print s; exit }
+    /^[[:space:]]*```/ { fence=!fence; next }     # skip fenced code blocks
+    fence { next }
+    /^[[:space:]]*#+[[:space:]]/ { h=$0; sub(/^[[:space:]]*#+[[:space:]]*/,"",h); emit(h) }
+    /[^[:space:]]/ { emit($0) }
+  ' "$p" 2>/dev/null | head -1
+}
+
+# build_payload <id> <topic_ovr> <goal_ovr> <briefing_ovr> → JSON on stdout.
+# Returns 1 if <id> has no spec.
+build_payload() {
+  local id="$1" topic_ovr="${2:-}" goal_ovr="${3:-}" briefing_ovr="${4:-}"
+  local dir spec; dir="$(exp_dir "$id")"; spec="$dir/spec"
+  [ -f "$spec" ] || return 1
+
+  local desc reps margin lk commit_ref kind status
+  desc="$(spec_get_scalar "$spec" description)"
+  reps="$(spec_get_scalar "$spec" replicates)"
+  margin="$(spec_get_scalar "$spec" non_inferiority_margin)"
+  lk="$(spec_get_scalar "$spec" ledger_key)"
+  commit_ref="$(spec_get_scalar "$spec" commit)"; commit_ref="${commit_ref:-HEAD}"
+  kind="$(infer_kind "$spec")"
+  status="defined"
+  [ -f "$dir/runs.jsonl" ]  && status="run"
+  [ -f "$dir/result.json" ] && status="analyzed"
+  [ -f "$dir/.merged" ]     && status="merged"
+
+  # ── repo identity (tolerant of non-git / placeholder paths) ──
+  local repo_spec repo_abs r_url r_top repo_key repo_name repo_branch repo_commit
+  repo_spec="$(spec_get_scalar "$spec" repo)"
+  repo_abs="$(resolve_path "$dir" "$repo_spec")"
+  r_url="$(git -C "$repo_abs" config --get remote.origin.url 2>/dev/null || true)"
+  r_top="$(git -C "$repo_abs" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$r_url" ]; then repo_key="$(normalize_remote "$r_url")"; else repo_key="${r_top:-$repo_abs}"; fi
+  repo_name="$(basename "${r_top:-${repo_abs:-unknown}}" 2>/dev/null || printf 'unknown')"
+  repo_branch="$(git -C "$repo_abs" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  repo_commit="$(git -C "$repo_abs" rev-parse --short "$commit_ref" 2>/dev/null || true)"
+
+  # ── machine ──
+  local iid host os arch
+  iid="$(machine_install_id)"
+  host="$(uname -n 2>/dev/null || echo unknown)"
+  os="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"; [ -n "$os" ] || os=unknown
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+
+  # ── hypothesis + audit basis: recover from the ledger via ledger_key ──
+  local h_title h_src h_disp topic goal briefing rec sv
+  topic=""; goal=""; briefing=""
+  if [ -n "$lk" ]; then
+    rec="$("$LEDGER_BIN" get "$lk" --repo "$repo_name" 2>/dev/null)"
+    [ -n "$rec" ] || rec="$("$LEDGER_BIN" get "$lk" 2>/dev/null)"
+    h_title="$(printf '%s' "$rec"  | sed -n 's/.*"title":"\([^"]*\)".*/\1/p')"
+    h_src="$(printf '%s' "$rec"    | sed -n 's/.*"source_url":"\([^"]*\)".*/\1/p')"
+    h_disp="$(printf '%s' "$rec"   | sed -n 's/.*"action":"\([^"]*\)".*/\1/p')"
+    topic="$(printf '%s' "$rec"    | sed -n 's/.*"topic_id":"\([^"]*\)".*/\1/p')"
+    briefing="$(printf '%s' "$rec" | sed -n 's/.*"briefing_id":"\([^"]*\)".*/\1/p')"
+  fi
+  # spec scalars override the ledger; explicit flags win over everything.
+  sv="$(spec_get_scalar "$spec" topic_id)";    [ -n "$sv" ] && topic="$sv"
+  sv="$(spec_get_scalar "$spec" goal_id)";     [ -n "$sv" ] && goal="$sv"
+  sv="$(spec_get_scalar "$spec" briefing_id)"; [ -n "$sv" ] && briefing="$sv"
+  [ -n "$topic_ovr" ]    && topic="$topic_ovr"
+  [ -n "$goal_ovr" ]     && goal="$goal_ovr"
+  [ -n "$briefing_ovr" ] && briefing="$briefing_ovr"
+
+  # ── arms ──
+  local arms_json="" first=1 lbl model ovd role
+  for lbl in $(spec_list_sections "$spec" arm); do
+    model="$(spec_section_get "$spec" arm "$lbl" model)"
+    ovd="$(spec_section_get "$spec" arm "$lbl" overrides_dir)"
+    role="treatment"; [ "$lbl" = "A" ] && role="control"
+    [ "$first" -eq 1 ] || arms_json="$arms_json,"
+    arms_json="$arms_json{\"label\":\"$(json_escape "$lbl")\",\"model\":\"$(json_escape "$model")\",\"role\":\"$role\",\"overrides\":"
+    if [ -n "$ovd" ]; then arms_json="$arms_json\"$(json_escape "$ovd")\"}"; else arms_json="${arms_json}null}"; fi
+    first=0
+  done
+
+  # ── tasks (title: authored → derived → id; the body NEVER leaves) ──
+  local tasks_json="" tid prompt verify ppath title tsrc psha pbytes
+  first=1
+  for tid in $(spec_list_sections "$spec" task); do
+    prompt="$(spec_section_get "$spec" task "$tid" prompt)"
+    verify="$(spec_section_get "$spec" task "$tid" verify)"
+    title="$(spec_section_get "$spec" task "$tid" title)"
+    ppath="$(resolve_task_path "$repo_abs" "$dir" "$prompt")"
+    psha=""; pbytes=0
+    if [ -n "$ppath" ] && [ -f "$ppath" ]; then psha="$(sha256_of "$ppath")"; pbytes="$(bytes_of "$ppath")"; fi
+    if [ -n "$title" ]; then tsrc="authored"
+    else
+      title="$(derive_task_title "$ppath")"
+      if [ -n "$title" ]; then tsrc="derived"; else title="$tid"; tsrc="id"; fi
+    fi
+    [ "$first" -eq 1 ] || tasks_json="$tasks_json,"
+    tasks_json="$tasks_json{\"id\":\"$(json_escape "$tid")\",\"title\":\"$(json_escape "$title")\",\"title_source\":\"$tsrc\",\"verify\":\"$(json_escape "$verify")\",\"prompt_ref\":\"$(json_escape "$prompt")\",\"prompt_sha256\":\"$(json_escape "$psha")\",\"prompt_bytes\":${pbytes:-0}}"
+    first=0
+  done
+
+  # ── result (verbatim; already valid JSON) or null ──
+  local result_blob="null"
+  [ -f "$dir/result.json" ] && result_blob="$(cat "$dir/result.json")"
+
+  # ── hypothesis object — null unless the experiment traces to a finding ──
+  local hypo="null"
+  [ -n "$lk" ] && hypo="{\"ledger_key\":\"$(json_escape "$lk")\",\"title\":\"$(json_escape "${h_title:-}")\",\"source_url\":\"$(json_escape "${h_src:-}")\",\"disposition\":\"$(json_escape "${h_disp:-}")\"}"
+
+  local ver iid_key
+  ver="$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || echo unknown)"
+  iid_key="${iid:-unknown}"
+
+  printf '{\n'
+  printf '  "v": 1,\n'
+  printf '  "client_key": "%s:%s",\n' "$(json_escape "$iid_key")" "$(json_escape "$id")"
+  printf '  "skill_version": "%s",\n' "$(json_escape "$ver")"
+  printf '  "submitted_at": "%s",\n' "$(now_iso)"
+  printf '  "experiment": {\n'
+  printf '    "id": "%s",\n'          "$(json_escape "$id")"
+  printf '    "kind": "%s",\n'        "$(json_escape "$kind")"
+  printf '    "description": "%s",\n' "$(json_escape "$desc")"
+  printf '    "status": "%s",\n'      "$status"
+  printf '    "replicates": %s,\n'    "$(num_or_null "$reps")"
+  printf '    "non_inferiority_margin": %s,\n' "$(num_or_null "$margin")"
+  printf '    "commit_ref": "%s",\n'  "$(json_escape "$commit_ref")"
+  printf '    "arms": [%s],\n'        "$arms_json"
+  printf '    "tasks": [%s]\n'        "$tasks_json"
+  printf '  },\n'
+  printf '  "hypothesis": %s,\n'      "$hypo"
+  printf '  "audit_basis": {"topic_id": "%s", "goal_id": "%s", "briefing_id": "%s"},\n' \
+    "$(json_escape "$topic")" "$(json_escape "$goal")" "$(json_escape "$briefing")"
+  printf '  "repo": {"key": "%s", "name": "%s", "branch": "%s", "commit": "%s"},\n' \
+    "$(json_escape "$repo_key")" "$(json_escape "$repo_name")" "$(json_escape "$repo_branch")" "$(json_escape "$repo_commit")"
+  printf '  "machine": {"installation_id": "%s", "hostname": "%s", "os": "%s", "arch": "%s"},\n' \
+    "$(json_escape "$iid")" "$(json_escape "$host")" "$(json_escape "$os")" "$(json_escape "$arch")"
+  printf '  "result": %s\n' "$result_blob"
+  printf '}\n'
+}
+
+# _sync_one <id> <quiet> <topic_ovr> <goal_ovr> <briefing_ovr> — build + POST one
+# experiment. Writes a local .last-sync marker (<iso> <http_code>) so the last
+# status is inspectable offline. Returns: 0 sent · 1 send failed · 2 no key ·
+# 3 no spec. quiet=1 → one faint status line (auto-sync); 0 → verbose (push).
+_sync_one() {
+  local id="$1" quiet="$2" t="${3:-}" g="${4:-}" b="${5:-}"
+  local key; key="$(resolve_key)"
+  [ -n "$key" ] || return 2
+  local payload; payload="$(build_payload "$id" "$t" "$g" "$b")" || return 3
+  local dir; dir="$(exp_dir "$id")"
+  [ "$quiet" = 1 ] || echo "Syncing '$id' → $EXPERIMENTS_URL  (account-scoped; metadata only, no code)…" >&2
+  local tmp code body url maxt=20
+  [ "$quiet" = 1 ] && maxt=8                          # auto-sync must not hang a command
+  tmp="$(mktemp)"
+  code="$(printf '%s' "$payload" | curl -sS -o "$tmp" -w '%{http_code}' --max-time "$maxt" \
+    -X POST "$EXPERIMENTS_URL" \
+    -H "Authorization: Bearer $key" \
+    -H 'Content-Type: application/json' \
+    --data @- 2>/dev/null || echo 000)"
+  body="$(cat "$tmp" 2>/dev/null)"; rm -f "$tmp"
+  printf '%s %s\n' "$(now_iso)" "$code" > "$dir/.last-sync" 2>/dev/null || true
+  case "$code" in
+    2*) url="$(printf '%s' "$body" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        if [ "$quiet" = 1 ]; then echo "⤴ dashboard: synced${url:+ — $url}" >&2
+        else                       echo "  ✓ synced${url:+ — view at $url}"; fi
+        return 0 ;;
+    *)  if [ "$quiet" = 1 ]; then
+          case "$code" in
+            404|405) echo "⤴ dashboard: endpoint not live yet (HTTP $code) — saved locally, will retry on next edit" >&2 ;;
+            000)     echo "⤴ dashboard: offline — saved locally, will retry on next edit" >&2 ;;
+            401)     echo "⤴ dashboard: API key rejected (401) — fix the key or set 'header-config set experiment_sync off'" >&2 ;;
+            *)       echo "⤴ dashboard: HTTP $code — saved locally" >&2 ;;
+          esac
+        else
+          case "$code" in
+            401) err "  key rejected (401) — check HEADER_API_KEY / credentials" ;;
+            403) err "  forbidden (403)${body:+ — $(printf '%s' "$body" | head -c 200)}" ;;
+            404|405) err "  endpoint not live yet (HTTP $code) — $EXPERIMENTS_URL is not implemented server-side" ;;
+            000) err "  network error reaching $EXPERIMENTS_URL" ;;
+            *)   err "  HTTP $code${body:+ — $(printf '%s' "$body" | head -c 200)}" ;;
+          esac
+        fi
+        return 1 ;;
+  esac
+}
+
+# _recommend_account <id> — shown once per experiment when there's no key, so the
+# user learns auto-sync exists without being nagged on every command.
+_recommend_account() {
+  local id="$1" dir; dir="$(exp_dir "$id")"
+  [ -f "$dir/.sync-recommended" ] && return 0
+  : > "$dir/.sync-recommended" 2>/dev/null || true
+  {
+    echo "💡 Connect a Header account to auto-track this experiment on your dashboard —"
+    echo "   each edit/run/analyze would sync its status to the web UI (metadata only, no code)."
+    echo "   Create a key at https://joinheader.com, then: export HEADER_API_KEY=hdr_sk_..."
+  } >&2
+}
+
+# _autosync <id> — fire-and-track sync after a lifecycle change. Auto when a key
+# is present (config experiment_sync != off); otherwise recommend an account.
+# Never affects the caller's exit status. The user asked for auto-on-when-keyed,
+# so there is no per-run prompt — the visible '⤴ dashboard:' line + the
+# 'experiment_sync off' switch are the transparency/opt-out.
+_autosync() {
+  local id="${1:-}"; [ -n "$id" ] || return 0
+  [ -n "${HEADER_EXPERIMENT_NOSYNC:-}" ] && return 0     # test/CI egress guard
+  [ "$("$SELF_DIR/header-config" get experiment_sync 2>/dev/null || echo auto)" = "off" ] && return 0
+  if [ -z "$(resolve_key)" ]; then _recommend_account "$id"; return 0; fi
+  _sync_one "$id" 1 "" "" "" || true
+  return 0
+}
+
+cmd_push() {
+  local all=0 dry=0 yes=0 topic_ovr="" goal_ovr="" briefing_ovr="" id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all)      all=1; shift ;;
+      --dry-run)  dry=1; shift ;;
+      --yes|-y)   yes=1; shift ;;
+      --topic)    topic_ovr="${2:-}"; shift 2 ;;
+      --goal)     goal_ovr="${2:-}"; shift 2 ;;
+      --briefing) briefing_ovr="${2:-}"; shift 2 ;;
+      -h|--help)  echo "Usage: header-experiment push <id> | --all [--dry-run] [--yes] [--topic T] [--goal G] [--briefing B]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+
+  beta_banner
+
+  local ids=""
+  if [ "$all" -eq 1 ]; then
+    [ -d "$EXP_ROOT" ] || { err "no experiments at $EXP_ROOT"; return 1; }
+    ids="$(for d in "$EXP_ROOT"/*/; do [ -f "${d}spec" ] && basename "$d"; done)"
+  else
+    [ -n "$id" ] || { err "<id> required (or --all)"; return 1; }
+    ids="$id"
+  fi
+  [ -n "$ids" ] || { err "nothing to push"; return 1; }
+
+  # Key needed for a live send; --dry-run renders the payload without one.
+  local key; key="$(resolve_key)"
+  if [ "$dry" -eq 0 ] && [ -z "$key" ]; then
+    err "no Header API key — cloud sync needs an account (experiments stay local until you connect one)."
+    {
+      echo "To enable sync:"
+      echo "  • create a key at https://joinheader.com  (Settings ▸ API Keys, read+write)"
+      echo "  • export HEADER_API_KEY=hdr_sk_...   (or save it to ~/.header/credentials)"
+      echo "Preview exactly what WOULD be sent — no key needed:"
+      echo "  header-experiment push ${id:-<id>} --dry-run"
+    } >&2
+    return 0   # no key is an opt-out, not an error
+  fi
+
+  local one rc=0 n=0
+  for one in $ids; do
+    if [ "$dry" -eq 1 ]; then
+      local payload
+      payload="$(build_payload "$one" "$topic_ovr" "$goal_ovr" "$briefing_ovr")" \
+        || { err "skip '$one' — no spec at $(spec_path "$one")"; rc=1; continue; }
+      printf '\n# ── %s ─────────────────────────────────────────\n' "$one"
+      printf '# POST %s   (headers: Authorization: Bearer hdr_sk_… · Content-Type: application/json)\n' "$EXPERIMENTS_URL"
+      printf '%s\n' "$payload"
+      n=$((n + 1)); continue
+    fi
+    _sync_one "$one" 0 "$topic_ovr" "$goal_ovr" "$briefing_ovr"
+    case "$?" in 0) n=$((n + 1)) ;; 3) err "skip '$one' — no spec at $(spec_path "$one")"; rc=1 ;; *) rc=1 ;; esac
+  done
+
+  if [ "$dry" -eq 1 ]; then echo "" >&2; echo "# dry run — $n experiment(s) rendered; nothing sent" >&2; fi
+  return "$rc"
+}
+
 usage() {
   # `usage 0` → help on stdout, exit 0 (explicit --help is a success action).
   # Default → usage error on stderr, exit 1 (no/unknown subcommand).
@@ -1990,6 +2360,9 @@ Usage: header-experiment <command> ...
   analyze <id>    write result.json (paired bootstrap CI, §6 of design)
   report <id>     pretty scorecard
   merge <id>      apply arm B's override files to the repo (after a B-wins verdict)
+  push <id>       sync this experiment's lineage to your Header account (opt-in,
+                    API-key-gated, metadata only). --all to sync every experiment;
+                    --dry-run to preview the exact JSON payload without sending.
 
 BETA — see docs/experiments-design.md.
 EOF
@@ -2005,6 +2378,7 @@ case "$cmd" in
   analyze)  cmd_analyze  "$@" ;;
   report)   cmd_report   "$@" ;;
   merge)    cmd_merge    "$@" ;;
+  push)     cmd_push     "$@" ;;
   -h|--help) usage 0 ;;
   "")        usage ;;
   *) err "unknown subcommand '$cmd'"; usage ;;

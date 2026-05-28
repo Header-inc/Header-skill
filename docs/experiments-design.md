@@ -2,8 +2,10 @@
 
 Status: draft / for review.
 
-**What's shipped today (v0.12.2) — the audit → experiment → applied-change loop in code, with
-cost-vs-magnitude gating, soft power tiers, and worktree-isolation fixes:**
+**What's shipped today (v0.14.0) — the audit → experiment → applied-change loop in code, with
+cost-vs-magnitude gating, soft power tiers, worktree-isolation fixes, and (new in 0.14.0) an
+opt-in client-side sync of experiment lineage to the user's account (the first slice of §10 step 5,
+"org dashboard"; backend endpoint pending):**
 - **Phase 1 — `bin/header-cost`** (v0.8.0+; v0.8.2+ states API-vs-subscription cost basis) — the
   realized-spend meter that prices §1's "billable savings."
 - **Phase 2 MVP — `bin/header-experiment`** (beta):
@@ -664,9 +666,26 @@ the verifier MVP (§11) is the next runnable slice and unlocks "the user doesn't
 - **Stat honesty at scale.** Many customers × many experiments × peeking = false-discovery minefield.
   FDR + fixed-N, or always-valid sequential, from day one on the backend.
 
-## 14. Addenda — shipped beyond the original design (0.12.x–0.13.0)
+## 14. Addenda — shipped beyond the original design (0.12.x–0.14.0)
 
 Capabilities added during dogfooding that §§1–13 didn't cover. The §12 CLI is built; these extend it.
+
+- **Experiment cloud sync — auto on every lifecycle edit** (0.14.0, the first slice of §10 step 5
+  "org dashboard") — when an API key is present, `new`/`define`/`validate`/`run`/`analyze`/`merge`
+  each auto-sync the experiment's *lineage, status, and verdict* to the user's own account (no
+  per-edit prompt — the key is the opt-in; no key → a once-per-experiment recommendation; opt out via
+  the personal-only `experiment_sync` config key, `HEADER_EXPERIMENT_NOSYNC` for CI). Manual
+  `header-experiment push` (with `--dry-run` / `--all` / `--topic|--goal|--briefing`) shares the path.
+  Payload: experiment (id/kind/description/arms/**status** `defined→run→analyzed→merged`) · hypothesis
+  (the audit finding, recovered from the ledger via `ledger_key`) · audit_basis (topic + goal +
+  briefing) · repo (normalized git remote + commit) · machine (install id + host/os/arch) · result
+  (verbatim). Idempotent upsert on `client_key = <installation_id>:<experiment_id>`. **This is the
+  user's own identified dashboard — explicitly NOT the §7.3 anonymized cross-customer aggregate
+  submit, which stays future work.** Privacy: metadata only — prompt bodies / override contents /
+  logs never leave; prompts are identified by sha256 + bytes, and each task gets a descriptive title
+  (authored `title:` → derived-from-first-heading → task id). **Backend `POST /api/v2/experiments` is
+  not live yet** (returns `405` today); the client makes the call so the contract is exercised, saves
+  a local `.last-sync` marker, and retries on the next edit until the handler ships.
 
 - **Three-disposition gating** (0.12.0, see §6.8) — the audit classifies each finding `[Apply now]` / `[Apply with review]` / `[Experiment]` by the experiment-cost-vs-proven-payoff *ratio*, not raw magnitude.
 - **Discrimination guard — success axis** (0.12.3) — a prompt-debt deletion only measures something if the verify task *exercises* the deleted instruction. `validate`/`run` detect prompt-prefix (`CLAUDE.md`/`AGENTS.md`) deletions — including hand-rolled specs, by diffing arm overrides against the repo — and warn, escalating when the deleted text carries emphatic mandates (`MUST`/`NEVER`/`ALWAYS`, case-sensitive so sentence-case cargo-cult doesn't false-positive).

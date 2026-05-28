@@ -3,6 +3,63 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.14.0 — Experiment cloud sync — automatic when a key is present (client side)
+
+Experiments now sync to the user's Header account so they show up in the web UI:
+*which experiment, testing which hypothesis, from which goal/topic/briefing, on which
+repo and machine, and how it came out* — with a last-known **status** (`defined → run
+→ analyzed → merged`) the UI can track. Nothing runs server-side — the runner stays
+local; this is the user's own dashboard record, distinct from the (still-future,
+still-anonymized) cross-customer aggregate submit.
+
+### Automatic sync, not a prompt
+
+- **Every lifecycle change auto-syncs when a key is present** — `new`, `define`,
+  `validate` (the "I edited the spec" hook), `run`, `analyze`, `merge` each fire a
+  best-effort sync and print a faint `⤴ dashboard: …` line. No per-edit prompt: having
+  an API key configured *is* the opt-in.
+- **No key → a once-per-experiment recommendation** to connect an account. Never blocks.
+- **Opt-out:** new config key `experiment_sync` (`auto` default · `off`). It is
+  **personal-only** — `TEAM_SENSITIVE`, so a committed team config can't enable egress
+  for teammates. `HEADER_EXPERIMENT_NOSYNC=1` disables it for one invocation / CI.
+- A local `~/.header/experiments/<id>/.last-sync` marker (`<iso> <http_code>`) records
+  the last sync result for offline inspection.
+
+### `header-experiment push` (manual sync / preview, same payload)
+
+- **Payload** = experiment (id/kind/description/arms/**status**) · hypothesis (the audit
+  finding, recovered from the ledger via `ledger_key`) · audit_basis (topic + goal +
+  briefing) · repo (normalized git remote + commit) · machine (install id + host/os/arch)
+  · result (verdict + CIs, verbatim). Idempotent **upsert** on
+  `client_key = <installation_id>:<experiment_id>`.
+- **Privacy contract.** Metadata only. **Task prompt bodies, override file contents,
+  and agent logs never leave the machine.** Prompts are identified by a sha256 + byte
+  count. Each task carries a descriptive **title** resolved authored → derived → id:
+  an authored `title:` in the spec is sent verbatim (zero-leak); else a one-line summary
+  is *derived* from the prompt's first heading (descriptive, low-leak); else the task id.
+- **Flags.** `--dry-run` prints the exact JSON (no key needed) for review; `--all` syncs
+  every local experiment; `--topic` / `--goal` / `--briefing` supply session lineage the
+  ledger lacks (they win over the ledger).
+
+### Backend status
+
+**The receiving endpoint is not live yet.** `POST /api/v2/experiments` currently returns
+`405` server-side; the client makes the call anyway so the contract is exercised
+end-to-end against the real host. The backend implements the handler against the shape
+documented in SKILL.md ("Sync an experiment (`POST /api/v2/experiments`)"). Until then,
+sync reports the `405`/`404` clearly, saves locally, and retries on the next edit.
+
+### Supporting changes
+
+- **`header-ledger get <key>`** — print the latest full JSON record for a key (title,
+  briefing_id, topic_id, source_url) so sync can recover a finding's provenance in one
+  call. Exit 0 on a valid-but-empty lookup (exit-code hygiene).
+- `beta_banner` states the egress honestly (local runner; metadata auto-sync when keyed).
+- Tests: new `test/push.test.sh` (45 assertions — payload shape, lineage recovery, the
+  body-never-leaves contract, kind inference, title resolution, the `experiment_sync`
+  closed-domain + team-sensitivity, the no-key recommend-once, the `off`/`NOSYNC`
+  switches, and the status lifecycle) + `get` coverage in `test/ledger.test.sh`.
+
 ## 0.13.1 — Safety guard for misplaced lifecycle keys + post-0.13.0 doc sync
 
 **Landmine fix.** `setup:` / `teardown:` / `setup_scope:` are read by

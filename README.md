@@ -112,7 +112,7 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | header-cost report
 
 `report` ranks spend by model — real token counts × verified prices, with cache writes priced by their real 5-minute/1-hour duration and legacy Opus (3.x/4.0/4.1) priced apart from current Opus. It does **not** guess what switching models would save: a price re-rating of the same tokens is a projection, not a measurement, so `header-cost savings` only points at the experiment loop (`header-experiment`, below) that would actually prove a switch. Prices drift, so the skill **verifies them before quoting figures** (`header-cost refresh` from a served `HEADER_PRICES_URL`, or a fetch of current Anthropic pricing into `~/.header/prices.tsv`), and `report` always prints which prices it used and how fresh.
 
-### Experiments (beta — local-only)
+### Experiments (beta — local by default)
 
 The audit feeds the experiment. When the audit surfaces an `[Experiment]` finding (model swap, prompt-debt deletion, dep upgrade), the skill scaffolds a runnable spec with one command — no editor homework:
 
@@ -135,13 +135,16 @@ header-experiment run <id> --aa     # noise-floor / harness check FIRST
 header-experiment run <id>          # the A/B
 header-experiment analyze <id> && header-experiment report <id>
 header-experiment merge <id>        # if verdict = "B wins" — applies arm B's overrides
+header-experiment push <id>         # opt-in: sync lineage + verdict to your account (API key)
 ```
 
 Each `(task × arm × replicate)` runs in an isolated `git worktree` at a pinned commit; `--aa` validates the harness has no ordering / cache-warmup / drift confound before you trust any A/B. DB-touching experiments can provision an isolated database per experiment (or per run) via `setup:` / `teardown:` spec keys — the connection info is injected into both the agent and the verifier, and teardown is guaranteed even on Ctrl-C. Stats: paired-by-task **bootstrap 95% CI on per-task cost differences**, with **success rate non-inferiority** (lower CI bound ≥ −δ, default δ = 2%) as the merge gate. Verdict is one of `B wins (cost lower, success non-inferior)` / `A wins` / `no proven win` / `data degenerate` (N=1) / `A/A BIASED` (with a `WIDE CI / LIMITED POWER` caveat at 2–4 paired tasks) — the report prints the **conservative savings rate** (`max(0, -upper_CI(diff_cost))`) so the number you quote survives an audit. `merge` refuses to apply anything other than a B-wins verdict (`--force` overrides), shows a unified diff before writing, and prints a suggested `git commit` with the `Header-Audit-Finding:` trailer when the experiment came from an audit finding.
 
 `new` auto-detects your verify command from `package.json` / `Cargo.toml` / `pyproject.toml` / `go.mod` / `Gemfile`. Pass `--task` as either a file path (relative to the repo) or a one-line inline prompt (written to `<exp_dir>/tasks/t1.md` automatically). For full control there's a generic flow: `--arm A:model[:overrides_dir] --arm B:model[:overrides_dir]`.
 
-Out of scope for now (planned in [ROADMAP](ROADMAP.md)): mining tasks from git history (so the user doesn't author task prompts at all), σ-based power analysis (the current `<5 paired tasks → underpowered` cutoff is a heuristic), LLM-judge verifiers, and cross-customer aggregate submission of effect sizes. Local-only by design — nothing leaves the machine.
+**Sync to your account (automatic when a key is present).** Every lifecycle change — define, edit (`validate`), run, analyze, merge — syncs the experiment's *lineage, status, and verdict* to your Header account so it shows up in the web UI: which experiment, testing which hypothesis, from which goal/topic/briefing, on which repo and machine, and how it came out, with a last-known status (`defined → run → analyzed → merged`). No per-edit prompt — configuring an API key is the opt-in; **no key → a one-time per-experiment nudge to connect an account.** It's the only egress in the experiment loop, and it's **metadata only**: arm models, override **paths**, task **titles** (authored, or a safe one-line summary derived from the prompt's first heading) + a sha256, and the analyzed result. **Prompt bodies, override file contents, and agent logs never leave the machine.** Turn it off with `header-config set experiment_sync off`; preview the exact JSON with `header-experiment push <id> --dry-run`. _(The receiving endpoint is landing server-side; until then sync exercises the call, saves locally, and retries on the next edit.)_
+
+Out of scope for now (planned in [ROADMAP](ROADMAP.md)): mining tasks from git history (so the user doesn't author task prompts at all), σ-based power analysis (the current `<5 paired tasks → underpowered` cutoff is a heuristic), LLM-judge verifiers, and **anonymized cross-customer** aggregate submission of effect sizes (distinct from the account-scoped `push` above). The runner is local by design — experiments execute on your machine; only the explicit `push` leaves, and only metadata.
 
 **Billing basis:** the `$` figures are **API (pay-per-token) rates** (the tool says so). On a Claude subscription (Pro $20 / Max $100 / $200 a month) you don't pay these — the `$` is a shadow/API-equivalent number and your real constraint is **usage limits**, so spend reads as cap consumption rather than dollars off a bill.
 
@@ -205,13 +208,13 @@ Configuration comes from four places, highest priority first: **environment vari
 ~/.claude/skills/header/bin/header-config list
 ```
 
-Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`, `repo_memory`. Run the helper with `defaults` to see every key and its default value.
+Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`, `repo_memory`, `experiment_sync`. Run the helper with `defaults` to see every key and its default value.
 
 ### Team config (`.header/config`)
 
 To share a topic (and a couple of settings) with a whole team, **commit a `.header/config` at the repo root**. Every teammate's skill reads it automatically on clone — no per-person setup — and it sits above each developer's personal `~/.header/config` but below their own env vars and explicit per-repo bindings. The skill offers to create and commit it for you right after you make a topic in a shared repo; it's recommended for shared repos and optional when you're solo.
 
-Keep it to **team-relevant settings only**. Only an allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Consent and update keys (`telemetry`, `auto_update`, `auto_tune`, `update_check`) are **ignored** from a committed file by design — they stay personal, so a pushed change can never flip a teammate's privacy or trigger code. The file is read as data only, never sourced.
+Keep it to **team-relevant settings only**. Only an allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Consent, update, and egress keys (`telemetry`, `auto_update`, `auto_tune`, `update_check`, `experiment_sync`) are **ignored** from a committed file by design — they stay personal, so a pushed change can never flip a teammate's privacy, trigger code, or enable account sync. The file is read as data only, never sourced.
 
 ```bash
 ~/.claude/skills/header/bin/header-config team-init <topic-uuid>   # scaffold ./.header/config
@@ -230,8 +233,10 @@ The skill keeps a small amount of state under `~/.header/` (override with `HEADE
 | `credentials` | Optional — your API key, saved by the post-audit flow (`chmod 600`; read as data, never executed). |
 | `.welcome-seen`, `.signup-state`, `.language-prompted`, `.telemetry-prompted`, `.autotune-offered` | Global onboarding markers, so machine-wide first-run prompts show exactly once. |
 | `last-update-check`, `update-snoozed`, `version-info.json` | Update-check cache, snooze state, and the last version-endpoint response. |
-| `ledger.jsonl` | Recommendation ledger (applied/dismissed/snoozed/wanted) — local-only, never sent. |
+| `ledger.jsonl` | Recommendation ledger (applied/dismissed/snoozed/wanted) — the file stays local. (Experiment sync includes *one* finding's provenance — its title/topic/briefing/source — for the experiment being synced; never the whole ledger.) |
 | `telemetry.jsonl` | Local usage events — only written if you opt into telemetry. |
+| `installation-id` | Random per-machine UUID. Used as the machine id in experiment sync (and by full-tier telemetry); not tied to your identity. |
+| `experiments/<id>/` | Local experiment specs, runs, and results. Stay on the machine; when an API key is present, each lifecycle edit auto-syncs *metadata only* (lineage + status + verdict) to your account — never prompt bodies, override contents, or logs. Disable with `header-config set experiment_sync off`. The `.last-sync` marker records the last sync result. |
 | `repos.jsonl` | Repo → topic bindings (which custom topic each repository uses) — local-only, never sent. |
 | `repo-seen/` | Per-repo "last briefing seen" markers, for the session-start freshness check. |
 | `repo-flags/` | Per-repo onboarding flags (e.g. `topic-offered`, `schedule-offered`) so those offers fire once **per repo** — every repo can get its own tailored topic and schedule. |
