@@ -144,6 +144,12 @@ function rd_cw(line,  c5,c1,flat){
 '
 
 usage() {
+  # `usage 0` → help on stdout, exit 0 (explicit --help is a success action).
+  # Default → usage error on stderr, exit 1 (no/unknown subcommand).
+  if [ "${1:-1}" = 0 ]; then
+    echo "Usage: header-cost {prices|refresh|cost|report|savings} ..."
+    exit 0
+  fi
   echo "Usage: header-cost {prices|refresh|cost|report|savings} ..." >&2
   exit 1
 }
@@ -249,6 +255,7 @@ case "$cmd" in
     exit 0
     ;;
 
-  ""|-h|--help) usage ;;
+  -h|--help) usage 0 ;;
+  "")        usage ;;
   *) echo "header-cost: unknown subcommand '$cmd'" >&2; usage ;;
 esac

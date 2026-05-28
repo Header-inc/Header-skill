@@ -106,6 +106,10 @@ case "$cmd" in
       }'
     ;;
 
+  -h|--help)
+    echo "Usage: header-ledger {record|status|list} ..."
+    exit 0
+    ;;
   *)
     echo "Usage: header-ledger {record|status|list} ..." >&2
     exit 1

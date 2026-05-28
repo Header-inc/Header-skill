@@ -247,8 +247,21 @@ EOF
     esac
     ;;
 
+  -h|--help)
+    echo "Usage: header-audit {harness|deps|patterns|gate} [--repo DIR] ..."
+    exit 0
+    ;;
   *)
     echo "Usage: header-audit {harness|deps|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac
+
+# Success-path exit. header-audit is a best-effort, read-only row emitter — each
+# case branch ends on whatever command happened to run last (a literal-glob
+# `[ -f ]` test that found nothing, a `grep` with no HITS, a `scan_file` whose
+# trailing pipeline returned non-zero). Without this, those incidental statuses
+# leak out as the script's exit code, and a caller that runs the auditor under a
+# tool wrapper sees a spurious "Error: Exit code 1" despite a complete audit.
+# Hard usage errors above exit 1 directly, before reaching here.
+exit 0

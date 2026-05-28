@@ -113,6 +113,10 @@ case "$cmd" in
     exit 0
     ;;
 
+  -h|--help)
+    echo "Usage: header-telemetry {log|sync} ..."
+    exit 0
+    ;;
   *)
     echo "Usage: header-telemetry {log|sync} ..." >&2
     exit 1

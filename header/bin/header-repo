@@ -163,6 +163,10 @@ case "$cmd" in
     fi
     ;;
 
+  -h|--help)
+    echo "Usage: header-repo {key|bind|get|clear|list|seen|flag} ..."
+    exit 0
+    ;;
   *)
     echo "Usage: header-repo {key|bind|get|clear|list|seen|flag} ..." >&2
     exit 1

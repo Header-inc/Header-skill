@@ -3,6 +3,46 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.12.4 — Exit-code hygiene: bin tools must not leak a non-zero status on success
+
+A real run hit `header-audit harness` emitting a complete audit (SECURITY +
+FILE rows) but exiting **1** — which the agent harness surfaced as
+`Error: Exit code 1` and used to cancel the parallel tool calls that followed.
+Audited all eight `bin/` tools for the same class of bug.
+
+### `header-audit` exited 1 on a clean audit (the real bug)
+
+The `harness` branch ends in a globbed `for f in …/.claude/commands/*.md
+…/.claude/agents/*.md` loop whose body is `[ -f "$f" ] && scan_file "$f"`. In
+POSIX sh with no nullglob, a directory that doesn't exist leaves the glob
+literal, so the final `[ -f ]` test is false → the loop (and the whole script,
+which had no trailing `exit`) returns 1. `scan_file`'s trailing `grep`-pipeline
+leaks the same way when a file has no cargo-cult HITS. Fixed with a success-path
+`exit 0` at end of script — the auditor is a best-effort, read-only row emitter,
+and genuine usage errors still `exit 1` inline above it.
+
+### `--help` exited 1 on 7 of 8 tools
+
+Every tool except `header-update-check` routed `--help` to the same code path as
+a no-arg/unknown usage error (`exit 1`). Explicit `--help` is a success action;
+it now exits **0** (printing to stdout) across all tools, while no-arg and
+unknown subcommands still exit **1** (to stderr). For `header-cost` /
+`header-experiment` the shared `usage()` now takes `usage 0` for the help case;
+the four dispatcher tools (`config`, `ledger`, `repo`, `telemetry`) and
+`header-audit` gained an explicit `-h|--help` branch.
+
+### Not leaks (verified, left as-is)
+
+`header-config get <bad-key>` → 1 (genuine invalid-key error), `header-cost cost
+<unknown-model>` → 2 (genuine unknown-model error), and `header-cost report` /
+`savings` reading usage JSONL from `/dev/stdin` (by design — pipe data in or
+redirect `</dev/null`). All real data/action subcommands across every tool
+already exit 0 on success.
+
+New `test/binexit.test.sh` locks in: `--help` = 0 everywhere, unknown subcommand
+= 1 on dispatchers, and `header-audit harness`/`deps`/`patterns` = 0 on a clean
+repo with output intact.
+
 ## 0.12.3 — Pre-spend honesty: catch a doomed experiment before the tokens burn, not at `analyze`
 
 Five fixes from a real 0.12.2 run — a CLAUDE.md trim that got scaffolded as an

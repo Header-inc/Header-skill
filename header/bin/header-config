@@ -226,6 +226,10 @@ case "${1:-}" in
       printf '  %-16s %s\n' "$KEY:" "$(lookup_default "$KEY")"
     done
     ;;
+  -h|--help)
+    echo "Usage: header-config {get|set|list|defaults|team-get|team-set|team-init|team-path|team-show} [key] [value]"
+    exit 0
+    ;;
   *)
     echo "Usage: header-config {get|set|list|defaults|team-get|team-set|team-init|team-path|team-show} [key] [value]" >&2
     exit 1
