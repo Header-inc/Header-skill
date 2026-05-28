@@ -3,6 +3,50 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.13.0 — Experiment engine: ephemeral-infra lifecycle, cost-axis discrimination, guardrail-value mode
+
+Three experiment-engine milestones from the 0.12.5 field test, turning "the
+worktree can't run infra-dependent mandates" from a dead-end into a workflow.
+
+### 1) Ephemeral-infra lifecycle (`setup:` / `teardown:` / `setup_scope:`)
+
+`worktree_include` symlinks *files*; stateful (DB-touching) experiments need an
+*isolated service*. New top-level spec keys:
+- **`setup:`** — a shell command run before the matrix. Its stdout `KEY=VALUE`
+  lines are captured to `<exp_dir>/.run-env` and exported into **every run's
+  adapter and verifier** — so the agent and the oracle both hit a throwaway
+  DB/branch (e.g. an injected `DATABASE_URL`), never prod/beta. Each line is
+  passed as a single arg to `export`, so a connection string's `&?:` aren't
+  re-parsed by the shell.
+- **`teardown:`** — destroys the infra. **Guaranteed to run** via an
+  `EXIT`/`INT`/`TERM` trap (reads globals + the on-disk `.run-env`, so it fires
+  even after `cmd_run` returns or on Ctrl-C) and is idempotent.
+- **`setup_scope:`** — `experiment` (default; provision once) or `run`
+  (provision + tear down per `(task, arm, rep)` for write-heavy tasks where one
+  run's writes would contaminate the next). `validate` rejects other values.
+
+Scaffolded specs get commented placeholders; SKILL.md documents the contract,
+the `run`-scope churn/cleanup tradeoff, and the `.env`-shadows-injected-env
+footgun.
+
+### 2) Cost-axis non-discrimination caveat
+
+The discrimination warning guarded the *success* axis; `report` now guards the
+*cost* axis. For a mandate-deletion A/B whose cost comes back **not favorable**
+(arm A not measurably costlier than arm B), it prints a caveat: the mandate may
+be genuinely cheap, OR the adapter never *performed* the mandated work (a
+one-shot headless run won't boot a server / drive a browser) — a false "the
+mandate is free." Detected by diffing arm overrides vs. the repo + mandate
+keywords; gated on `favorable=false` so genuine wins stay quiet.
+
+### 3) Guardrail-value mode
+
+`new --kind prompt-debt-deletion` on an emphatic mandate now recommends treating
+"is this guardrail earning its cost?" as a **guardrail-value question**, not an
+A/B: cost is cheap to measure (one execution), benefit is tail-risk insurance
+unmeasurable at small N. SKILL.md names the mode and makes "measure cost
+directly, reason about benefit qualitatively" the default.
+
 ## 0.12.5 — Reframe the discrimination gotcha: stack bring-up in a worktree is supported, not a dead-end
 
 Field-test feedback (a real run pressure-testing a Playwright visual-verify

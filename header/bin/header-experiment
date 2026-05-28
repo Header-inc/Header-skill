@@ -293,6 +293,10 @@ $(printf '%s\n' "$hits" | sed 's/^[[:space:]]*/        /')
     the suite passes in BOTH arms even if arm B quietly stops obeying the rule.
     Either make verify ASSERT the mandated behavior, or treat this as
     [Apply with review] rather than an experiment that can't see its own risk.
+    And if the question is "is this guardrail earning its cost?", that's a
+    guardrail-VALUE question, not a deletion A/B: the cost is cheap to measure
+    (one real execution), but the benefit is tail-risk insurance — unmeasurable
+    by a small A/B. Prefer measuring one execution's cost directly.
 EOF
   fi
 }
@@ -324,6 +328,33 @@ check_prefix_deletion_discrimination() {
       print_discrimination_warning "arm '$label' → $rel" "$removed"
     done < <(find "$ovd_abs" -type f \( -name 'CLAUDE.md' -o -name 'AGENTS.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.local.md' \) 2>/dev/null)
   done
+}
+
+# is_mandate_deletion <spec> <dir> <repo_abs>  → exit 0 if some arm trims a
+# prompt-prefix file (CLAUDE.md/AGENTS.md) AND the removed text carries an
+# emphatic mandate (MUST/NEVER/...). Silent — used by `report`'s cost-axis
+# caveat to decide whether a non-favorable cost result is suspicious.
+is_mandate_deletion() {
+  local spec="$1" dir="$2" repo_abs="$3"
+  local arms_list; arms_list="$(spec_list_sections "$spec" arm)"
+  local label ovd ovd_abs ovf rel repo_f removed
+  for label in $arms_list; do
+    [ -n "$label" ] || continue
+    ovd="$(spec_section_get "$spec" arm "$label" overrides_dir)"
+    [ -n "$ovd" ] || continue
+    ovd_abs="$(resolve_path "$dir" "$ovd")"
+    [ -d "$ovd_abs" ] || continue
+    while IFS= read -r ovf; do
+      [ -n "$ovf" ] || continue
+      rel="${ovf#"$ovd_abs"/}"
+      repo_f="$repo_abs/$rel"
+      [ -f "$repo_f" ] || continue
+      removed="$(diff "$repo_f" "$ovf" 2>/dev/null | sed -n 's/^< //p')"
+      [ -n "$removed" ] || continue
+      [ -n "$(mandate_keywords_in "$removed")" ] && return 0
+    done < <(find "$ovd_abs" -type f \( -name 'CLAUDE.md' -o -name 'AGENTS.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.local.md' \) 2>/dev/null)
+  done
+  return 1
 }
 
 # magnitude_estimate_prompt_debt <repo> <file_rel> <lines>  → prints, to stderr,
@@ -480,6 +511,12 @@ write_spec() {
     printf '                                    # symlinked from repo into each runs worktree.\n'
     printf '                                    # Needed for editable installs / dotfiles that\n'
     printf '                                    # git worktree does not bring along.\n'
+    printf '# setup:                            # OPTIONAL — shell cmd; its stdout KEY=VALUE lines\n'
+    printf '#                                   # become env for the adapter+verify (e.g. an\n'
+    printf '#                                   # isolated DATABASE_URL from a throwaway DB/branch).\n'
+    printf '# teardown:                         # OPTIONAL — shell cmd to destroy that infra\n'
+    printf '#                                   # (guaranteed to run, even on Ctrl-C).\n'
+    printf '# setup_scope: experiment           # experiment (provision once) | run (per task,arm,rep)\n'
     printf '\n'
     local label model ovd
     printf '%s\n' "$arms_blob" | while IFS='|' read -r label model ovd; do
@@ -884,6 +921,10 @@ cmd_validate() {
   local repo_abs; repo_abs="$(resolve_path "$dir" "${repo:-.}")"
   [ -d "$repo_abs" ] || { err "repo not found: $repo_abs"; rc=1; }
 
+  # Ephemeral-infra lifecycle: setup_scope, if set, must be experiment|run.
+  local sscope; sscope="$(spec_get_scalar "$spec" setup_scope)"
+  case "$sscope" in ''|experiment|run) ;; *) err "setup_scope must be 'experiment' or 'run' (got '$sscope')"; rc=1 ;; esac
+
   local arms_list tasks_list
   arms_list="$(spec_list_sections "$spec" arm)"
   tasks_list="$(spec_list_sections "$spec" task)"
@@ -1002,6 +1043,18 @@ run_one() {
     cp -a "$overrides_dir"/. "$wt"/ 2>/dev/null || true
   fi
 
+  # Ephemeral-infra env: cmd_run's setup step writes KEY=VALUE lines to
+  # <exp_dir>/.run-env; export them so the adapter AND the verifier both see the
+  # provisioned connection info (e.g. an isolated DATABASE_URL pointing at a
+  # throwaway DB/branch). Each line is passed as a single arg to `export`, so a
+  # connection string's &/?/: are NOT re-parsed by the shell.
+  if [ -f "$exp_dir/.run-env" ]; then
+    local _kv
+    while IFS= read -r _kv; do
+      case "$_kv" in [A-Za-z_]*=*) export "$_kv" ;; esac
+    done < "$exp_dir/.run-env"
+  fi
+
   # Invoke the agent. The adapter seam: tests set $HEADER_EXPERIMENT_ADAPTER to
   # a stub script. Real use → `claude -p`. The adapter must emit a single JSON
   # object on stdout with at least input_tokens / output_tokens (cost optional).
@@ -1093,6 +1146,55 @@ run_one() {
     }' "$agent_log"
 }
 
+# ── Ephemeral-infra lifecycle (setup / teardown) ──────────────
+# Stateful experiments (DB-touching tasks) need an ISOLATED service per
+# experiment — a throwaway Postgres, a Neon branch — not the repo's real DB.
+# `worktree_include` handles files; this handles services. Contract:
+#   setup:        shell cmd, runs in the repo. Its stdout KEY=VALUE lines are
+#                 captured to <exp_dir>/.run-env and exported into every run's
+#                 adapter + verify (so the agent + oracle hit the isolated DB).
+#   teardown:     shell cmd, runs with those same vars exported — destroys the
+#                 infra. GUARANTEED to run (EXIT/INT/TERM trap), even on Ctrl-C.
+#   setup_scope:  experiment (default) → provision once for the whole matrix;
+#                 run → provision/tear down per (task,arm,rep) for write-heavy
+#                 tasks where one run's writes would contaminate the next.
+# The trap reads globals + the on-disk .run-env (not cmd_run locals), so it
+# still works after cmd_run has returned. Teardown is idempotent: it removes
+# .run-env, so the trailing EXIT trap no-ops after an explicit teardown.
+_HDR_TD_DIR=""      # <exp_dir> whose .run-env the trap should tear down
+_HDR_TD_CMD=""      # the teardown shell command (empty = nothing to do)
+
+_run_setup() {
+  # $1 = setup cmd, $2 = exp_dir, $3 = repo. Writes KEY=VALUE → $2/.run-env.
+  local _cmd="$1" _dir="$2" _repo="$3" _out _rc
+  _out="$( cd "$_repo" && bash -c "$_cmd" 2>"$_dir/logs/setup.err" )"; _rc=$?
+  printf '%s\n' "$_out" > "$_dir/logs/setup.out"
+  if [ "$_rc" -ne 0 ]; then
+    err "setup failed (rc=$_rc) — see $_dir/logs/setup.err"
+    return 1
+  fi
+  printf '%s\n' "$_out" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > "$_dir/.run-env" 2>/dev/null || : > "$_dir/.run-env"
+  return 0
+}
+
+_run_teardown() {
+  # No args — reads the globals so the EXIT/INT/TERM trap works after cmd_run
+  # has returned and its locals are gone. Idempotent (removes .run-env).
+  [ -n "$_HDR_TD_CMD" ] || return 0
+  local _dir="$_HDR_TD_DIR" _envf="$_HDR_TD_DIR/.run-env"
+  [ -n "$_dir" ] || return 0
+  (
+    if [ -f "$_envf" ]; then
+      local _kv
+      while IFS= read -r _kv; do
+        case "$_kv" in [A-Za-z_]*=*) export "$_kv" ;; esac
+      done < "$_envf"
+    fi
+    bash -c "$_HDR_TD_CMD"
+  ) >> "$_dir/logs/teardown.log" 2>&1 || true
+  rm -f "$_envf"
+}
+
 cmd_run() {
   local id="" aa=0 k_override="" yes=0 seed="" adapter="${HEADER_EXPERIMENT_ADAPTER:-}"
   while [ $# -gt 0 ]; do
@@ -1121,6 +1223,14 @@ cmd_run() {
   # Picked up via dynamic scope (run_one reads $WORKTREE_INCLUDE).
   local WORKTREE_INCLUDE
   WORKTREE_INCLUDE="$(spec_get_scalar "$spec" worktree_include)"
+
+  # Ephemeral-infra lifecycle (setup/teardown/setup_scope). See _run_setup /
+  # _run_teardown above for the contract.
+  local SETUP_CMD TEARDOWN_CMD SETUP_SCOPE
+  SETUP_CMD="$(spec_get_scalar "$spec" setup)"
+  TEARDOWN_CMD="$(spec_get_scalar "$spec" teardown)"
+  SETUP_SCOPE="$(spec_get_scalar "$spec" setup_scope)"; [ -n "$SETUP_SCOPE" ] || SETUP_SCOPE="experiment"
+  mkdir -p "$dir/logs"
 
   # Resolve real commit hash for the run record. If repo isn't git, leave it.
   local commit_resolved="$commit"
@@ -1254,6 +1364,18 @@ EOF
     return 1
   fi
 
+  # Arm the guaranteed-teardown trap (reads globals + .run-env, so it fires even
+  # after cmd_run returns / on Ctrl-C), then provision once for experiment scope.
+  rm -f "$dir/.run-env"
+  if [ -n "$TEARDOWN_CMD" ]; then
+    _HDR_TD_DIR="$dir"; _HDR_TD_CMD="$TEARDOWN_CMD"
+    trap '_run_teardown' EXIT INT TERM
+  fi
+  if [ -n "$SETUP_CMD" ] && [ "$SETUP_SCOPE" = "experiment" ]; then
+    echo "Provisioning experiment infra (setup, scope=experiment)…" >&2
+    _run_setup "$SETUP_CMD" "$dir" "$repo" || { err "setup failed — aborting before any run"; return 1; }
+  fi
+
   local out_file
   out_file="$dir/$([ "$aa" -eq 1 ] && echo runs-aa.jsonl || echo runs.jsonl)"
   : > "$out_file"
@@ -1282,12 +1404,29 @@ EOF
         local prompt_abs; prompt_abs="$(resolve_task_path "$repo" "$dir" "$prompt")"
         step=$(( step + 1 ))
         printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$step" "$n_runs" "$task" "$arm" "$r" >&2
+        # run scope: isolate infra per (task,arm,rep) for write-heavy tasks
+        # where one run's writes would contaminate the next.
+        if [ -n "$SETUP_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
+          _run_setup "$SETUP_CMD" "$dir" "$repo" || { err "setup failed for run $step — aborting"; return 1; }
+        fi
         run_one "$dir" "$repo" "$commit_resolved" "$task" "$arm" "$r" \
                 "$model" "$overrides_abs" "$prompt_abs" "$verify" "$timeout_s" \
                 "$adapter" >> "$out_file"
+        if [ -n "$TEARDOWN_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
+          _run_teardown
+        fi
       done
     done
   done
+
+  # Final teardown (experiment scope) + disarm the trap so script EXIT doesn't
+  # re-run it. Teardown is idempotent (removes .run-env), so this is safe.
+  if [ -n "$TEARDOWN_CMD" ] && [ "$SETUP_SCOPE" = "experiment" ]; then
+    echo "Tearing down experiment infra (teardown)…" >&2
+    _run_teardown
+  fi
+  trap - EXIT INT TERM
+  rm -f "$dir/.run-env"
 
   echo "Done. Next:  header-experiment analyze $id$([ "$aa" -eq 1 ] && echo ' --aa')" >&2
 }
@@ -1635,6 +1774,33 @@ cmd_report() {
         printf "  cache warmup / temporal drift is contaminating the pipeline — fix before trusting the A/B.\n"
       }
     }' "$rf"
+
+  # Cost-axis non-discrimination caveat: for a mandate-deletion A/B, a
+  # non-favorable cost result (arm A not measurably costlier than B) is
+  # ambiguous — the mandate may be genuinely cheap, OR the adapter never
+  # PERFORMED the mandated work (a one-shot headless run won't boot a server /
+  # drive a browser), collapsing arm A's cost onto arm B's. Flag it.
+  local _mode _fav
+  _mode="$(grep -o '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$rf" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  _fav="$(grep -o '"favorable"[[:space:]]*:[[:space:]]*\(true\|false\)' "$rf" | head -1 | grep -o 'true\|false')"
+  if [ "$_mode" = "ab" ] && [ "$_fav" = "false" ]; then
+    local _spec="$dir/spec" _repo_abs
+    _repo_abs="$(resolve_path "$dir" "$(spec_get_scalar "$_spec" repo)")"
+    if is_mandate_deletion "$_spec" "$dir" "$_repo_abs"; then
+      cat <<'EOF'
+
+  Cost-axis check: arm A (mandate present) was NOT measurably more expensive than
+  arm B (mandate removed). Two readings, indistinguishable from this result alone:
+    · the mandate is genuinely cheap (a real "nearly free" finding), or
+    · the adapter never PERFORMED the mandated work — a one-shot headless run
+      won't boot a server / drive a browser — so arm A's cost collapsed onto
+      arm B's: a false "the mandate is free."
+  Before concluding the mandate is free, confirm arm A actually exercised it
+  (inspect logs/t*-A-*.json for the expensive work). If it didn't, this is a
+  guardrail-value question, not a cost A/B — measure one real execution directly.
+EOF
+    fi
+  fi
 }
 
 # ── MERGE ─────────────────────────────────────────────────────

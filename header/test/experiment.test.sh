@@ -952,4 +952,84 @@ assert_contains "$cc_out" "Discrimination check" \
 assert_not_contains "$cc_out" "behavior MANDATES" \
   "#4 no mandate escalation for sentence-case cargo-cult (Always/Don't are not MUST/NEVER)"
 
+# ════════════════════════════════════════════════════════════════════
+# 0.13.0 — ephemeral-infra lifecycle (setup/teardown), cost-axis caveat,
+# guardrail-value nudge.
+# ════════════════════════════════════════════════════════════════════
+write_stub_adapter "$sb/life-adapter.sh"   # A=0.10, B=0.06 (B cheaper → favorable)
+life_repo="$sb/life-repo"
+mkdir -p "$life_repo" && (cd "$life_repo" && git init -q && \
+  git config user.email t@t && git config user.name t && \
+  echo hi > a.txt && git add a.txt && git commit -qm init)
+
+# ── #1 setup/teardown, experiment scope: env reaches verify, teardown runs ──
+EXP new life-exp --arm "A:" --arm "B:" \
+  --task "tiny" --verify 'test -n "$EXP_DB"' \
+  --replicates 1 --repo "$life_repo" >/dev/null 2>&1
+life_mark="$sb/life-exp.marker"
+# keys go in the TOP block (above [arm:…]) — that's where spec_get_scalar reads.
+sed -i "/^commit: HEAD/a setup: echo EXP_DB=branch-xyz; touch $life_mark\nteardown: rm -f $life_mark\nsetup_scope: experiment" \
+  "$(exp_dir_for life-exp)/spec"
+EXP run life-exp --yes --adapter "$sb/life-adapter.sh" >/dev/null 2>&1
+assert_contains "$(cat "$(exp_dir_for life-exp)/runs.jsonl")" '"success":true' \
+  "#1 setup-injected env (EXP_DB) reaches the verifier → success=true"
+assert_eq "gone" "$([ -e "$life_mark" ] && echo present || echo gone)" \
+  "#1 teardown ran at end of experiment scope (marker removed)"
+assert_eq "gone" "$([ -e "$(exp_dir_for life-exp)/.run-env" ] && echo present || echo gone)" \
+  "#1 transient .run-env cleaned up after the run"
+
+# ── #1 run scope: setup provisions once per (task,arm,rep) ──
+EXP new life-run --arm "A:" --arm "B:" \
+  --task "tiny" --verify true \
+  --replicates 2 --repo "$life_repo" >/dev/null 2>&1
+life_count="$sb/life-run.count"; : > "$life_count"
+sed -i "/^commit: HEAD/a setup: echo prov >> $life_count; echo EXP_DB=x\nteardown: true\nsetup_scope: run" \
+  "$(exp_dir_for life-run)/spec"
+EXP run life-run --yes --adapter "$sb/life-adapter.sh" >/dev/null 2>&1
+assert_eq "4" "$(wc -l < "$life_count" | tr -d ' ')" \
+  "#1 run-scope provisions once per (task,arm,rep) = 1×2×2 = 4"
+
+# ── validate rejects a bad setup_scope ──
+EXP new life-bad --arm "A:" --arm "B:" --task "tiny" --verify true \
+  --replicates 1 --repo "$life_repo" >/dev/null 2>&1
+sed -i "/^commit: HEAD/a setup_scope: bogus" "$(exp_dir_for life-bad)/spec"
+EXP validate life-bad >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "#1 validate rejects setup_scope other than experiment|run"
+
+# ── #2 cost-axis caveat: mandate-deletion with NO measurable cost delta ──
+cat > "$sb/equal-adapter.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '{"type":"result","total_cost_usd":0.05,"usage":{"input_tokens":500,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}\n'
+EOF
+chmod +x "$sb/equal-adapter.sh"
+ca_repo="$sb/ca-repo"
+mkdir -p "$ca_repo" && (cd "$ca_repo" && git init -q && \
+  git config user.email t@t && git config user.name t)
+cat > "$ca_repo/CLAUDE.md" <<'EOF'
+# Rules
+You MUST run the browser visual check after every frontend change.
+Be concise.
+EOF
+echo '{"name":"x"}' > "$ca_repo/package.json"
+(cd "$ca_repo" && git add . && git commit -qm init)
+EXP new ca-1 --kind prompt-debt-deletion --file CLAUDE.md --lines 2 \
+  --task "tiny" --verify true --replicates 1 --repo "$ca_repo" >/dev/null 2>&1
+EXP run ca-1 --yes --adapter "$sb/equal-adapter.sh" >/dev/null 2>&1   # equal cost → favorable=false
+EXP analyze ca-1 >/dev/null 2>&1
+assert_contains "$(EXP report ca-1 2>&1)" "Cost-axis check" \
+  "#2 report flags cost-axis non-discrimination (mandate-deletion, arm A not measurably costlier)"
+
+# ── #2 negative: when B is genuinely cheaper (favorable), no cost-axis caveat ──
+EXP new ca-2 --kind prompt-debt-deletion --file CLAUDE.md --lines 2 \
+  --task "tiny" --verify true --replicates 1 --repo "$ca_repo" >/dev/null 2>&1
+EXP run ca-2 --yes --adapter "$sb/life-adapter.sh" >/dev/null 2>&1   # A=0.10 > B=0.06 → favorable
+EXP analyze ca-2 >/dev/null 2>&1
+assert_not_contains "$(EXP report ca-2 2>&1)" "Cost-axis check" \
+  "#2 no cost-axis caveat when arm B is genuinely cheaper (favorable=true)"
+
+# ── #3 guardrail-value nudge on a mandate deletion ──
+assert_contains "$(EXP new guard-1 --kind prompt-debt-deletion --file CLAUDE.md --lines 2 \
+  --task tiny --verify true --replicates 1 --repo "$ca_repo" 2>&1)" "guardrail-VALUE" \
+  "#3 new --kind prompt-debt-deletion surfaces the guardrail-value recommendation for a mandate"
+
 t_done
