@@ -3,6 +3,29 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.12.5 — Reframe the discrimination gotcha: stack bring-up in a worktree is supported, not a dead-end
+
+Field-test feedback (a real run pressure-testing a Playwright visual-verify
+mandate): the 0.12.3 discrimination gotcha was too defeatist — it treated "this
+mandate needs infra the worktree can't trivially provide" as the signal to give
+up and `[Apply with review]`. But the run's own investigation showed the stack
+*could* come up (deps present, DB reachable). Reframed: bringing the stack up
+inside the worktree is a **supported path** (`worktree_include` for files;
+per-experiment ephemeral DBs/branches are a ROADMAP milestone), with a real
+wall-clock + provisioning cost — weigh it, don't reflexively bail just because
+infra is involved.
+
+Also added the **cost-axis twin** of the discrimination trap: bringing the stack
+up is necessary but not sufficient — if the run adapter (often a one-shot
+headless invocation) doesn't actually *perform* the mandated work, arm A's cost
+collapses onto arm B's and you get a false "the mandate is free."
+
+ROADMAP gains three experiment-engine milestones the field test surfaced:
+**per-experiment ephemeral infra** (`setup:`/`teardown:` lifecycle, isolated
+DB/branch per run, guaranteed cleanup, granularity model), **cost-axis
+non-discrimination detection**, and a **guardrail-value mode** (measure cost
+directly; benefit is tail-risk, unmeasurable at small N).
+
 ## 0.12.4 — Exit-code hygiene: bin tools must not leak a non-zero status on success
 
 A real run hit `header-audit harness` emitting a complete audit (SECURITY +
