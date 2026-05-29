@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.14.0
+version: 0.14.1
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -669,9 +669,9 @@ The lifecycle `status` (`defined → run → analyzed → merged`) is part of ev
 
 **Opt-out.** `header-config set experiment_sync off` disables all auto-sync (manual `push` still works); `HEADER_EXPERIMENT_NOSYNC=1` disables it for one invocation / CI. `experiment_sync` is **personal-only** — a committed team config cannot turn it on for teammates.
 
-**The privacy contract — say it plainly.** Sync sends metadata only: the experiment id/kind/description, arm models + override **paths** (not contents), task **titles** + a sha256 + byte count, the hypothesis (the audit finding), the topic/goal/briefing it traces to, the repo's git-remote identity + commit, the machine (install id + hostname/os/arch), and the analyzed result (verdict + CIs). **Task prompt bodies, override file contents, and agent logs never leave the machine.** Task titles resolve authored → derived → id: if a `[task:…]` block has a `title:` line you (or the user) wrote, it's sent verbatim (zero-leak); otherwise a one-line summary is *derived* from the prompt's first heading (descriptive, low-leak); otherwise the task id is the floor. **If the prompt's first line could embed sensitive specifics, author a `title:` first** so the synced label is one you control.
+**The privacy contract — say it plainly.** Sync sends metadata only: the experiment id/kind/description, arm models + override **paths** (not contents), task **titles** + a sha256 + byte count, the hypothesis (the full claim in words, plus its audit-finding provenance), the topic/goal/briefing it traces to, the repo's git-remote identity + commit, the machine (install id + hostname/os/arch), and the analyzed result (verdict + CIs). **Task prompt bodies, override file contents, and agent logs never leave the machine.** Task titles resolve authored → derived → id: if a `[task:…]` block has a `title:` line you (or the user) wrote, it's sent verbatim (zero-leak); otherwise a one-line summary is *derived* from the prompt's first heading (descriptive, low-leak); otherwise the task id is the floor. **If the prompt's first line could embed sensitive specifics, author a `title:` first** so the synced label is one you control.
 
-**Help the lineage along.** Auto-sync recovers the hypothesis + topic + briefing from the recommendation ledger via the spec's `ledger_key`. When the session resolved a topic/goal/briefing the ledger doesn't have, a manual `push` can supply them (flags win over the ledger):
+**Help the lineage along.** The hypothesis *statement* (the dashboard headline) is the spec's own `hypothesis:` field — falling back to `description` — so it syncs directly and never depends on the ledger. Set it at scaffold time with `--hypothesis` (`new`/`define`), or edit the spec. The audit-finding provenance (title + source_url + disposition) and the topic/briefing are recovered from the recommendation ledger via the spec's `ledger_key`. When the session resolved a topic/goal/briefing the ledger doesn't have, a manual `push` can supply them (flags win over the ledger):
 
 ```bash
 header-experiment push <id> --topic <topic_id> --goal <goal_id> --briefing <briefing_id>
@@ -988,8 +988,11 @@ curl -sS -w "\n%{http_code}" -X POST https://joinheader.com/api/v2/experiments \
        "prompt_ref":"tasks/t1.md","prompt_sha256":"b2938df7…","prompt_bytes":308}
     ]
   },
-  "hypothesis": {                        // null when the experiment traces to no finding
-    "ledger_key":"slim-claude-md",
+  "hypothesis": {                        // present whenever a statement exists (it almost always does)
+    "statement":"Slimming CLAUDE.md keeps success non-inferior at materially lower per-turn token cost",
+                                          //   ↑ the full claim in words — the dashboard headline. The
+                                          //     spec's `hypothesis:` field, falling back to `description`.
+    "ledger_key":"slim-claude-md",       // ↓ provenance — blank unless the experiment traces to a finding
     "title":"Slim CLAUDE.md — 644 lines / ~9,739 tokens loaded every turn",
     "source_url":"https://www.youtube.com/watch?v=…",
     "disposition":"wanted"

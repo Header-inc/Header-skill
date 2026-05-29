@@ -3,6 +3,29 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.14.1 — Hypothesis front-and-center in the synced payload
+
+0.14.0 synced a `hypothesis` object that was *pointer metadata* — `ledger_key`, a
+borrowed `title`, `source_url`, `disposition` — all recovered from the recommendation
+ledger. When an experiment's ledger entry didn't exist yet at sync time (or a later
+disposition like `snoozed` clobbered the earlier record's title to empty), the dashboard
+showed an empty hypothesis even though the claim was right there in the spec's
+`description`. The human-readable hypothesis was never actually sent as such.
+
+- **New first-class `hypothesis:` spec field** — the full claim being tested, in words.
+  `build_payload` emits it as `hypothesis.statement`, the dashboard headline. It comes
+  from the spec (falling back to `description`) and is **never reconstructed from the
+  ledger**, so a missing or snoozed ledger record can no longer empty it.
+- **`--hypothesis` flag** on `new` and `define`; `write_spec` and both scaffolders write
+  the field (defaulting to the description). `validate` accepts it (no allowlist change
+  needed — it's a top-block scalar).
+- `ledger_key`/`title`/`source_url`/`disposition` stay in the object as **provenance**,
+  blank unless the experiment traces to an audit finding. `hypothesis` is now non-null
+  whenever a statement exists (i.e. almost always), not only when tied to a finding.
+- Docs (SKILL.md, `docs/experiments-sync-api.md`) and the `push` payload contract updated;
+  new `push.test.sh` coverage asserts the statement beats `description`, survives a
+  snoozed ledger record, and keeps `ledger_key` as provenance.
+
 ## 0.14.0 — Experiment cloud sync — automatic when a key is present (client side)
 
 Experiments now sync to the user's Header account so they show up in the web UI:

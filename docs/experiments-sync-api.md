@@ -1,10 +1,10 @@
 # Experiment Sync API — backend contract
 
 What the Header **skill** sends so a user's experiments show up on their dashboard.
-This is the contract for the receiving endpoint, which is **not built yet**
-(`POST /api/v2/experiments` currently returns `405`). The client side ships in skill
-v0.14.0 and makes the call on every experiment lifecycle change. Build the handler to
-match this shape.
+This is the contract for the receiving endpoint. **The endpoint is live** — `POST
+/api/v2/experiments` upserts on `client_key`, assigns a server id (`exp_srv_…`), and
+renders the experiment in the web UI. The client side shipped in skill v0.14.0 and
+calls it on every experiment lifecycle change.
 
 > Nothing executes server-side. This is a **record/display** sync: store it, show it
 > in the UI. No experiments run on Header infra.
@@ -42,7 +42,7 @@ Top level:
 | `skill_version` | string | Header skill version that produced the payload (e.g. `0.14.0`). |
 | `submitted_at` | string (ISO-8601 UTC) | When the client sent it. Use for last-write-wins / "last synced". |
 | `experiment` | object | See below. Always present. |
-| `hypothesis` | object \| null | The audit finding this experiment tests. `null` when the experiment isn't tied to a finding. |
+| `hypothesis` | object \| null | The claim this experiment tests (`statement`) plus audit-finding provenance. `null` only when the spec has no statement and no finding. |
 | `audit_basis` | object | Which topic/goal/briefing the hypothesis came from. Fields may be empty strings. |
 | `repo` | object | The repository the experiment targets. |
 | `machine` | object | The machine that ran it. |
@@ -88,9 +88,12 @@ Top level:
 
 ### `hypothesis` (object | null)
 
+`null` only when the spec has neither a `hypothesis:`/`description` nor a `ledger_key` — in practice it is almost always present.
+
 | Field | Type | Notes |
 |---|---|---|
-| `ledger_key` | string | Client-local stable key for the finding (e.g. `slim-claude-md`). **Not a server id** — treat as a per-user/per-repo label; good for grouping experiments that test the same finding. |
+| `statement` | string | **The full claim being tested, in words — the dashboard headline.** From the spec's `hypothesis:` field, falling back to `description`. Always sent from the spec, never reconstructed from the ledger. |
+| `ledger_key` | string | Client-local stable key for the finding (e.g. `slim-claude-md`). **Not a server id** — treat as a per-user/per-repo label; good for grouping experiments that test the same finding. May be empty. |
 | `title` | string | The finding's title. May be empty if the ledger had no record. |
 | `source_url` | string | The briefing source article that motivated it. May be empty. |
 | `disposition` | string | Latest ledger action: `surfaced` \| `applied` \| `dismissed` \| `snoozed` \| `wanted` \| "". |
@@ -230,7 +233,7 @@ still valid JSON).
       {"id":"t1","title":"Add a 'briefing_count' field to the v2 Goal model and expose it on GET /api/v2/goals/{id…","title_source":"derived","verify":"pytest tests/v2/ -x -q --tb=short","prompt_ref":"tasks/t1.md","prompt_sha256":"b2938df744349024dae64f2b7696626d522353f2ea92277e5e77179b21ee768a","prompt_bytes":308}
     ]
   },
-  "hypothesis": {"ledger_key":"slim-claude-md","title":"Slim CLAUDE.md — 644 lines / ~9,739 tokens loaded every turn","source_url":"https://www.youtube.com/watch?v=PIdETjcXNIk","disposition":"surfaced"},
+  "hypothesis": {"statement":"Slimming CLAUDE.md keeps success non-inferior at materially lower per-turn token cost","ledger_key":"slim-claude-md","title":"Slim CLAUDE.md — 644 lines / ~9,739 tokens loaded every turn","source_url":"https://www.youtube.com/watch?v=PIdETjcXNIk","disposition":"surfaced"},
   "audit_basis": {"topic_id":"1991163f-be9c-4df2-a33c-046a4d1357e1","goal_id":"","briefing_id":"3c9b6bbd-b9e8-4dac-b06d-464272bc6800"},
   "repo": {"key":"github.com/org/synthesize-engine","name":"synthesize-engine","branch":"main","commit":"5214a29"},
   "machine": {"installation_id":"5ce8a25c-6d6d-4ce9-940f-364b43e78944","hostname":"dev-box","os":"linux","arch":"x86_64"},

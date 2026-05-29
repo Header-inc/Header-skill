@@ -505,17 +505,19 @@ gen_clause_add_arm_b() {
 #   $7 arms (one per line: "label|model|overrides_dir")
 #   $8 tasks (one per line: "id|prompt|verify|timeout_s")
 #   $9 (optional) ledger_key — provenance from an audit finding
+#   ${10} (optional) hypothesis — the full claim in words (the dashboard headline)
 # Field separator is "|" (a non-whitespace IFS so empty fields don't collapse —
 # tab DOES collapse because it's whitespace IFS, that's the bash gotcha).
 write_spec() {
   local out="$1" id="$2" desc="$3" repo="$4" reps="$5" margin="$6"
-  local arms_blob="$7" tasks_blob="$8" ledger_key="${9:-}"
+  local arms_blob="$7" tasks_blob="$8" ledger_key="${9:-}" hypothesis="${10:-}"
   {
     printf '# header-experiment spec — see ~/.header/experiments/%s/\n' "$id"
     printf '# Flat "key: value" lines. Sections: [arm:LABEL] and [task:ID].\n'
     printf '# Edit freely; `header-experiment validate %s` checks it.\n\n' "$id"
     printf 'id: %s\n' "$id"
     printf 'description: %s\n' "${desc:-(set me)}"
+    printf 'hypothesis: %s\n' "${hypothesis:-${desc:-(state the full claim being tested)}}"
     printf 'repo: %s\n' "${repo:-.}"
     printf 'commit: HEAD\n'
     printf 'replicates: %s\n' "${reps:-3}"
@@ -552,15 +554,16 @@ write_spec() {
 
 # ── DEFINE ────────────────────────────────────────────────────
 cmd_define() {
-  local id="" desc="" arms=() tasks=() replicates="3" margin="0.02"
+  local id="" desc="" hypothesis="" arms=() tasks=() replicates="3" margin="0.02"
   while [ $# -gt 0 ]; do
     case "$1" in
       --description) desc="${2:-}"; shift 2 ;;
+      --hypothesis)  hypothesis="${2:-}"; shift 2 ;;
       --arm)         arms+=("${2:-}"); shift 2 ;;
       --task)        tasks+=("${2:-}"); shift 2 ;;
       --replicates)  replicates="${2:-3}"; shift 2 ;;
       --margin)      margin="${2:-0.02}"; shift 2 ;;
-      -h|--help)     echo "Usage: header-experiment define <id> [--description T] [--arm L=model] [--task ID=prompt:verify] [--replicates N] [--margin F]"; return 0 ;;
+      -h|--help)     echo "Usage: header-experiment define <id> [--description T] [--hypothesis T] [--arm L=model] [--task ID=prompt:verify] [--replicates N] [--margin F]"; return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
@@ -583,6 +586,7 @@ cmd_define() {
     printf '# Edit freely; `header-experiment validate %s` checks it.\n\n' "$id"
     printf 'id: %s\n' "$id"
     [ -n "$desc" ] && printf 'description: %s\n' "$desc" || printf 'description: (set me)\n'
+    printf 'hypothesis: %s\n' "${hypothesis:-${desc:-(state the full claim being tested)}}"
     printf 'repo: .\n'
     printf 'commit: HEAD\n'
     printf 'replicates: %s\n' "$replicates"
@@ -668,7 +672,7 @@ cmd_define() {
 # next-step commands (--aa first, then A/B) when the spec is written.
 cmd_new() {
   local id="" kind="" file_arg="" lines="" from="" to=""
-  local verify_arg="" replicates="" margin="" desc="" ledger_key=""
+  local verify_arg="" replicates="" margin="" desc="" ledger_key="" hypothesis=""
   local repo_arg=""
   local after_line="" text_arg="" text_file=""
   local arms_in=() task_args=()
@@ -688,6 +692,7 @@ cmd_new() {
       --replicates)  replicates="${2:-}"; shift 2 ;;
       --margin)      margin="${2:-}"; shift 2 ;;
       --description) desc="${2:-}"; shift 2 ;;
+      --hypothesis)  hypothesis="${2:-}"; shift 2 ;;
       --ledger-key)  ledger_key="${2:-}"; shift 2 ;;
       --repo)        repo_arg="${2:-}"; shift 2 ;;
       -h|--help)
@@ -720,6 +725,8 @@ Shared:
   --replicates N              default 3
   --margin F                  non-inferiority margin δ for success (default 0.02)
   --description T             human description
+  --hypothesis T              the full claim being tested (the dashboard headline;
+                              defaults to --description if omitted)
   --ledger-key K              record audit-finding provenance in the spec
   --repo DIR                  repo root (default: current dir)
 
@@ -866,7 +873,7 @@ USAGE
   done
 
   local spec="$dir/spec"
-  write_spec "$spec" "$id" "$desc" "$repo" "$replicates" "${margin:-0.02}" "$arms_blob" "$tasks_blob" "$ledger_key"
+  write_spec "$spec" "$id" "$desc" "$repo" "$replicates" "${margin:-0.02}" "$arms_blob" "$tasks_blob" "$ledger_key" "$hypothesis"
 
   # Sanity-check the result. Internal call — suppress its auto-sync; cmd_new
   # fires one of its own at the end (set/unset explicitly: a prefix assignment
@@ -2008,7 +2015,8 @@ EOF
 # user's OWN identified experiments on their OWN dashboard. Gated on an API key.
 #
 # What goes: which experiment (id/kind/description/arms/status) · which hypothesis
-# (the audit finding, from the ledger) · what it was based on (topic + goal +
+# (the full claim in words from the spec's `hypothesis:`/`description`, plus
+# audit-finding provenance from the ledger) · what it was based on (topic + goal +
 # briefing) · what repo (normalized git remote + commit) · what machine
 # (installation id + host/os/arch) · the result (verdict + CIs), embedded verbatim.
 # What NEVER goes: task prompt BODIES, override file contents, agent logs, verify
@@ -2175,9 +2183,19 @@ build_payload() {
   local result_blob="null"
   [ -f "$dir/result.json" ] && result_blob="$(cat "$dir/result.json")"
 
-  # ── hypothesis object — null unless the experiment traces to a finding ──
+  # ── hypothesis object ──
+  # `statement` is the human-readable hypothesis, front-and-center: the spec's
+  # own `hypothesis:` field, falling back to `description` so every experiment
+  # carries its claim in words — NOT reconstructed from the ledger (the ledger
+  # only ever held a borrowed `title`, and a later disposition could clobber it
+  # to empty). ledger_key/title/source_url/disposition stay as provenance, blank
+  # unless the experiment traces to an audit finding.
+  local h_statement; h_statement="$(spec_get_scalar "$spec" hypothesis)"
+  [ -n "$h_statement" ] || h_statement="$desc"
   local hypo="null"
-  [ -n "$lk" ] && hypo="{\"ledger_key\":\"$(json_escape "$lk")\",\"title\":\"$(json_escape "${h_title:-}")\",\"source_url\":\"$(json_escape "${h_src:-}")\",\"disposition\":\"$(json_escape "${h_disp:-}")\"}"
+  if [ -n "$h_statement" ] || [ -n "$lk" ]; then
+    hypo="{\"statement\":\"$(json_escape "$h_statement")\",\"ledger_key\":\"$(json_escape "$lk")\",\"title\":\"$(json_escape "${h_title:-}")\",\"source_url\":\"$(json_escape "${h_src:-}")\",\"disposition\":\"$(json_escape "${h_disp:-}")\"}"
+  fi
 
   local ver iid_key
   ver="$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || echo unknown)"

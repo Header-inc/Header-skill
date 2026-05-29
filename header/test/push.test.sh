@@ -58,7 +58,8 @@ assert_contains "$out" '"audit_basis"'          "payload has audit_basis block"
 assert_contains "$out" '"repo"'                 "payload has repo block"
 assert_contains "$out" '"machine"'              "payload has machine block"
 assert_contains "$out" '"kind": "model-swap"'   "two distinct models → kind=model-swap"
-assert_contains "$out" '"hypothesis": null'     "no ledger_key → hypothesis null"
+assert_contains "$out" '"statement":"opus vs sonnet"' "no hypothesis: field → statement falls back to description"
+assert_contains "$out" '"ledger_key":""'        "no finding → hypothesis provenance ledger_key blank"
 assert_contains "$out" '"result": null'         "not analyzed → result null"
 assert_contains "$out" '"status": "defined"'    "no runs/result → status defined"
 
@@ -175,10 +176,48 @@ assert_contains "$out" '"topic_id": "OVR-T"'    "--topic overrides ledger"
 assert_contains "$out" '"goal_id": "OVR-G"'     "--goal flows through"
 assert_contains "$out" '"briefing_id": "OVR-B"' "--briefing overrides ledger"
 
+# ── 4b. explicit hypothesis: field is front-and-center, ledger-independent ──
+# A later snoozed ledger record with an empty title must NOT empty the statement
+# (the bug that buried the hypothesis on the dashboard): statement comes from the
+# spec, the ledger only supplies provenance.
+cat >> "$HH/ledger.jsonl" <<EOF
+{"ts":"2026-05-27T21:09:00Z","epoch":1779916140,"repo":"myrepo","action":"surfaced","key":"hypo-key","title":"Borrowed finding title","briefing_id":"","topic_id":"top-9","source_url":""}
+{"ts":"2026-05-27T21:09:01Z","epoch":1779916141,"repo":"myrepo","action":"snoozed","key":"hypo-key","title":"","briefing_id":"","topic_id":"","source_url":""}
+EOF
+mk_spec hypo <<EOF
+id: hypo
+description: short one-liner
+hypothesis: On routine backend tasks, Sonnet 4.6 matches Opus 4.8 success at lower cost
+repo: $sb/myrepo
+commit: HEAD
+replicates: 1
+non_inferiority_margin: 0.02
+ledger_key: hypo-key
+
+[arm:A]
+model: m
+overrides_dir:
+
+[arm:B]
+model: m
+overrides_dir:
+
+[task:t1]
+prompt: tasks/t1.md
+verify: true
+timeout_s: 600
+EOF
+echo "task" > "$HH/experiments/hypo/tasks/t1.md"
+out="$(PUSH hypo --dry-run 2>/dev/null)"
+assert_contains "$out" '"statement":"On routine backend tasks, Sonnet 4.6 matches Opus 4.8 success at lower cost"' \
+  "explicit hypothesis: field is the statement (beats description, survives snoozed ledger)"
+assert_not_contains "$out" '"statement":"short one-liner"' "explicit hypothesis: wins over description"
+assert_contains "$out" '"ledger_key":"hypo-key"' "ledger_key still carried as provenance"
+
 # ── 5. --all renders every experiment with a spec ────────────────
 allout="$(PUSH --all --dry-run 2>/dev/null)"
 n="$(printf '%s\n' "$allout" | grep -c '"client_key"')"
-assert_eq "4" "$n" "--all renders all 4 specs (swap, harness, titles, linked)"
+assert_eq "5" "$n" "--all renders all 5 specs (swap, harness, titles, linked, hypo)"
 
 # ── 6. no-key live push is a no-op (exit 0) + recommends signup ──
 rc=0; msg="$(env -u HEADER_API_KEY HEADER_HOME="$HH" "$HE" push swap 2>&1)" || rc=$?
