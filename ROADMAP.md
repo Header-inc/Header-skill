@@ -47,13 +47,19 @@ that closes the audit → experiment → applied-change loop in code, not just i
   **guardrail-value** recommendation. Plus soft power tiers, replicate-level A/A,
   `worktree_include`, and pre-spend honesty (degenerate-CI + the measured A/A
   noise floor surfaced at the gate).
+- **Git-history task mining + tests-oracle verifier** (0.16.0, §11 — *the
+  keystone*) — `header-experiment mine` scans the repo's history for fixes
+  touching source + tests, validates each by re-applying the fix's tests at the
+  parent and running the suite (keeping the FAIL_TO_PASS ones), and writes a
+  runnable experiment (default: a model-swap A/B). The runner gained per-task
+  base `commit` + `apply_from`/`apply_paths`/`lock_paths`: it applies the fixing
+  commit's tests before the agent and **re-locks them before grading**, so the
+  oracle can't be gamed by editing the test. Removes the last hand-authoring
+  friction — no task prompts, no verify commands — and is the on-ramp for
+  model-routing experiments at scale.
 
 **Next on this track (not yet built):**
 
-- **Verifiers & task mining from git history** (§11 of the design) — the hardest
-  open problem. Turn the customer's own test suite into the oracle; mine
-  FAIL_TO_PASS commits into task specs so users don't hand-author task prompts. The
-  current MVP requires the user to write the prompt + name the verify command.
 - **Tool-managed infra provisioning** (the next step on the shipped `setup:`/
   `teardown:` lifecycle) — a `--kind` / provider helper that creates+drops a Neon
   branch (or docker Postgres) for you, so users don't hand-write the `setup:`

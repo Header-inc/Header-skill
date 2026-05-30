@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.15.0
+version: 0.16.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -611,7 +611,23 @@ Other subcommands: `"<COST>" refresh [--url U]`, `"<COST>" prices`, `"<COST>" co
 
 ## Experiments (`header-experiment`) — beta
 
-> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **Scope:** `new` (audit-aware scaffolder), `validate`, `run` (`--aa` noise-floor; `setup:`/`teardown:` ephemeral infra), `analyze`, `report`, `merge` (apply arm B after a B-wins verdict). **Not yet:** git-history task mining (§11), σ-based power analysis, LLM judges, cross-customer aggregate submit.
+> **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **Scope:** `mine` (git-history task mining + tests-oracle verifier, §11), `new` (audit-aware scaffolder), `validate`, `run` (`--aa` noise-floor; `setup:`/`teardown:` ephemeral infra), `analyze`, `report`, `merge` (apply arm B after a B-wins verdict). **Not yet:** σ-based power analysis, LLM judges, cross-customer aggregate submit.
+
+### Mine tasks from git history (`mine`) — no hand-authoring
+
+The friction that stopped "continuous" was that `new`/`define` still need the user to write the task **prompt** and name the **verify** command. `mine` removes both (design §11): a real repo already ships its correctness oracle — its **test suite** — and its **git history** is a factory of (task, oracle) pairs. Every commit that fixed code *and* touched tests is a task: check out the **parent**, re-apply only that commit's **test files** (so the new tests fail), and the job becomes "make the suite pass," graded by the repo's own suite. Nobody hand-writes a grader; the human who made the commit already did.
+
+```bash
+header-experiment mine <id> --list                       # preview candidate commits (no runs, no writes)
+header-experiment mine <id>                              # validate + write a runnable model-swap experiment
+header-experiment mine <id> --from <model> --to <model>  # set the A/B arms (default: opus-4-8 vs sonnet-4-6)
+```
+
+What it does: scans the last `--limit` commits for fixes touching source + tests (≤ `--max-files`), then **validates** each by checking out the parent, re-applying the fix's test files, and running the suite — keeping only those that **fail** (a real fix exists). It writes a complete experiment whose tasks each pin the fix's parent `commit` and carry `apply_from`/`apply_paths`/`lock_paths`; at run time the runner applies the tests before the agent and **re-locks them before grading**, so "make the test pass" can't be won by editing the test (the reward-hacking defense). The default arms are a **model swap** — this is the keystone for "model-routing experiments at scale," the moat's first named learning: *is the cheaper model good enough on this repo's own real fixes?*
+
+**This is the recommended way to start a model-swap experiment** — far less friction than authoring tasks. Reach for `new --kind model-swap` only when you want to test on a *specific* task you have in mind rather than mined history.
+
+Scope honesty (state it when you surface results): mine's per-candidate check confirms the new tests *fail at the parent* (a FAIL_TO_PASS exists); it relies on `run --aa` to expose flaky/baseline-broken tasks (a task arm A can't pass either). The suite runs in a bare `git worktree`, so dep dirs (`node_modules`, `.venv`, …) are auto-symlinked via `worktree_include`; if validation finds nothing, the suite usually needs a build/env the worktree lacks — pass a `--verify` that runs standalone. Tier-1 proves correctness on covered behavior, not taste — don't overclaim.
 
 ### From audit finding to scaffolded experiment
 

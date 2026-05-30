@@ -2,7 +2,7 @@
 # header-experiment — BETA. Local A/B (and A/A) experimentation for AI-agent
 # harness changes. Runs the loop the rest of the skill is built around:
 #
-#   define → run → analyze → report
+#   mine → run → analyze → report          (or define/new → run → analyze → report)
 #
 # Each run executes (task × arm × replicate) in an isolated worktree at a pinned
 # commit, captures real usage via the Claude Code headless adapter
@@ -11,11 +11,21 @@
 # a verdict against the deck's rule: B wins only if cost CI < 0 AND success is
 # non-inferior within δ. Local-only — nothing leaves the machine.
 #
-# MVP scope (out: git-history mining; auto-merge of the winning arm; LLM judges;
-# FDR / sequential analysis; non-Claude adapters; cross-customer aggregate
-# submit). All planned — see docs/experiments-design.md §§11–12.
+# `mine` (design §11) removes the last hand-authoring friction: it turns the
+# repo's own git history into tasks and its own test suite into the oracle, so the
+# user no longer writes task prompts or names verify commands. MVP scope (out:
+# auto-merge of the winning arm; LLM judges; FDR / sequential analysis; non-Claude
+# adapters; cross-customer aggregate submit). See docs/experiments-design.md §§11–12.
 #
 # Usage:
+#   header-experiment mine <id> [--repo DIR] [--limit N] [--max-files N]
+#                               [--max-tasks N] [--verify CMD] [--from M --to N]
+#                               [--arm L[:M[:OVD]]] [--since REF] [--list] [--yes]
+#                               Scan git history for fixes touching source+tests,
+#                               validate each by re-applying the fix's tests at the
+#                               parent and running the suite (keep the ones that
+#                               fail), then write a runnable experiment. --list
+#                               previews candidates without running anything.
 #   header-experiment define <id> [--description T] [--arm LABEL=model] ...
 #                               Scaffold ~/.header/experiments/<id>/ with a
 #                               template `spec` file (flat key:value + repeated
@@ -97,6 +107,15 @@ set -uo pipefail
 STATE_DIR="${HEADER_HOME:-$HOME/.header}"
 EXP_ROOT="$STATE_DIR/experiments"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# This tool always operates on an EXPLICIT repo path (--repo / the spec's repo:),
+# never the ambient git context. Clear inherited git env vars so our nested git
+# operations (worktree add, checkout, diff-tree) bind to that target repo even
+# when we're invoked from inside a git hook or CI step that exported GIT_DIR /
+# GIT_INDEX_FILE / GIT_WORK_TREE — otherwise mining would silently run against
+# the wrong repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX 2>/dev/null || true
+
 HC_BIN="$SELF_DIR/header-cost"
 LEDGER_BIN="$SELF_DIR/header-ledger"
 VERSION_FILE="$(cd "$SELF_DIR/.." && pwd)/VERSION"
@@ -212,6 +231,49 @@ auto_detect_verify() {
   [ -f "$repo/go.mod" ]          && echo "go test ./..."   && return 0
   [ -f "$repo/Gemfile" ]         && echo "bundle exec rake test" && return 0
   echo "true"
+}
+
+# _looks_like_test <path>  → exit 0 if the repo-relative path is a test file, by
+# the common conventions across ecosystems (JS/TS, Python, Go, Rust, Ruby, JVM).
+# Used by `mine` to classify a commit's changed files into tests vs. implementation.
+# Conservative-by-convention; false matches are caught downstream when the suite
+# is actually run during mining.
+_looks_like_test() {
+  local p="$1" b="${1##*/}"
+  case "$p" in
+    */__tests__/*|*/test/*|*/tests/*|*/spec/*|*/specs/*) return 0 ;;
+    test/*|tests/*|spec/*|specs/*)                       return 0 ;;
+  esac
+  case "$b" in
+    *.test.*|*.spec.*) return 0 ;;
+    *_test.go|*_test.py|*_test.rb|*_test.rs|*_test.ts|*_test.tsx|*_test.js|*_test.exs) return 0 ;;
+    test_*.py) return 0 ;;
+    *Test.java|*Tests.java|*Test.kt|*Tests.kt|*Spec.scala) return 0 ;;
+    *_spec.rb) return 0 ;;
+  esac
+  return 1
+}
+
+# _oracle_checkout <worktree> <ref> <comma-sep-paths> — check out <ref>'s version
+# of the given paths into the worktree (working tree + index). The tests-oracle
+# task type (from `mine`) calls it twice: BEFORE the agent to apply a fixing
+# commit's TEST files onto the parent state (so the new tests fail and there's
+# something to fix), and AGAIN right before grading to LOCK them — reverting any
+# edit the agent made to the tests. That re-pin is the reward-hacking defense
+# (design §11) and needs no sandbox: the graded suite always runs the pinned
+# tests, so "make the test pass" can't be won by editing the test. Best-effort:
+# silent no-op if the worktree isn't a git repo or a path is gone.
+_oracle_checkout() {
+  local wt="$1" ref="$2" paths="$3" p arr=() oifs="$IFS"
+  ( cd "$wt" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1 ) || return 0
+  IFS=','
+  for p in $paths; do
+    p="$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$p" ] && arr+=("$p")
+  done
+  IFS="$oifs"
+  [ "${#arr[@]}" -gt 0 ] || return 0
+  ( cd "$wt" && git checkout "$ref" -- "${arr[@]}" 2>/dev/null )
 }
 
 # prompt_user <message> [<default>]  → read one line interactively, echo answer.
@@ -924,6 +986,323 @@ EOF
   _autosync "$id"        # status: defined (auto when keyed; recommends otherwise)
 }
 
+# ── MINE (git-history task mining → runnable tests-oracle experiment) ──────────
+# The keystone (design §11): you don't author verifiers, you mine them. A real
+# repo already ships its correctness oracle — its test suite — and its git history
+# is a factory of (task, oracle) pairs. Every commit that fixed code AND touched
+# tests is a task: check out the PARENT, re-apply only that commit's TEST files
+# (so the new tests fail), and the job becomes "make the suite pass." The repo's
+# own suite grades it. That removes the two hand-authoring frictions that blocked
+# "continuous": the task PROMPT (now auto-generated + generic) and the VERIFY
+# command (now the repo's own auto-detected suite). Output: a complete, runnable
+# experiment — by default a model-swap A/B (the #1 named use, "is the cheaper
+# model good enough on my real tasks?").
+
+# _mine_validate <repo> <parent> <child> <verify> <timeout_s> <paths_csv> <include_csv>
+# Echoes a one-word status: `valid` (the re-applied tests FAIL at the parent → a
+# real fix exists), `nofail` (they pass → nothing to fix → skip), or `error`
+# (couldn't build the worktree / apply the tests → skip). Runs the suite once in a
+# throwaway worktree at the parent, with the child's tests applied; symlinks the
+# dep/artifact dirs git worktrees don't carry so the suite can actually run.
+_mine_validate() {
+  local repo="$1" parent="$2" child="$3" verify="$4" tmo="$5" paths="$6" include="$7"
+  local wt rc=0 p arr=() oifs="$IFS"
+  wt="$(mktemp -d "${TMPDIR:-/tmp}/header-mine.XXXXXX")" && rm -rf "$wt"
+  ( cd "$repo" && git worktree add --detach -q "$wt" "$parent" 2>/dev/null ) || { echo error; return 0; }
+  # Symlink dep/artifact dirs (node_modules, venv, …) so imports resolve.
+  IFS=','
+  for p in $include; do
+    p="$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$p" ] && [ -e "$repo/$p" ] && [ ! -e "$wt/$p" ] && ln -s "$repo/$p" "$wt/$p" 2>/dev/null
+  done
+  IFS="$oifs"
+  # Apply the child's test files onto the parent.
+  if ! _oracle_checkout "$wt" "$child" "$paths"; then
+    ( cd "$repo" && git worktree remove --force "$wt" >/dev/null 2>&1 ) || rm -rf "$wt"
+    echo error; return 0
+  fi
+  # Run the suite. A FAILURE means the new tests fail at the parent → real task.
+  if command -v timeout >/dev/null 2>&1; then
+    ( cd "$wt" && timeout "${tmo}s" bash -c "$verify" ) >/dev/null 2>&1; rc=$?
+  else
+    ( cd "$wt" && bash -c "$verify" ) >/dev/null 2>&1; rc=$?
+  fi
+  ( cd "$repo" && git worktree remove --force "$wt" >/dev/null 2>&1 ) || rm -rf "$wt"
+  [ "$rc" -ne 0 ] && echo valid || echo nofail
+}
+
+cmd_mine() {
+  local id="" repo="" limit=150 max_files=5 max_tasks=8 verify_override=""
+  local from="" to="" arm_in=() reps=3 margin=0.02 since="" vtimeout=600
+  local list_only=0 yes=0 desc="" hypothesis=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo)        repo="${2:-}"; shift 2 ;;
+      --limit)       limit="${2:-150}"; shift 2 ;;
+      --max-files)   max_files="${2:-5}"; shift 2 ;;
+      --max-tasks)   max_tasks="${2:-8}"; shift 2 ;;
+      --verify)      verify_override="${2:-}"; shift 2 ;;
+      --from)        from="${2:-}"; shift 2 ;;
+      --to)          to="${2:-}"; shift 2 ;;
+      --arm)         arm_in+=("${2:-}"); shift 2 ;;
+      --replicates)  reps="${2:-3}"; shift 2 ;;
+      --margin)      margin="${2:-0.02}"; shift 2 ;;
+      --since)       since="${2:-}"; shift 2 ;;
+      --timeout)     vtimeout="${2:-600}"; shift 2 ;;
+      --list)        list_only=1; shift ;;
+      --yes|-y)      yes=1; shift ;;
+      --description) desc="${2:-}"; shift 2 ;;
+      --hypothesis)  hypothesis="${2:-}"; shift 2 ;;
+      -h|--help)
+        cat <<EOF
+Usage: header-experiment mine <id> [options]
+
+Mine this repo's git history into a runnable tests-oracle experiment: each task
+replays a real fix (parent commit + that commit's tests re-applied) and is graded
+by the repo's own suite. No task prompts or verify commands to hand-author.
+
+  --repo DIR        repo to mine (default: cwd's git toplevel)
+  --limit N         commits to scan, newest first (default 150)
+  --max-files N     skip commits changing more than N files (default 5)
+  --max-tasks N     stop after N validated tasks (default 8)
+  --verify CMD      test command (default: auto-detected from manifests)
+  --from M --to N   model-swap arms A=M, B=N (default: opus-4-8 vs sonnet-4-6)
+  --arm L[:M[:OVD]] explicit arm (repeatable) — overrides --from/--to
+  --replicates N    replicates per (task,arm) (default 3)
+  --since REF       only mine commits in REF..HEAD
+  --timeout S       per-candidate suite timeout during validation (default 600)
+  --list            discover candidates and print them; no suite runs, no write
+  --yes             skip the validation confirmation prompt
+EOF
+        return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  case "$id" in *[!a-zA-Z0-9_.-]*) err "id must be [a-zA-Z0-9_.-]+ (got '$id')"; return 1 ;; esac
+  case "$limit$max_files$max_tasks$vtimeout" in *[!0-9]*) err "--limit/--max-files/--max-tasks/--timeout must be integers"; return 1 ;; esac
+
+  # Resolve repo → git toplevel.
+  [ -n "$repo" ] || repo="$(pwd)"
+  repo="$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" \
+    || { err "not a git repository (mine needs git history): ${repo:-$(pwd)}"; return 1; }
+
+  if [ "$list_only" -eq 0 ]; then
+    local dir_pre; dir_pre="$(exp_dir "$id")"
+    [ -e "$dir_pre" ] && { err "experiment '$id' already exists ($dir_pre)"; return 1; }
+  fi
+
+  # Test command (oracle). Auto-detect unless overridden. "true" → can't grade —
+  # but only the build path needs it; --list is pure git discovery, so don't
+  # block a preview just because no manifest was found.
+  local verify="$verify_override"
+  [ -n "$verify" ] || verify="$(auto_detect_verify "$repo")"
+  if [ "$list_only" -eq 0 ] && [ "$verify" = "true" ]; then
+    err "couldn't detect a test command for $repo. Pass --verify 'your test command' (e.g. --verify 'pytest -q')."
+    return 1
+  fi
+
+  beta_banner
+
+  # ── discover candidate commits (cheap; pure git) ──────────────
+  # A candidate touches ≥1 test file AND ≥1 non-test file, ≤ max_files total, and
+  # has exactly one parent (no merges / root). Newest first.
+  echo "Scanning up to $limit commit(s) in $repo for fixes that touch source + tests…" >&2
+  local range="HEAD"; [ -n "$since" ] && range="$since..HEAD"
+  local candidates=() sha
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    ( cd "$repo" && git rev-parse -q --verify "${sha}^" >/dev/null 2>&1 ) || continue   # need a parent
+    local changes nfiles tests="" nsrc=0 st path short_child short_parent
+    changes="$(cd "$repo" && git diff-tree -r --no-commit-id --name-status "$sha" 2>/dev/null)"
+    [ -n "$changes" ] || continue
+    nfiles="$(printf '%s\n' "$changes" | grep -c .)"
+    [ "$nfiles" -le "$max_files" ] || continue
+    while IFS="$(printf '\t')" read -r st path; do
+      [ -n "$path" ] || continue
+      if _looks_like_test "$path"; then
+        case "$st" in A|M) tests="${tests:+$tests,}$path" ;; esac   # present at child
+      else
+        case "$st" in A|M|D) nsrc=$(( nsrc + 1 )) ;; esac
+      fi
+    done <<EOF
+$changes
+EOF
+    [ -n "$tests" ] && [ "$nsrc" -ge 1 ] || continue
+    short_child="$(cd "$repo" && git rev-parse --short "$sha")"
+    short_parent="$(cd "$repo" && git rev-parse --short "${sha}^")"
+    candidates+=("$short_child|$short_parent|$nsrc|$tests")
+  done < <(cd "$repo" && git log --no-merges --format=%H -n "$limit" "$range" 2>/dev/null)
+
+  local n_cand="${#candidates[@]}"
+  [ "$n_cand" -gt 0 ] || { err "no candidate commits (scanned $limit; want a fix touching tests + source in ≤ $max_files files). Try a larger --limit or --max-files."; return 1; }
+
+  if [ "$list_only" -eq 1 ]; then
+    printf 'Found %d candidate commit(s) (newest first):\n' "$n_cand"
+    local c child parent nsrc paths
+    for c in "${candidates[@]}"; do
+      IFS='|' read -r child parent nsrc paths <<<"$c"
+      printf '  %-10s (parent %-10s) %s impl file(s)  tests: %s\n' "$child" "$parent" "$nsrc" "$paths"
+    done
+    printf '\n--list: no suite runs, nothing written. Re-run without --list to validate and build.\n'
+    return 0
+  fi
+
+  # dep/artifact dirs that git worktrees don't carry — symlink them so the suite
+  # runs (both during validation and during the real experiment via worktree_include).
+  local include_list="" d
+  for d in node_modules .venv venv vendor target .bundle .yarn; do
+    [ -e "$repo/$d" ] && include_list="${include_list:+$include_list,}$d"
+  done
+
+  # ── validation gate ───────────────────────────────────────────
+  cat >&2 <<EOF
+
+Found $n_cand candidate commit(s). To keep only REAL tasks, mine runs your test
+suite once per candidate at the parent commit, keeping those where the re-applied
+tests FAIL (a fix genuinely exists). Local only — no tokens, no network.
+  verify:  $verify
+  stops after $max_tasks valid task(s); $([ -n "$include_list" ] && echo "symlinking: $include_list" || echo "no dep dirs to symlink")
+This can take a while on a large suite.
+EOF
+  if [ "$yes" -ne 1 ] && [ -t 0 ]; then
+    printf 'Proceed with validation? [y/N] ' >&2
+    local ans=""; IFS= read -r ans
+    case "$ans" in [yY]|[yY][eE][sS]) ;; *) err "aborted"; return 1 ;; esac
+  fi
+
+  # ── validate newest-first until max_tasks (soft cap on attempts) ──
+  local valid=() examined=0 cap=$(( max_tasks * 5 )); [ "$cap" -lt 10 ] && cap=10
+  local c child parent nsrc paths status
+  for c in "${candidates[@]}"; do
+    [ "${#valid[@]}" -ge "$max_tasks" ] && break
+    [ "$examined" -ge "$cap" ] && { echo "  (reached validation cap of $cap attempts; raise --max-tasks to keep more)" >&2; break; }
+    IFS='|' read -r child parent nsrc paths <<<"$c"
+    examined=$(( examined + 1 ))
+    printf '  [validate %d/%d] %s … ' "$examined" "$n_cand" "$child" >&2
+    status="$(_mine_validate "$repo" "$parent" "$child" "$verify" "$vtimeout" "$paths" "$include_list")"
+    case "$status" in
+      valid)  printf 'tests fail at parent → TASK\n' >&2; valid+=("$child|$parent|$paths") ;;
+      nofail) printf 'tests already pass → skip\n' >&2 ;;
+      *)      printf 'could not build/apply → skip\n' >&2 ;;
+    esac
+  done
+
+  local n_valid="${#valid[@]}"
+  if [ "$n_valid" -lt 1 ]; then
+    err "no valid tasks: no candidate's re-applied tests failed at its parent."
+    err "Common cause: the suite can't run in a bare worktree (needs deps/build/env)."
+    err "Try: --verify with a command that works standalone, or check that $include_list exists in the repo."
+    return 1
+  fi
+
+  # ── arms (default: a model swap; --from/--to or --arm override) ──
+  local arms=()
+  if [ "${#arm_in[@]}" -gt 0 ]; then
+    arms=("${arm_in[@]}")
+  elif [ -n "$from" ] || [ -n "$to" ]; then
+    arms=("A:${from}" "B:${to}")
+  else
+    arms=("A:claude-opus-4-8" "B:claude-sonnet-4-6")
+  fi
+  # Pull each arm's model (the bit between the first and second ':') for the
+  # description/hypothesis prose only — the spec writer re-parses arms itself.
+  local a_model b_model
+  a_model="${arms[0]#*:}"; a_model="${a_model%%:*}"
+  b_model=""; [ "${#arms[@]}" -ge 2 ] && { b_model="${arms[1]#*:}"; b_model="${b_model%%:*}"; }
+
+  # ── descriptions ──
+  local repo_name; repo_name="$(basename "$repo")"
+  [ -n "$desc" ] || desc="Model swap on $n_valid task(s) mined from $repo_name git history (tests-oracle)"
+  if [ -z "$hypothesis" ]; then
+    if [ -n "$b_model" ] && [ "$a_model" != "$b_model" ]; then
+      hypothesis="${b_model} matches ${a_model:-the control} on this repo's own historical fixes (tests-oracle), at lower cost."
+    else
+      hypothesis="$desc"
+    fi
+  fi
+
+  # ── write the experiment ──
+  local dir; dir="$(exp_dir "$id")"
+  mkdir -p "$dir/logs" "$dir/tasks"
+  local prompt_file="$dir/tasks/_oracle.md"
+  cat > "$prompt_file" <<EOF
+# Task: make the test suite pass
+
+This repository is at a known-good commit, except that a few tests are currently
+FAILING. Fix the implementation so the entire test suite passes.
+
+How to work:
+1. Run the suite to see what's failing:  $verify
+2. Edit the IMPLEMENTATION (not the tests) until every test passes.
+3. Re-run the suite to confirm.
+
+Hard rules:
+- Do NOT edit, add, delete, skip, or weaken any test files. Test files are
+  restored to their pinned version before grading — only implementation changes
+  count, so editing tests cannot make you pass.
+- Do NOT change the build or test configuration.
+
+You are done when \`$verify\` exits cleanly with all tests passing.
+EOF
+
+  local spec="$dir/spec"
+  {
+    printf '# header-experiment spec — MINED from git history (tests-oracle, design §11).\n'
+    printf '# Each [task] replays a real fix: check out its parent `commit`, re-apply the\n'
+    printf '# fixing commit'\''s test files (`apply_from`/`apply_paths`), and grade with the\n'
+    printf '# repo'\''s own suite (`verify`). Test files are restored (`lock_paths`) before\n'
+    printf '# grading, so "make the test pass" can'\''t be won by editing the test.\n'
+    printf '# Edit freely; `header-experiment validate %s` checks it.\n\n' "$id"
+    printf 'id: %s\n' "$id"
+    printf 'description: %s\n' "$desc"
+    printf 'hypothesis: %s\n' "$hypothesis"
+    printf 'repo: %s\n' "$repo"
+    printf 'commit: HEAD\n'
+    printf 'replicates: %s\n' "$reps"
+    printf 'non_inferiority_margin: %s\n' "$margin"
+    [ -n "$include_list" ] && printf 'worktree_include: %s\n' "$include_list"
+    printf '\n'
+    local arm label restp model ovd
+    for arm in "${arms[@]}"; do
+      label="${arm%%:*}"; restp="${arm#*:}"; [ "$restp" = "$arm" ] && restp=""
+      model="${restp%%:*}"; ovd=""
+      case "$restp" in *:*) ovd="${restp#*:}" ;; esac
+      printf '[arm:%s]\n' "$label"
+      printf 'model: %s\n' "$model"
+      printf 'overrides_dir: %s\n\n' "$ovd"
+    done
+    local v child parent paths
+    for v in "${valid[@]}"; do
+      IFS='|' read -r child parent paths <<<"$v"
+      printf '[task:t-%s]\n' "$child"
+      printf 'title: make tests pass (%s)\n' "$child"
+      printf 'commit: %s\n' "$parent"
+      printf 'apply_from: %s\n' "$child"
+      printf 'apply_paths: %s\n' "$paths"
+      printf 'lock_paths: %s\n' "$paths"
+      printf 'prompt: tasks/_oracle.md\n'
+      printf 'verify: %s\n' "$verify"
+      printf 'timeout_s: 1800\n\n'
+    done
+  } > "$spec"
+
+  _HE_INTERNAL_VALIDATE=1 cmd_validate "$id" >/dev/null 2>&1 \
+    || { err "internal: the generated spec failed validation ($spec) — please file a bug"; return 1; }
+
+  echo "Wrote $spec"
+  echo "  $n_valid task(s) mined from git history (examined $examined candidate(s))."
+  echo "  Oracle: your test suite — verify: $verify"
+  echo "  Arms:   $(printf '%s\n' "${arms[@]}" | awk -F: 'NF{printf "%s=%s ", $1, ($2==""?"(default)":$2)}')"
+  [ -n "$include_list" ] && echo "  worktree_include: $include_list  (dep dirs symlinked into each run)"
+  echo ""
+  echo "  Next:"
+  echo "    header-experiment run $id --aa     # noise-floor / flaky-test check FIRST"
+  echo "    header-experiment run $id          # the A/B"
+  echo "    header-experiment analyze $id && header-experiment report $id"
+  _autosync "$id"        # status: defined
+}
+
 # ── VALIDATE ──────────────────────────────────────────────────
 cmd_validate() {
   local id="${1:-}"; [ -n "$id" ] || { err "<id> required"; return 1; }
@@ -987,6 +1366,19 @@ cmd_validate() {
     [ -n "$verify" ] || { err "task $tid: verify is required (use 'true' for no-op)"; rc=1; }
     local prompt_abs; prompt_abs="$(resolve_task_path "$repo_abs" "$dir" "$prompt")"
     [ -f "$prompt_abs" ] || { err "task $tid: prompt file not found: $prompt_abs (checked $repo_abs and $dir)"; rc=1; }
+    # Tests-oracle tasks (from `mine`): apply_from needs apply_paths to act on, and
+    # lock_paths only makes sense alongside apply_from. Cheap structural checks —
+    # the miner already validated by running the suite, so we don't re-resolve refs.
+    local t_applyfrom t_applypaths t_lockpaths
+    t_applyfrom="$(spec_section_get "$spec" task "$tid" apply_from)"
+    t_applypaths="$(spec_section_get "$spec" task "$tid" apply_paths)"
+    t_lockpaths="$(spec_section_get "$spec" task "$tid" lock_paths)"
+    if [ -n "$t_applyfrom" ] && [ -z "$t_applypaths" ]; then
+      err "task $tid: apply_from set but apply_paths is empty (nothing to apply)"; rc=1
+    fi
+    if [ -n "$t_lockpaths" ] && [ -z "$t_applyfrom" ]; then
+      err "task $tid: lock_paths set but apply_from is empty (no source ref to lock from)"; rc=1
+    fi
   done
 
   # ── pre-flight warnings (informational; never change the exit code) ──
@@ -1082,6 +1474,14 @@ run_one() {
     cp -a "$overrides_dir"/. "$wt"/ 2>/dev/null || true
   fi
 
+  # Tests-oracle setup (git-history reversal tasks from `mine`): bring the FIXING
+  # commit's test files into the worktree on top of the parent state, so the new
+  # tests fail and the agent's job is to fix the implementation. Read via dynamic
+  # scope from cmd_run (per-task), mirroring $WORKTREE_INCLUDE.
+  if [ -n "${ORACLE_APPLY_FROM:-}" ] && [ -n "${ORACLE_APPLY_PATHS:-}" ]; then
+    _oracle_checkout "$wt" "$ORACLE_APPLY_FROM" "$ORACLE_APPLY_PATHS"
+  fi
+
   # Ephemeral-infra env: cmd_run's setup step writes KEY=VALUE lines to
   # <exp_dir>/.run-env; export them so the adapter AND the verifier both see the
   # provisioned connection info (e.g. an isolated DATABASE_URL pointing at a
@@ -1123,6 +1523,14 @@ run_one() {
     fi
   fi
   end="$(now_epoch)"; latency=$(( end - start ))
+
+  # Lock the oracle's test files: restore them to the pinned (fixing-commit)
+  # version right before grading, so any edit the agent made to the tests is
+  # reverted. This is the reward-hacking defense (design §11) — "make the test
+  # pass" cannot be won by weakening or deleting the test.
+  if [ -n "${ORACLE_APPLY_FROM:-}" ] && [ -n "${ORACLE_LOCK_PATHS:-}" ]; then
+    _oracle_checkout "$wt" "$ORACLE_APPLY_FROM" "$ORACLE_LOCK_PATHS"
+  fi
 
   # Verifier — Tier-1 oracle: exit 0 = pass. Run AFTER the agent so it can see
   # the agent's edits. Run in the worktree so the agent's CWD changes don't
@@ -1441,6 +1849,21 @@ EOF
         timeout_s="$(spec_section_get "$spec" task "$task" timeout_s)"
         [ -n "$timeout_s" ] || timeout_s="1200"
         local prompt_abs; prompt_abs="$(resolve_task_path "$repo" "$dir" "$prompt")"
+        # Per-task base commit: git-history-mined tasks each pin their fix's PARENT
+        # (falls back to the experiment-level commit). Resolve to a short sha.
+        local task_commit task_commit_resolved
+        task_commit="$(spec_section_get "$spec" task "$task" commit)"
+        [ -n "$task_commit" ] || task_commit="$commit"
+        task_commit_resolved="$task_commit"
+        if (cd "$repo" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1); then
+          task_commit_resolved="$(cd "$repo" && git rev-parse --short "$task_commit" 2>/dev/null || echo "$task_commit")"
+        fi
+        # Tests-oracle keys (apply the fixing commit's tests, lock them at grade
+        # time). Read here per task; run_one picks them up via dynamic scope.
+        local ORACLE_APPLY_FROM ORACLE_APPLY_PATHS ORACLE_LOCK_PATHS
+        ORACLE_APPLY_FROM="$(spec_section_get "$spec" task "$task" apply_from)"
+        ORACLE_APPLY_PATHS="$(spec_section_get "$spec" task "$task" apply_paths)"
+        ORACLE_LOCK_PATHS="$(spec_section_get "$spec" task "$task" lock_paths)"
         step=$(( step + 1 ))
         printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$step" "$n_runs" "$task" "$arm" "$r" >&2
         # run scope: isolate infra per (task,arm,rep) for write-heavy tasks
@@ -1448,7 +1871,7 @@ EOF
         if [ -n "$SETUP_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
           _run_setup "$SETUP_CMD" "$dir" "$repo" || { err "setup failed for run $step — aborting"; return 1; }
         fi
-        run_one "$dir" "$repo" "$commit_resolved" "$task" "$arm" "$r" \
+        run_one "$dir" "$repo" "$task_commit_resolved" "$task" "$arm" "$r" \
                 "$model" "$overrides_abs" "$prompt_abs" "$verify" "$timeout_s" \
                 "$adapter" >> "$out_file"
         if [ -n "$TEARDOWN_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
@@ -2368,6 +2791,9 @@ usage() {
   cat >&"$_fd" <<EOF
 Usage: header-experiment <command> ...
 
+  mine <id>       MINE git history → a runnable tests-oracle experiment (no task
+                    prompts or verify commands to author). --list to preview
+                    candidates; --from/--to to set the model-swap arms.
   new <id>        audit-aware scaffolder (RECOMMENDED — interactive or one-shot)
                     --kind prompt-debt-deletion --file F --lines L1,L2,...
                     --kind model-swap --from M --to N
@@ -2389,6 +2815,7 @@ EOF
 
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
+  mine)     cmd_mine     "$@" ;;
   new)      cmd_new      "$@" ;;
   define)   cmd_define   "$@" ;;
   validate) cmd_validate "$@" ;;

@@ -3,6 +3,62 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.16.0 — Git-history task mining + tests-oracle verifier (the keystone)
+
+The experiment engine was mature but hard to feed: `new`/`define` still required the
+user to hand-author each task **prompt** and name the **verify** command. That friction
+is what stopped "continuous." `mine` removes it (design §11): a real repo already ships
+its correctness oracle — its **test suite** — and its **git history** is a factory of
+(task, oracle) pairs. You don't author verifiers; you mine them.
+
+### `header-experiment mine <id>`
+
+- **Scans git history** (newest `--limit` commits) for fixes that touch **source + tests**
+  in ≤ `--max-files` files — the mineable shape (an implementation change and its test,
+  committed together).
+- **Validates each candidate by running the suite**: checks out the fix's **parent**,
+  re-applies only that commit's **test files**, runs the repo's own suite, and keeps the
+  candidate only if it **fails** (a real FAIL_TO_PASS exists — there's something to fix).
+  Local only: no tokens, no network. `--list` previews candidates with no runs.
+- **Writes a complete, runnable experiment** — default a **model-swap A/B** (`--from`/`--to`
+  or `--arm` to override; defaults Opus 4.8 vs Sonnet 4.6). This is the on-ramp for
+  "model-routing experiments at scale," the moat's first named learning: *is the cheaper
+  model good enough on this repo's own real fixes?* The generated task prompt is generic
+  ("make the suite pass; don't edit the tests") and the verify is the auto-detected suite —
+  **nothing to hand-author.**
+- Dep/artifact dirs (`node_modules`, `.venv`, …) are auto-symlinked into each worktree via
+  `worktree_include`, so the suite can actually run.
+
+### Tests-oracle in the runner
+
+- **New per-task spec keys**, set by `mine`, honored by the runner: `commit` (per-task base
+  = the fix's parent), `apply_from` (the fixing commit), `apply_paths` (its test files),
+  `lock_paths`. The runner now resolves a **per-task base commit** (falling back to the
+  experiment-level `commit`).
+- **Apply → agent → lock → verify.** `run_one` applies the fixing commit's tests onto the
+  parent *before* the agent (so the new tests fail), then **re-locks them right before
+  grading** — reverting any edit the agent made to the tests. That re-pin is the
+  reward-hacking defense (§11), enforced with no sandbox: "make the test pass" cannot be
+  won by weakening or deleting the test. Verified by tests (a cheating agent that guts the
+  test still fails).
+- `validate` accepts the new keys with light structural checks (`apply_from` needs
+  `apply_paths`; `lock_paths` needs `apply_from`). Existing specs and the `new`/`define`/
+  prompt-debt/model-swap flows are untouched.
+
+### Scope (stated honestly)
+
+MVP per §11: tests-oracle (Tier 1) only. mine's per-candidate check confirms the new tests
+*fail at the parent*; it leans on `run --aa` to surface flaky / baseline-broken tasks. The
+suite must run in a bare `git worktree` (deps auto-symlinked; pass `--verify` for anything
+needing a build/env). Deferred: LLM-judge (Tier 3), σ-based power analysis, cross-customer
+aggregate submit.
+
+`experiment.test.sh` grows 197 → 226 assertions: a real git-repo fixture with a FAIL_TO_PASS
+commit drives `mine` end-to-end (candidate discovery, test-only/source-only exclusion,
+spec shape, validate, the apply/lock/verify pipeline with noop/fix/cheat agents, arm
+overrides, `--max-files`, and error paths). Full suite green. ROADMAP + design doc §§10–12
+updated to mark the keystone shipped. VERSION → 0.16.0.
+
 ## 0.15.0 — Cost-aware audit + a wider harness surface
 
 The experiment engine was mature; the audit was thin — 8 phrase-greps, file sizes, and

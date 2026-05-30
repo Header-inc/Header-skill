@@ -9,6 +9,13 @@
 # HEADER_HOME is pinned to a sandbox so experiment state doesn't touch ~/.header.
 source "$(dirname "${BASH_SOURCE[0]}")/run.sh"
 
+# This suite builds throwaway git repos and exercises worktrees. When the suite
+# runs from a git pre-commit hook (.githooks/pre-commit), `git commit` exports
+# GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE pointing at the OUTER repo — which
+# would poison every `git` in our sandboxes. Clear them so the fixtures (and the
+# tool under test) bind to the sandbox repos, matching a normal invocation.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX 2>/dev/null || true
+
 HE="$SKILL_DIR/bin/header-experiment"
 sb="$(make_sandbox)"
 # NOSYNC: these tests exercise experiment logic, not cloud sync — keep auto-sync
@@ -1043,5 +1050,121 @@ EXP validate life-misplaced >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "#1 validate rejects setup/teardown placed below a [section] (silent no-op landmine)"
 assert_contains "$(EXP validate life-misplaced 2>&1)" "top block" \
   "#1 misplacement error explains keys must be in the top block"
+
+# ── MINE: git-history task mining + tests-oracle verifier (design §11) ─────────
+# Build a real repo whose history contains a FAIL_TO_PASS fix, using a pure-bash
+# oracle (no python/npm needed): impl.sh holds functions; tests/check.sh sources
+# it and asserts. The fixing commit adds sub() AND the test for it, so at the
+# PARENT (with the new test re-applied) the suite fails — exactly what mine looks
+# for.  VERIFY = `bash tests/check.sh`.
+mine_repo="$sb/mine-repo"; mkdir -p "$mine_repo/tests"
+(
+  cd "$mine_repo" && git init -q && git config user.email t@t.t && git config user.name t
+  printf 'add() { echo $(( $1 + $2 )); }\n' > impl.sh
+  printf '. ./impl.sh\n[ "$(add 1 2)" = 3 ] || exit 1\n' > tests/check.sh
+  git add -A && git commit -qm "init: add()"
+  # the fix: implementation + its test, together (the mineable shape)
+  printf 'add() { echo $(( $1 + $2 )); }\nsub() { echo $(( $1 - $2 )); }\n' > impl.sh
+  printf '. ./impl.sh\n[ "$(add 1 2)" = 3 ] || exit 1\n[ "$(sub 5 2)" = 3 ] || exit 1\n' > tests/check.sh
+  git add -A && git commit -qm "feat: add sub()"
+  git rev-parse --short HEAD > "$sb/.fix_sha"
+  # a test-only commit (no implementation) — must NOT be a candidate
+  printf '. ./impl.sh\n[ "$(add 1 2)" = 3 ] || exit 1\n[ "$(sub 5 2)" = 3 ] || exit 1\ntrue\n' > tests/check.sh
+  git add -A && git commit -qm "test: tidy"
+  # a source-only commit (no test) — must NOT be a candidate
+  printf 'add() { echo $(( $1 + $2 )); }\nsub() { echo $(( $1 - $2 )); }\nmul() { echo $(( $1 * $2 )); }\n' > impl.sh
+  git add -A && git commit -qm "feat: add mul() (untested)"
+)
+FIX_SHA="$(cat "$sb/.fix_sha")"
+VC="bash tests/check.sh"
+
+# ── mine --list: discovers the mixed fix commit, excludes test-only/src-only ──
+list_out="$(EXP mine ml --repo "$mine_repo" --verify "$VC" --list 2>/dev/null)"
+assert_contains "$list_out" "$FIX_SHA" "mine --list surfaces the source+tests fix commit"
+assert_contains "$list_out" "tests/check.sh" "mine --list names the commit's test file"
+assert_eq "no" "$([ -d "$(exp_dir_for ml)" ] && echo yes || echo no)" \
+  "mine --list writes nothing (no experiment dir created)"
+# exactly ONE candidate (the test-only and source-only commits are filtered out)
+n_cand="$(printf '%s\n' "$list_out" | grep -c 'parent ')"
+assert_eq "1" "$n_cand" "mine --list counts only the mixed commit (test-only + src-only excluded)"
+
+# ── mine (build): validates by running the suite, writes a runnable spec ──
+mine_out="$(EXP mine mg --repo "$mine_repo" --verify "$VC" --yes 2>&1)"
+assert_contains "$mine_out" "tests fail at parent" "mine validates the candidate by running the suite at the parent"
+mg_spec="$(exp_dir_for mg)/spec"
+assert_eq "yes" "$([ -f "$mg_spec" ] && echo yes || echo no)" "mine wrote a spec"
+mg_content="$(cat "$mg_spec")"
+assert_contains "$mg_content" "[task:t-$FIX_SHA]"     "spec task is keyed by the fix commit"
+assert_contains "$mg_content" "apply_from: $FIX_SHA"  "spec records the fixing commit as apply_from"
+assert_contains "$mg_content" "apply_paths: tests/check.sh" "spec records the test file to apply"
+assert_contains "$mg_content" "lock_paths: tests/check.sh"  "spec locks the test file at grade time"
+assert_contains "$mg_content" "verify: $VC"           "spec uses the repo's own suite as the oracle"
+assert_contains "$mg_content" "model: claude-opus-4-8"   "default arm A is a capable model"
+assert_contains "$mg_content" "model: claude-sonnet-4-6" "default arm B is the cheaper model"
+assert_eq "yes" "$([ -f "$(exp_dir_for mg)/tasks/_oracle.md" ] && echo yes || echo no)" \
+  "mine generates the shared task prompt"
+assert_contains "$mg_content" "commit: " "spec pins a per-task base commit (the fix's parent)"
+# the generated spec must pass validate
+EXP validate mg >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "the mined spec passes validate"
+
+# ── the apply→agent→lock→verify pipeline (the tests-oracle in action) ──
+# noop agent: changes nothing → the re-applied test fails (sub missing) → success false.
+cat > "$sb/m-noop.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '{"type":"result","model":"stub","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}\n'
+EOF
+# fix agent: writes the correct implementation → success true.
+cat > "$sb/m-fix.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'add() { echo $(( $1 + $2 )); }\nsub() { echo $(( $1 - $2 )); }\n' > impl.sh
+printf '{"type":"result","model":"stub","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}\n'
+EOF
+# cheat agent: guts the test to pass trivially → lock restores it → success false.
+cat > "$sb/m-cheat.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'true\n' > tests/check.sh
+printf '{"type":"result","model":"stub","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}\n'
+EOF
+chmod +x "$sb/m-noop.sh" "$sb/m-fix.sh" "$sb/m-cheat.sh"
+mg_runs="$(exp_dir_for mg)/runs.jsonl"
+
+EXP run mg --k 1 --adapter "$sb/m-noop.sh" >/dev/null 2>&1
+assert_contains "$(cat "$mg_runs")" '"success":false' "noop agent → applied test fails (apply step works)"
+assert_not_contains "$(cat "$mg_runs")" '"success":true' "noop agent never spuriously succeeds"
+
+EXP run mg --k 1 --adapter "$sb/m-fix.sh" >/dev/null 2>&1
+assert_contains "$(cat "$mg_runs")" '"success":true' "fix agent → suite passes (impl edits are graded)"
+
+EXP run mg --k 1 --adapter "$sb/m-cheat.sh" >/dev/null 2>&1
+assert_contains "$(cat "$mg_runs")" '"success":false' "cheat agent → lock restores the test → cannot game the oracle"
+assert_not_contains "$(cat "$mg_runs")" '"success":true' "lock defeats test-tampering (reward-hacking defense)"
+
+# ── arm overrides ──
+EXP mine ma --repo "$mine_repo" --verify "$VC" --from m-x --to m-y --yes >/dev/null 2>&1
+assert_contains "$(cat "$(exp_dir_for ma)/spec")" "model: m-x" "mine --from sets arm A model"
+assert_contains "$(cat "$(exp_dir_for ma)/spec")" "model: m-y" "mine --to sets arm B model"
+EXP mine mb --repo "$mine_repo" --verify "$VC" --arm "A:aa" --arm "B:bb" --yes >/dev/null 2>&1
+mb_content="$(cat "$(exp_dir_for mb)/spec")"
+assert_contains "$mb_content" "model: aa" "mine --arm overrides arm A"
+assert_contains "$mb_content" "model: bb" "mine --arm overrides arm B"
+
+# ── --max-files filters out broad commits (the fix touches 2 files) ──
+EXP mine mf --repo "$mine_repo" --verify "$VC" --max-files 1 --list >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "mine --max-files 1 excludes the 2-file fix → no candidates → exit 1"
+
+# ── error handling ──
+EXP mine mdup --repo "$mine_repo" --verify "$VC" --yes >/dev/null 2>&1
+EXP mine mdup --repo "$mine_repo" --verify "$VC" --yes >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "mine refuses to overwrite an existing experiment id"
+mkdir -p "$sb/not-git"
+EXP mine mng --repo "$sb/not-git" --verify "$VC" --list >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "mine errors on a non-git directory"
+nomanifest="$sb/nomani"; mkdir -p "$nomanifest"
+( cd "$nomanifest" && git init -q && git config user.email t@t.t && git config user.name t && \
+  echo x > a && mkdir tests && echo y > tests/t && git add -A && git commit -qm i )
+nm_err="$(EXP mine mnm2 --repo "$nomanifest" 2>&1)"
+assert_contains "$nm_err" "couldn't detect a test command" \
+  "mine without --verify and no manifest explains it needs a test command"
 
 t_done

@@ -34,10 +34,14 @@ opt-in client-side sync of experiment lineage to the user's account (the first s
   into `[Apply now]` / `[Apply with review]` / `[Experiment]` by the cost-vs-magnitude ratio. Both
   levers (magnitude AND experiment-cost) are first-class.
 
+**Shipped since (the keystone):**
+- **`mine` — git-history task mining + tests-oracle verifier** (§11) — ✅ **shipped (beta)**. Scans the
+  repo's history for fixes touching source + tests, validates each by re-applying the fix's tests at the
+  parent and running the suite (keep the FAIL_TO_PASS ones), and writes a runnable experiment — default
+  a model-swap A/B. The runner applies the tests before the agent and re-locks them before grading (the
+  reward-hacking defense). Removes the last hand-authoring friction: no task prompts, no verify commands.
+
 **What's specified but NOT yet built (in this order):**
-- **`mine` — git-history task mining** (§11) — the next runnable slice. Today the MVP requires the
-  user to author the prompt + name the verify command; with `mine`, FAIL_TO_PASS commits become task
-  specs automatically.
 - **σ-based power analysis** — use A/A's per-metric σ to size N for a chosen MDE. Today's
   `<5 paired tasks → "underpowered"` cutoff is a hand-picked heuristic, not power-driven (called
   out in §6.3 as the gap).
@@ -456,8 +460,9 @@ Engineering pragmatism and the thesis happen to agree. Each step is the next sen
    into a runnable spec in one call, and `bin/header-experiment merge` applies arm B's overrides to the
    repo after a B-wins verdict (gated, reviewable, refusing other verdicts unless `--force`). The deck's
    "merge wins back into the harness configuration" loop is closed for the prompt-debt deletion wedge.
-   **What's left on this step:** task mining (§11) so the user doesn't have to author the task prompt
-   themselves.
+   **Task mining (§11) shipped (beta) on top of this step** — `bin/header-experiment mine` turns the
+   repo's own FAIL_TO_PASS history into runnable tasks graded by the repo's suite, so the user no longer
+   authors task prompts or verify commands. See §11's "Verifier MVP" — built as specified.
 4. **Cross-customer proven-changes library** — the moat. Pull this *earlier* than pure eng-sequencing
    suggests, because aggregation is the defensibility vs Cursor/Kiro/model providers. Lead with the two
    learnings the deck names: **model migrations + dependency upgrades.**
@@ -641,8 +646,10 @@ ensemble). New task types add a verifier without touching the runner.
 the per-kind invocations in v0.11.1's `--kind prompt-debt-deletion` / `--kind model-swap` / generic flows),
 `define` (low-level placeholder), `validate`, `run` (with `--aa`), `analyze`, `report`, `merge` (applies arm
 B's overrides after a B-wins verdict, refuses others unless `--force`, prints a `git commit` suggestion with
-the `Header-Audit-Finding:` trailer when `ledger_key` is set in the spec). **`mine` is still spec-only** —
-the verifier MVP (§11) is the next runnable slice and unlocks "the user doesn't author task prompts."
+the `Header-Audit-Finding:` trailer when `ledger_key` is set in the spec). **`mine` shipped (beta) too** —
+the §11 verifier MVP: it mines FAIL_TO_PASS commits into runnable tasks graded by the repo's own suite
+(per-task base `commit` + `apply_from`/`apply_paths`/`lock_paths` keys; runner applies tests before the
+agent and re-locks them before grading), so the user no longer authors task prompts or verify commands.
 
 ---
 
