@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.14.1
+version: 0.15.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -262,14 +262,17 @@ From the JSON, pull `summary`, `key_developments`, `source_articles` (title + ur
 
 ### Step 3 — Run the audit
 
-Local, read-only — nothing leaves the machine. Run **both** scans. `<AUDIT>` is `header-audit`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
+Local, read-only — nothing leaves the machine. Run **all three** scans. `<AUDIT>` is `header-audit`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
 
 ```bash
-<AUDIT> harness          # CLAUDE.md / AGENTS.md / settings / commands / subagents / MCP / Bash posture
+<AUDIT> harness          # CLAUDE.md / AGENTS.md (+ @imports) / settings / hooks / skills / commands / subagents / MCP / Bash posture / model staleness / stale refs
 <AUDIT> deps             # ecosystems / tool versions / install-cooldown gate
+<AUDIT> cost             # spend-by-model from your real transcripts → top model-routing candidate
 ```
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `MODEL`, `HIT`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`); you'll join them with the briefing in the next step.
+**Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in `key_developments`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. Keep regexes conservative (`grep -iE`); malformed lines (not exactly three tab fields) are skipped. This is how the distribution wedge feeds new hypotheses into the deterministic scanner.
+
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `SPEND`, `ROUTE-CANDIDATE`); you'll join them with the briefing in the next step.
 
 ### Step 4 — Cross-reference and present
 
@@ -277,10 +280,13 @@ The audit's findings + the briefing's items become **one ranked recommendation l
 
 **Recent activity (diff-aware):** glance at recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`). Weight recommendations toward areas with recent activity — a briefing item or audit hit that touches code the user changed this week is more actionable than one about a dormant corner. Name the connection when you surface it.
 
+**Open with the money.** When `<AUDIT> cost` returned `SPEND` rows, *lead* the scorecard with where the tokens actually go — "this period you spent ~$X; N% of it on `<top model>`" — using the `SPEND-TOTAL` / `SPEND` lines (always surface `header-cost`'s price-source + freshness line and the billing-mode note; see "Cost analytics"). Then turn the `ROUTE-CANDIDATE` (the costliest model) into the headline **model-routing `[Experiment]`**: "route the low-stakes share of this spend to a cheaper tier — prove it before trusting the saving." This is the on-thesis hypothesis (model migration is the moat's first learning); it's a *candidate to prove*, never a projected saving — drive it with `header-experiment new --kind model-swap` (see "Experiments"). If `cost` returned only a `NOTE` (no usage history yet), skip the spend lead and say so in one line.
+
 Build the unified list by combining:
 
-- **Audit findings** — every `HIT` (prompt-debt pattern), `FILE` size signal (heavy always-loaded `CLAUDE.md`/`AGENTS.md`), `MODEL` mismatch, `SECURITY` posture, and `GATE absent` from `header-audit`.
-- **Briefing-derived recommendations** — items in the briefing's `key_developments` or `summary` that touch the project's stack/tooling (read package manifests, lockfiles, language version files, build/test/CI configs, container/infra definitions, agent/skill definitions, `CLAUDE.md`, README), or that name a pattern the project doesn't yet use (or uses a now-legacy version of). The bias is toward **deletion** and toward changes the briefing endorses on the model currently configured.
+- **Audit findings** — every `HIT` (prompt-debt pattern, built-in *or* briefing-supplied), `FILE` size signal (heavy always-loaded `CLAUDE.md`/`AGENTS.md` — **sum `FILE` + `IMPORT`ed files**, since @imports are loaded every turn too; `NESTED` files are on-demand, count them apart), `MODEL` mismatch / `MODEL-STALE` (pinned to a superseded tier → model-migration `[Experiment]`), `SECURITY` posture, `HOOK` (arbitrary shell on agent events — the biggest unguarded execution + supply-chain surface; treat an unexpected/opaque hook command as a security finding), `SKILL` (installed skills are a supply-chain surface — note any carrying `has-bin yes`, à la `/cso`), `STALE-REF` (a referenced path/script or @import that no longer exists), and `GATE absent` from `header-audit`.
+- **Consistency findings** — `STALE-REF` lines are the deterministic half: surface each as `[Apply with review]` (fix the reference or delete the dead instruction). The other half is yours to judge — while reading `CLAUDE.md`/`AGENTS.md`, flag **mutually contradictory instructions** the greps can't catch (e.g. "use tabs" *and* "use spaces" for the same files; "always delegate to a subagent" *and* "never spawn subagents"; a rule that names a flag/command the tool no longer has). High-signal, low-risk — usually `[Apply now]` / `[Apply with review]`.
+- **Briefing-derived recommendations** — items in the briefing's `key_developments` or `summary` that touch the project's stack/tooling (read package manifests, lockfiles, language version files, build/test/CI configs, container/infra definitions, agent/skill definitions, `CLAUDE.md`, README), or that name a pattern the project doesn't yet use (or uses a now-legacy version of). The bias is toward **deletion** and toward changes the briefing endorses on the model currently configured. For a `MODEL-STALE` hit, cross-reference the briefing for the *current* recommended tier — the bin flags that it's stale; the briefing names what to move to.
 - **Known issues** — themes from learnings/post-mortems/runbooks/architecture-decision-records/incident reports + a quick `TODO`/`FIXME`/`HACK` density scan. A recommendation that addresses a known issue jumps the queue.
 
 When a `MODEL` is known, cross-reference its model card / release notes before declaring a prompt-debt `HIT` actionable — confirm the pattern is *still* debt on that model. Prefer briefing sources for the cross-reference; fall back to the web.
@@ -517,9 +523,15 @@ Telemetry stays off until the user opts in here; they can change it any time wit
 
 The premise — *"prompts are technical debt too"*: harness instructions are written for a model and a moment, and they rot silently (workarounds for weaknesses newer models fixed, format-nagging, role puffery, all loaded every turn). Output lines (tab-separated):
 
-- `FILE <path> <bytes> <est_tokens>` — every harness file found (`CLAUDE.md`, `AGENTS.md`, settings, commands, subagents, MCP config). `est_tokens` is `bytes/4`. Sum the always-loaded ones — that cost is paid on **every turn**.
+- `FILE <path> <bytes> <est_tokens>` — every always-loaded harness file found (`CLAUDE.md`, `AGENTS.md`, settings, commands, subagents, MCP config, editor rules). `est_tokens` is `bytes/4`. Sum these — that cost is paid on **every turn**.
+- `IMPORT <parent> <imported-path>` — an `@import` edge. Claude Code (and AGENTS.md) load an `@path` line's target inline, every turn, so the auditor follows imports and emits the imported file as its own `FILE` row. **Include imported files in the always-loaded sum** — the previous scan undercounted by ignoring them.
+- `NESTED <path> <bytes> <est_tokens>` — a subdir `CLAUDE.md`/`AGENTS.md`. Loaded **on demand** when the agent works in that subtree, *not* every turn — so count it apart from the always-loaded total (it still rots; flag debt the same way).
 - `MODEL <value>` — the model declared in settings, if any.
-- `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern. Run `<AUDIT> patterns` to list the ids and why each is debt.
+- `MODEL-STALE <value> <why>` — the model id names a **superseded tier** (Claude 3.x/2.x/instant; early Opus 4.0/4.1). Pure hypothesis-generation: cross-reference the briefing for the current recommended tier and surface a model-migration `[Experiment]`. Conservative by design — current ids aren't flagged.
+- `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern (built-in or briefing-supplied). Run `<AUDIT> patterns` to list the ids and why each is debt.
+- `STALE-REF <path> <lineno> <ref> <why>` — the harness names a path/script or `@import`s a file that **doesn't exist** (moved, renamed, deleted). High-trust, low-risk: fix the reference or delete the dead instruction — usually `[Apply with review]`. (Deterministic and conservative — only path-shaped backtick tokens and unresolved imports; documentation placeholders like `path/to/x` are skipped.)
+- `HOOK <event> <command-excerpt> <file>` — a shell command wired to an agent event (`PreToolUse`, `Stop`, …) in Claude Code settings. The **biggest unguarded execution + supply-chain surface**, and one the Bash-posture check is blind to (a hook runs regardless of the Bash allow/deny list). Surface any unexpected or opaque hook command as a security finding; an attacker who can write settings owns the agent.
+- `SKILL <name> <path> <has-bin> <scope>` — an installed skill (`scope` = `repo` or `user`). Skills carry their own instructions and, when `has-bin yes`, executable scripts — a supply-chain surface (cf. `/cso`'s skill-supply-chain scan). Header is itself a skill, so this is dogfood-credible. Flag skills you don't recognize, especially user-scope ones with bin scripts.
 - `SECURITY bash <level> <file>` (+ `SECURITY-DETAIL allow|deny <pattern>`) — Bash-tool permission posture from Claude Code settings:
   - `bypass` → **no permission gating** (`defaultMode: bypassPermissions`). Highest risk; if the agent can reach any production asset, recommend a command allow-list.
   - `denylist` → blacklist, which is bypassable (an agent can script around a blocked command) — recommend an allow-list.
@@ -527,6 +539,8 @@ The premise — *"prompts are technical debt too"*: harness instructions are wri
   - **no `SECURITY` line** → no explicit policy (interactive prompts only). Fine for local dev; recommend an allow-list anywhere the agent reaches production.
 
 Curate the hits — don't surface them blindly. When `MODEL` is known, cross-reference its model card / release notes to confirm the pattern is **still** debt on that model.
+
+**Briefing-supplied patterns.** Beyond the built-ins, `header-audit` appends extra patterns from `${HEADER_HOME:-$HOME/.header}/patterns.tsv` (override with `HEADER_PATTERNS_FILE`): one `id<TAB>regex<TAB>why` line each, `#` comments and blanks ignored, lines that aren't exactly three tab fields skipped. Writing the briefing's named debt patterns there (Step 3) lets new hypotheses ship without a skill release; `<AUDIT> patterns` lists them and notes the source file.
 
 ### `header-audit deps`
 
@@ -547,6 +561,17 @@ Surface:
 
   `TOOL npm too-old` / `TOOL pip too-old` → the gate is **silently ignored** until the tool is bumped locally **and in CI**.
 - **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`). Security patches → `[Apply now]`. Minor / patch upgrades with clean changelogs → `[Apply with review]` (one sanity replicate if you're nervous). Major upgrades where behavior may shift → `[Experiment]`.
+
+### `header-audit cost`
+
+Makes the audit **cost-aware** — it opens with where the tokens actually go. Defers all pricing to the sibling `header-cost` (single source of truth for the price table, cache-write split, and legacy-Opus handling); this scan just locates usage and reshapes `header-cost report --json` into audit rows. By default it reads `$HOME/.claude/projects/*.jsonl` (your real Claude Code transcripts); `--input F` points at a usage JSONL instead, `--since T` scopes the window. Output lines:
+
+- `SPEND-TOTAL <usd> <calls> [<since>]` — total measured spend (API rates) over the window.
+- `SPEND <model> <calls> <usd> <share_pct>` — one per model, sorted by cost; `share_pct` is its slice of the total.
+- `ROUTE-CANDIDATE <model> <usd> <share_pct>` — the costliest model: the headline model-routing experiment candidate.
+- `NOTE cost <reason>` — no usage history yet, or `header-cost` not found. Degrade gracefully: skip the spend lead, mention it in one line.
+
+Surface the spend breakdown first (with `header-cost`'s price-source/freshness + billing-mode notes — see "Cost analytics"), then convert `ROUTE-CANDIDATE` into the model-routing `[Experiment]`. It's a **candidate to prove, never a projected saving**: re-rating the same tokens on a cheaper model is a guess; the honest number comes from `header-experiment` (model-swap). This is the audit's most on-thesis upgrade — it grounds the model-migration hypothesis (the moat's first learning) in the user's real money.
 
 ### Record findings
 
@@ -578,7 +603,7 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report
 find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report --since 2026-05-01
 ```
 
-**Where the spend is.** `report` ranks models by cost — surface the biggest line and name the obvious lever.
+**Where the spend is.** `report` ranks models by cost — surface the biggest line and name the obvious lever. The audit-led flow already does this automatically via `<AUDIT> cost` (see "`header-audit cost`"), which wraps this `report` over your transcripts and hands the top line back as a `ROUTE-CANDIDATE`; reach for `header-cost` directly for the full per-model table, `--json`, ad-hoc `cost` tuples, or `refresh`.
 
 **No projections — name the lever, don't guess the saving.** A price re-rating of the same tokens is a guess. `"<COST>" savings` exists only to point at the experiment loop — the user can drive it locally with `header-experiment` (see the next section), and `savings` prints the four-command recipe.
 

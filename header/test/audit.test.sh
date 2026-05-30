@@ -98,6 +98,124 @@ J
 assert_not_contains "$(HOME="$sb2" "$AU" harness --repo "$r")" $'SECURITY\tbash' \
   "settings with no Bash rules → no SECURITY line"
 
+# ── model staleness ───────────────────────────────────────────
+# the main sandbox pins sonnet-4-6 (current) → no MODEL-STALE line.
+assert_not_contains "$H" "MODEL-STALE" "a current model id is not flagged stale"
+sb_stale="$(make_sandbox)"; rstale="$sb_stale/r"; mkdir -p "$rstale/.claude"
+printf '{ "model": "claude-3-5-sonnet-20241022" }\n' > "$rstale/.claude/settings.json"
+printf '# x\n' > "$rstale/CLAUDE.md"
+Hstale="$(HOME="$sb_stale" "$AU" harness --repo "$rstale")"
+assert_contains "$Hstale" $'MODEL-STALE\tclaude-3-5-sonnet-20241022' \
+  "a Claude 3.x model id is flagged as a superseded tier"
+printf '{ "model": "claude-opus-4-1-20250805" }\n' > "$rstale/.claude/settings.json"
+assert_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" $'MODEL-STALE\tclaude-opus-4-1' \
+  "early Opus 4 (4.1) is flagged as superseded by Opus 4.5+"
+
+# ── @import following + stale references ──────────────────────
+sb_imp="$(make_sandbox)"; rimp="$sb_imp/r"; mkdir -p "$rimp/docs" "$rimp/scripts"
+printf 'x\n' > "$rimp/scripts/deploy.sh"          # exists → not stale
+printf 'imported guidance\n' > "$rimp/docs/extra.md"
+cat > "$rimp/CLAUDE.md" <<'MD'
+# Project
+See `scripts/deploy.sh` to deploy and `scripts/gone.sh` for cleanup.
+Conventions live at `path/to/placeholder.md` (a doc placeholder, ignore).
+@docs/extra.md
+@docs/missing.md
+MD
+Himp="$(HOME="$sb_imp" "$AU" harness --repo "$rimp")"
+assert_contains "$Himp" $'IMPORT\t'"$rimp/CLAUDE.md"$'\t'"$rimp/docs/extra.md" \
+  "a resolvable @import emits an IMPORT edge"
+assert_contains "$Himp" "FILE	$rimp/docs/extra.md" \
+  "an @imported file is scanned as an always-loaded FILE (counts toward the per-turn sum)"
+assert_contains "$Himp" $'STALE-REF\t'"$rimp/CLAUDE.md"$'\t5\t@docs/missing.md' \
+  "an unresolvable @import is a STALE-REF"
+assert_contains "$Himp" $'STALE-REF\t'"$rimp/CLAUDE.md"$'\t2\tscripts/gone.sh' \
+  "a backtick path that no longer exists is a STALE-REF"
+assert_not_contains "$Himp" "scripts/deploy.sh	referenced path not found" \
+  "a backtick path that still exists is not flagged"
+assert_not_contains "$Himp" "path/to/placeholder.md	referenced path not found" \
+  "a path/to/ documentation placeholder is not flagged"
+
+# ── nested CLAUDE.md (on-demand, reported apart from always-loaded) ──
+mkdir -p "$rimp/sub"; printf '# nested rules\n' > "$rimp/sub/CLAUDE.md"
+Hnest="$(HOME="$sb_imp" "$AU" harness --repo "$rimp")"
+assert_contains "$Hnest" "NESTED	$rimp/sub/CLAUDE.md" "a subdir CLAUDE.md is reported as NESTED"
+assert_not_contains "$Hnest" "NESTED	$rimp/CLAUDE.md" "the repo-root CLAUDE.md is not double-counted as NESTED"
+
+# ── hooks (arbitrary shell on agent events) ───────────────────
+sb_hk="$(make_sandbox)"; rhk="$sb_hk/r"; mkdir -p "$rhk/.claude"; printf '# x\n' > "$rhk/CLAUDE.md"
+cat > "$rhk/.claude/settings.json" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo guard" } ] } ],
+    "Stop": [ { "hooks": [ { "type": "command", "command": "notify-send done" } ] } ]
+  }
+}
+JSON
+Hhk="$(HOME="$sb_hk" "$AU" harness --repo "$rhk")"
+assert_contains "$Hhk" $'HOOK\tPreToolUse\techo guard' "a PreToolUse hook command is surfaced"
+assert_contains "$Hhk" $'HOOK\tStop\tnotify-send done' "a Stop hook command is surfaced"
+# a settings file with no hooks key yields no HOOK lines
+printf '{ "model": "claude-opus-4-8" }\n' > "$rhk/.claude/settings.json"
+assert_not_contains "$(HOME="$sb_hk" "$AU" harness --repo "$rhk")" $'HOOK\t' \
+  "settings with no hooks key → no HOOK line"
+# an mcpServers "command" sharing the file is NOT a hook (no "type":"command" anchor)
+cat > "$rhk/.claude/settings.json" <<'JSON'
+{
+  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "real-hook" } ] } ] },
+  "mcpServers": { "fs": { "command": "npx", "args": ["-y", "server"] } }
+}
+JSON
+Hmcp="$(HOME="$sb_hk" "$AU" harness --repo "$rhk")"
+assert_contains "$Hmcp" $'HOOK\tStop\treal-hook' "the real hook command is still surfaced"
+assert_not_contains "$Hmcp" "npx" "an mcpServers command is not misattributed as a hook"
+
+# ── installed skills (supply-chain + execution surface) ───────
+sb_sk="$(make_sandbox)"; rsk="$sb_sk/r"
+mkdir -p "$rsk/.claude/skills/withbin/bin" "$rsk/.claude/skills/nobin" "$sb_sk/.claude/skills/usertool/bin"
+printf '# x\n' > "$rsk/CLAUDE.md"
+printf '#!/bin/sh\n' > "$rsk/.claude/skills/withbin/bin/run"; chmod +x "$rsk/.claude/skills/withbin/bin/run"
+printf '# skill\n' > "$rsk/.claude/skills/nobin/SKILL.md"
+printf '#!/bin/sh\n' > "$sb_sk/.claude/skills/usertool/bin/x"
+Hsk="$(HOME="$sb_sk" "$AU" harness --repo "$rsk")"
+assert_contains "$Hsk" $'SKILL\twithbin\t'"$rsk/.claude/skills/withbin"$'\tyes\trepo' \
+  "a repo skill carrying bin scripts → SKILL has-bin yes, scope repo"
+assert_contains "$Hsk" $'SKILL\tnobin\t'"$rsk/.claude/skills/nobin"$'\tno\trepo' \
+  "a repo skill with no bin → SKILL has-bin no"
+assert_contains "$Hsk" $'SKILL\tusertool\t'"$sb_sk/.claude/skills/usertool"$'\tyes\tuser' \
+  "a user-scope skill is reported with scope user"
+
+# ── briefing-supplied debt patterns ───────────────────────────
+sb_bp="$(make_sandbox)"; rbp="$sb_bp/r"; hh="$sb_bp/.header"; mkdir -p "$rbp" "$hh"
+printf 'Please be very careful and double-check everything.\n' > "$rbp/CLAUDE.md"
+# well-formed extra pattern + one malformed (4 fields) that must be skipped
+printf 'over-caution\tbe very careful|double.?check everything\tBriefing-flagged over-caution.\n' > "$hh/patterns.tsv"
+printf 'bad\tregex\twhy\textra-field-should-skip\n' >> "$hh/patterns.tsv"
+Pbp="$(HEADER_HOME="$hh" HOME="$sb_bp" "$AU" patterns)"
+assert_contains "$Pbp" "over-caution" "patterns lists a briefing-supplied id"
+assert_not_contains "$Pbp" "bad " "a malformed (4-field) briefing pattern is skipped from the listing"
+Hbp="$(HEADER_HOME="$hh" HOME="$sb_bp" "$AU" harness --repo "$rbp")"
+assert_contains "$Hbp" $'\tover-caution\t' "a briefing-supplied pattern produces a HIT in the harness scan"
+
+# ── cost (cost-aware audit) ───────────────────────────────────
+sb_co="$(make_sandbox)"
+cat > "$sb_co/usage.jsonl" <<'JSONL'
+{"model":"claude-opus-4-8","input_tokens":200000,"output_tokens":80000,"ts":"2026-05-21T10:00:00Z"}
+{"model":"claude-opus-4-8","input_tokens":100000,"output_tokens":50000,"ts":"2026-05-20T10:00:00Z"}
+{"model":"claude-haiku-4-5","input_tokens":50000,"output_tokens":10000,"ts":"2026-05-22T10:00:00Z"}
+JSONL
+C="$(HOME="$sb_co" "$AU" cost --input "$sb_co/usage.jsonl")"
+assert_contains "$C" $'SPEND-TOTAL\t' "cost emits a SPEND-TOTAL line"
+assert_contains "$C" $'SPEND\tclaude-opus-4-8\t' "cost breaks spend down by model"
+assert_contains "$C" $'ROUTE-CANDIDATE\tclaude-opus-4-8\t' \
+  "cost names the top-spend model as the model-routing candidate"
+# the route candidate is the costliest model, not merely the first or last seen
+rc_model="$(printf '%s\n' "$C" | awk -F'\t' '$1=="ROUTE-CANDIDATE"{print $2}')"
+assert_eq "claude-opus-4-8" "$rc_model" "ROUTE-CANDIDATE is the costliest model"
+# a missing input file degrades to a NOTE, never an error row
+assert_contains "$(HOME="$sb_co" "$AU" cost --input "$sb_co/nope.jsonl")" $'NOTE\tcost\t' \
+  "cost with a missing input emits a NOTE, not a crash"
+
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "unknown subcommand → exit 1"

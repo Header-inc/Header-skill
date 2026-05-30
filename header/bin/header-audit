@@ -7,11 +7,19 @@
 #   header-audit harness [--repo DIR]
 #       Agent-harness / prompt-config debt. Locates CLAUDE.md, AGENTS.md, Claude
 #       Code settings/commands/agents, MCP config, etc.; reports each file's size
-#       and a rough token estimate; greps for known cargo-cult prompt patterns.
-#       Output lines (tab-separated):
-#         FILE  <path>  <bytes>  <est_tokens>
-#         MODEL <value>                         (from settings, if found)
-#         HIT   <path>  <lineno>  <pattern_id>  <excerpt>
+#       and a rough token estimate; greps for known cargo-cult prompt patterns;
+#       follows @imports; flags hooks, installed skills, model staleness, and
+#       stale references. Output lines (tab-separated):
+#         FILE       <path>  <bytes>  <est_tokens>      (always-loaded harness file)
+#         IMPORT     <parent>  <imported-path>          (@import edge; child is always-loaded)
+#         NESTED     <path>  <bytes>  <est_tokens>      (subdir CLAUDE.md/AGENTS.md; on-demand)
+#         MODEL      <value>                            (from settings, if found)
+#         MODEL-STALE <value>  <why>                    (model id is a superseded tier)
+#         HIT        <path>  <lineno>  <pattern_id>  <excerpt>
+#         STALE-REF  <path>  <lineno>  <ref>  <why>     (referenced path / @import not found)
+#         HOOK       <event>  <command-excerpt>  <file> (shell run on an agent event)
+#         SKILL      <name>  <path>  <has-bin>  <scope> (installed skill: supply-chain surface)
+#         SECURITY / SECURITY-DETAIL                    (Bash-tool permission posture)
 #
 #   header-audit deps [--repo DIR]
 #       Dependency / supply-chain posture. Detects ecosystems, tool versions, and
@@ -20,16 +28,29 @@
 #         TOOL      <name>  <version|->  <ok|too-old|absent>
 #         GATE      <name>  <present|absent>  <path|->
 #
-#   header-audit patterns          list the built-in prompt-debt patterns
+#   header-audit cost [--input F] [--since T]
+#       Cost-awareness. Wraps `header-cost report --json` over the default Claude
+#       Code transcripts ($HOME/.claude/projects/*.jsonl) or an explicit --input
+#       usage file, and reformats spend-by-model so the audit can open with where
+#       tokens actually go and turn the top line into a model-routing experiment:
+#         SPEND-TOTAL     <usd>  <calls>  [<since>]
+#         SPEND           <model>  <calls>  <usd>  <share_pct>
+#         ROUTE-CANDIDATE <model>  <usd>  <share_pct>   (top spend line)
+#         NOTE  cost  <reason>                          (no usage / tool missing)
+#
+#   header-audit patterns          list the built-in (+ briefing-supplied) patterns
 #   header-audit gate <npm|pip> [days]
 #                                  print the recommended supply-chain snippet
 #
-# Reads only (harness/deps never write). Nothing leaves the machine.
-# Env: HEADER_HOME (unused here), HOME (for user-global config). Token estimate
-# is bytes/4 — a rough proxy, not a tokenizer.
+# Reads only (harness/deps/cost never write). Nothing leaves the machine.
+# Env: HEADER_HOME (state dir, default $HOME/.header — used for the optional
+# briefing-supplied patterns file), HEADER_PATTERNS_FILE (override its path),
+# HOME (for user-global config). Token estimate is bytes/4 — a rough proxy.
 set -uo pipefail
 
 TAB="$(printf '\t')"
+HEADER_HOME="${HEADER_HOME:-$HOME/.header}"
+PATTERNS_FILE="${HEADER_PATTERNS_FILE:-$HEADER_HOME/patterns.tsv}"
 
 # ── built-in prompt-debt patterns ─────────────────────────────
 # id <TAB> extended-regex (grep -iE) <TAB> why-it's-debt
@@ -45,6 +66,18 @@ json-nag${TAB}respond only (in|with) json|output only json|must (respond|reply) 
 ai-language-model${TAB}as an ai language model${TAB}Stale phrasing copied from old completions; remove.
 think-first${TAB}before (you )?(answer|respond)[, ]+think|let.?s think${TAB}Redundant with native reasoning on current models.
 EOF
+  # Briefing-supplied patterns (optional). The audit flow writes new debt patterns
+  # the briefing names to PATTERNS_FILE so the hypothesis set updates without a
+  # skill release. Same TSV shape: id<TAB>regex<TAB>why. Skip comments/blanks and
+  # any line that isn't exactly three tab fields (a stray tab in `why` is rejected
+  # rather than silently mis-parsed).
+  if [ -f "$PATTERNS_FILE" ]; then
+    while IFS="$TAB" read -r id rx why extra; do
+      case "${id:-}" in ''|'#'*) continue ;; esac
+      [ -n "${rx:-}" ] && [ -n "${why:-}" ] && [ -z "${extra:-}" ] || continue
+      printf '%s\t%s\t%s\n' "$id" "$rx" "$why"
+    done < "$PATTERNS_FILE"
+  fi
 }
 
 # ── version compare: ver_ge HAVE WANT → "ge" | "lt" ───────────
@@ -81,6 +114,163 @@ scan_file() {
       printf 'HIT\t%s\t%s\t%s\t%s\n' "$f" "$ln" "$id" "$ex"
     done
   done
+}
+
+# ── @import resolution + stale-reference detection ────────────
+# Claude Code (and AGENTS.md) treat a line beginning `@path` as an inline import:
+# the referenced file's content is loaded *every turn*, just like the host file.
+# The audit must follow these so the always-loaded token sum isn't undercounted.
+SEEN_FILES=""
+_seen() { case " $SEEN_FILES " in *" $1 "*) return 0 ;; *) SEEN_FILES="$SEEN_FILES $1"; return 1 ;; esac; }
+
+_resolve_import() {
+  # _resolve_import <importing-file> <raw-path> → resolved path on stdout.
+  _bd="$(dirname "$1")"; _raw="$2"
+  case "$_raw" in
+    '~/'*) printf '%s\n' "$HOME/${_raw#\~/}" ;;
+    /*)    printf '%s\n' "$_raw" ;;
+    *)     printf '%s\n' "$_bd/$_raw" ;;
+  esac
+}
+
+# _stale_refs <file> — flag backtick-quoted tokens that look like in-repo paths
+# but resolve to nothing (a script/file the instructions still name after it was
+# moved or deleted). Conservative: only path-shaped tokens (a slash, no spaces,
+# not a URL / glob / placeholder / flag), checked against the repo root, the
+# file's own dir, and as an absolute path.
+_stale_refs() {
+  f="$1"; [ -f "$f" ] || return 0
+  _fd="$(dirname "$f")"
+  grep -noE '`[^`]+`' "$f" 2>/dev/null | while IFS=: read -r ln tok; do
+    t="${tok#\`}"; t="${t%\`}"
+    case "$t" in
+      *' '*|*'	'*) continue ;;                         # has whitespace → prose, not a path
+      http://*|https://*|*://*) continue ;;             # URL
+      *'*'*|*'?'*|*'<'*|*'>'*|*'{'*|*'}'*|*'$'*|*'|'*|*'('*) continue ;; # glob/placeholder/expr
+      *'path/to/'*|*'...'*|*'…'*) continue ;;            # documentation placeholder
+      -*|@*) continue ;;                                 # flag / handled-elsewhere import
+      */*) : ;;                                          # has a slash → path-shaped
+      *) continue ;;                                     # bare word → not treated as a ref
+    esac
+    t="${t%[.,:;]}"                                      # strip trailing sentence punctuation
+    [ -e "$REPO/$t" ] && continue
+    [ -e "$_fd/$t" ] && continue
+    [ -e "$t" ] && continue
+    printf 'STALE-REF\t%s\t%s\t%s\t%s\n' "$f" "$ln" "$(printf '%s' "$t" | cut -c1-60)" "referenced path not found"
+  done
+}
+
+# scan_tree <file> [depth] — scan_file + stale_refs, then follow @imports inline
+# (depth-guarded, cycle-guarded). Imported files are scanned as always-loaded
+# FILE rows so the token sum is whole; an @import that doesn't resolve is a
+# STALE-REF, which is usually a higher-signal finding than any pattern HIT.
+scan_tree() {
+  # Locals are essential: this recurses, and a global `f`/`ln` would be clobbered
+  # by the recursive call and then mis-attribute the next import's STALE-REF.
+  local f depth imports line ln rest raw res
+  f="$1"; depth="${2:-0}"
+  [ -f "$f" ] || return 0
+  _seen "$f" && return 0
+  scan_file "$f"
+  _stale_refs "$f"
+  [ "$depth" -ge 5 ] && return 0
+  imports="$(grep -nE '^[[:space:]]*@[^[:space:]]+' "$f" 2>/dev/null || true)"
+  [ -n "$imports" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ln="${line%%:*}"; rest="${line#*:}"
+    raw="$(printf '%s' "$rest" | sed 's/^[[:space:]]*@//; s/[[:space:]].*//')"
+    [ -n "$raw" ] || continue
+    res="$(_resolve_import "$f" "$raw")"
+    if [ -f "$res" ]; then
+      printf 'IMPORT\t%s\t%s\n' "$f" "$res"
+      scan_tree "$res" "$(( depth + 1 ))"
+    else
+      printf 'STALE-REF\t%s\t%s\t%s\t%s\n' "$f" "$ln" "@$raw" "@import target not found"
+    fi
+  done <<EOF
+$imports
+EOF
+}
+
+# _hooks <settings.json> — emit configured hook commands (best-effort; no JSON
+# parser, like _bash_security). HOOK lines surface arbitrary shell wired to agent
+# events — a bigger unguarded execution + supply-chain surface than the Bash
+# allow/deny list, and one the rest of the scan was blind to. event<TAB>command.
+_hooks() {
+  [ -f "$1" ] || return 0
+  awk '
+    { all = all $0 "\n" }
+    END {
+      if (all !~ /"hooks"[[:space:]]*:/) exit
+      n = split(all, L, "\n"); inh = 0; ev = "?"; armed = 0
+      for (i = 1; i <= n; i++) {
+        line = L[i]
+        if (line ~ /"hooks"[[:space:]]*:/) inh = 1
+        if (!inh) continue
+        if (match(line, /"(PreToolUse|PostToolUse|UserPromptSubmit|Notification|Stop|SubagentStop|PreCompact|SessionStart|SessionEnd)"[[:space:]]*:/)) {
+          ev = substr(line, RSTART, RLENGTH); gsub(/[":[:space:]]/, "", ev)
+        }
+        # Only the "command" of a {"type":"command", ...} entry is a hook command;
+        # this anchor excludes e.g. an mcpServers "command" key sharing the file.
+        if (line ~ /"type"[[:space:]]*:[[:space:]]*"command"/) armed = 1
+        if (armed && match(line, /"command"[[:space:]]*:[[:space:]]*"/)) {
+          rest = substr(line, RSTART + RLENGTH)
+          q = index(rest, "\""); cmd = (q > 0) ? substr(rest, 1, q - 1) : rest
+          gsub(/\t/, " ", cmd)
+          printf "%s\t%s\n", ev, substr(cmd, 1, 70)
+          armed = 0
+        }
+      }
+    }
+  ' "$1"
+}
+
+# _skills <skills-dir> <scope> — list installed skills. Each carries its own
+# instructions (loaded when invoked) and optional bin scripts (arbitrary code on
+# PATH-of-trust); an installed skill is a supply-chain surface the audit should
+# see, the more so because Header is itself a skill. name<TAB>path<TAB>has-bin<TAB>scope.
+_skills() {
+  d="$1"; scope="$2"
+  [ -d "$d" ] || return 0
+  for sk in "$d"/*/; do
+    [ -d "$sk" ] || continue
+    name="$(basename "$sk")"
+    hb=no
+    [ -d "${sk}bin" ] && ls "${sk}bin/"* >/dev/null 2>&1 && hb=yes
+    printf 'SKILL\t%s\t%s\t%s\t%s\n' "$name" "${sk%/}" "$hb" "$scope"
+  done
+}
+
+# _nested — subdir CLAUDE.md / AGENTS.md. Unlike the repo-root and @imported
+# files, these load on demand when the agent works in that subtree, so they're
+# reported apart (NESTED, not FILE) and excluded from the always-loaded sum.
+# Vendored / build trees are pruned; depth is bounded.
+_nested() {
+  find "$REPO" -maxdepth 6 \
+    \( -name node_modules -o -name .git -o -name vendor -o -name dist \
+       -o -name build -o -name .next -o -name target -o -name .venv \) -prune -o \
+    \( -name CLAUDE.md -o -name AGENTS.md \) -type f -print 2>/dev/null | while IFS= read -r f; do
+    case "$f" in "$REPO/CLAUDE.md"|"$REPO/AGENTS.md") continue ;; esac
+    b="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; [ -n "$b" ] || b=0
+    printf 'NESTED\t%s\t%s\t%s\n' "$f" "$b" "$(( b / 4 ))"
+  done
+}
+
+# _model_staleness <model-id> — flag a superseded tier. Conservative + matched on
+# the id alone (the briefing supplies the *current* target): Claude 3.x / 2.x /
+# instant, and early Opus 4 (4.0/4.1, superseded by Opus 4.5+). Current ids
+# (opus-4-5+, sonnet-4-x, haiku-4-5) are deliberately left unflagged.
+_model_staleness() {
+  lm="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  case "$lm" in
+    *claude-3*|*-3-opus*|*-3-sonnet*|*-3-haiku*|*opus-3*|*sonnet-3*|*haiku-3*)
+      printf 'MODEL-STALE\t%s\t%s\n' "$1" "Claude 3.x tier — superseded; check the briefing for the current model and weigh a model-swap experiment." ;;
+    *claude-2*|*claude-instant*)
+      printf 'MODEL-STALE\t%s\t%s\n' "$1" "Claude 2.x / instant — long superseded; migrate to a current tier." ;;
+    *opus-4-0*|*opus-4-1*)
+      printf 'MODEL-STALE\t%s\t%s\n' "$1" "Early Opus 4 (4.0/4.1) — superseded by Opus 4.5+; weigh a model-swap experiment." ;;
+  esac
 }
 
 # _bash_security <settings.json> — emit raw Bash-tool permission signals, one per
@@ -125,15 +315,19 @@ case "$sub" in
       [ -n "${id:-}" ] || continue
       printf '%-18s %s\n' "$id" "$why"
     done
+    [ -f "$PATTERNS_FILE" ] && printf '# (includes briefing-supplied patterns from %s)\n' "$PATTERNS_FILE"
     ;;
 
   harness)
-    # Model, if declared in Claude Code settings.
+    # Model, if declared in Claude Code settings — plus a staleness flag when the
+    # id names a superseded tier (model migrations are the moat's first learning).
+    m=""
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json"; do
       [ -f "$s" ] || continue
       m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
       [ -n "$m" ] && { printf 'MODEL\t%s\n' "$m"; break; }
     done
+    [ -n "$m" ] && _model_staleness "$m"
     # Bash tool security posture (whitelist > blacklist; blacklists are
     # bypassable — see the briefing). Classify each settings file's policy.
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
@@ -157,19 +351,37 @@ SIG
       [ "$_by" -eq 1 ] && lvl="bypass"
       printf 'SECURITY\tbash\t%s\t%s\n' "$lvl" "$s"
     done
-    # Fixed harness files.
+    # Always-loaded markdown harness files: scan, follow @imports inline, and flag
+    # stale references. @imported files are counted as always-loaded FILE rows so
+    # the per-turn token sum isn't undercounted.
+    for f in "$REPO/CLAUDE.md" "$REPO/AGENTS.md" "$HOME/.claude/CLAUDE.md"; do
+      scan_tree "$f" 0
+    done
+    # Other fixed harness files (settings, MCP, editor rules): size + pattern scan.
     for f in \
-      "$REPO/CLAUDE.md" "$REPO/AGENTS.md" \
       "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
       "$REPO/.mcp.json" "$REPO/.cursorrules" \
-      "$REPO/.github/copilot-instructions.md" \
-      "$HOME/.claude/CLAUDE.md"; do
+      "$REPO/.github/copilot-instructions.md"; do
       scan_file "$f"
     done
     # Globbed harness files (commands, subagents). Guard each — no nullglob in sh.
     for f in "$REPO"/.claude/commands/*.md "$REPO"/.claude/agents/*.md; do
       [ -f "$f" ] && scan_file "$f"
     done
+    # Hooks — arbitrary shell on agent events. A bigger unguarded execution +
+    # supply-chain surface than the Bash list, and previously unscanned.
+    for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
+             "$HOME/.claude/settings.json"; do
+      _hooks "$s" | while IFS="$TAB" read -r ev cmd; do
+        [ -n "${ev:-}" ] || continue
+        printf 'HOOK\t%s\t%s\t%s\n' "$ev" "$cmd" "$s"
+      done
+    done
+    # Installed skills (repo + user scope) — supply-chain + execution surface.
+    _skills "$REPO/.claude/skills" repo
+    _skills "$HOME/.claude/skills" user
+    # Nested CLAUDE.md / AGENTS.md (on-demand, not every turn) — reported apart.
+    _nested
     ;;
 
   deps)
@@ -216,6 +428,57 @@ SIG
     [ -n "$pipgate" ] && printf 'GATE\tpip\tpresent\t%s\n' "$pipgate" || printf 'GATE\tpip\tabsent\t-\n'
     ;;
 
+  cost)
+    # Cost-awareness: where the tokens actually go. Defers all pricing to the
+    # sibling header-cost (single source of truth for the price table + legacy/
+    # cache handling); this case only locates usage and reshapes report --json
+    # into SPEND / SPEND-TOTAL / ROUTE-CANDIDATE so the audit can lead with spend
+    # and turn the top line into a model-routing experiment candidate.
+    # Args arrive via args_rest (the top-level parser consumes $@); re-split like
+    # `gate` does — paths with spaces aren't supported (--input is for testing).
+    set -- $args_rest
+    SRC=""; SINCE=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --input) SRC="${2:-}"; shift 2 ;;
+        --since) SINCE="${2:-}"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    COST="$(dirname "$0")/header-cost"
+    [ -x "$COST" ] || COST="$(command -v header-cost 2>/dev/null || true)"
+    [ -n "$COST" ] || { printf 'NOTE\tcost\theader-cost not found alongside the audit — skipping spend analysis\n'; exit 0; }
+    if [ -n "$SRC" ]; then
+      [ -f "$SRC" ] || { printf 'NOTE\tcost\tinput file not found: %s\n' "$SRC"; exit 0; }
+      usage_json="$("$COST" report --input "$SRC" ${SINCE:+--since "$SINCE"} --json 2>/dev/null || true)"
+    else
+      tdir="$HOME/.claude/projects"
+      [ -d "$tdir" ] || { printf 'NOTE\tcost\tno usage history at %s — run some sessions first\n' "$tdir"; exit 0; }
+      usage_json="$(find "$tdir" -name '*.jsonl' -exec cat {} + 2>/dev/null | "$COST" report ${SINCE:+--since "$SINCE"} --json 2>/dev/null || true)"
+    fi
+    [ -n "$usage_json" ] || { printf 'NOTE\tcost\tno priced usage found\n'; exit 0; }
+    printf '%s' "$usage_json" | awk -v since="$SINCE" '
+      {
+        total = 0
+        if (match($0, /"total_usd":[0-9.eE+-]+/))  { s = substr($0, RSTART, RLENGTH); sub(/.*:/, "", s); total = s + 0 }
+        tcalls = 0
+        if (match($0, /"calls":[0-9]+/))           { s = substr($0, RSTART, RLENGTH); sub(/.*:/, "", s); tcalls = s + 0 }
+        printf "SPEND-TOTAL\t%.4f\t%d%s\n", total, tcalls, (since != "" ? ("\t" since) : "")
+        rest = $0; top_model = ""; top_cost = -1; top_share = 0
+        while (match(rest, /\{"model":"[^"]*"[^}]*\}/)) {
+          blk = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+          m = ""; if (match(blk, /"model":"[^"]*"/)) { m = substr(blk, RSTART, RLENGTH); sub(/"model":"/, "", m); sub(/"$/, "", m) }
+          c = 0;  if (match(blk, /"cost_usd":[0-9.eE+-]+/)) { s = substr(blk, RSTART, RLENGTH); sub(/.*:/, "", s); c = s + 0 }
+          cl = 0; if (match(blk, /"calls":[0-9]+/))         { s = substr(blk, RSTART, RLENGTH); sub(/.*:/, "", s); cl = s + 0 }
+          share = (total > 0) ? (c / total * 100) : 0
+          printf "SPEND\t%s\t%d\t%.4f\t%.1f\n", m, cl, c, share
+          if (c > top_cost) { top_cost = c; top_model = m; top_share = share }
+        }
+        if (top_model != "") printf "ROUTE-CANDIDATE\t%s\t%.4f\t%.1f\n", top_model, top_cost, top_share
+      }
+    '
+    ;;
+
   gate)
     eco="$(printf '%s' "$args_rest" | awk '{print $1}')"
     days="$(printf '%s' "$args_rest" | awk '{print $2}')"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
@@ -248,11 +511,11 @@ EOF
     ;;
 
   -h|--help)
-    echo "Usage: header-audit {harness|deps|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac

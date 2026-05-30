@@ -3,6 +3,59 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.15.0 — Cost-aware audit + a wider harness surface
+
+The experiment engine was mature; the audit was thin — 8 phrase-greps, file sizes, and
+a Bash-posture check over a fixed 8-file list. This release widens the funnel and makes
+it generate the on-thesis hypotheses (model migration, supply-chain) instead of only
+generic prompt-debt. Three things land, all in `bin/header-audit` + the SKILL.md flow.
+
+### Cost-aware audit — `header-audit cost`
+
+- **New `cost` subcommand** wraps `header-cost report --json` over your real Claude Code
+  transcripts (`$HOME/.claude/projects/*.jsonl`, or `--input F`; `--since T` to scope)
+  and reshapes it into audit rows: `SPEND-TOTAL`, `SPEND <model> <calls> <usd> <share>`,
+  and `ROUTE-CANDIDATE` (the costliest model). All pricing stays in `header-cost` — the
+  single source of truth for the table, cache-write split, and legacy-Opus handling.
+- The audit now **opens with where the tokens actually go** and turns the top spend line
+  into the headline **model-routing `[Experiment]`** — a candidate to *prove* with
+  `header-experiment`, never a projected saving. No usage yet → a `NOTE`, handled
+  gracefully. This is build-order step 1's "wire per-model spend into the audit so
+  routing candidates surface," finally wired.
+
+### Wider harness surface (past the 8 greps)
+
+- **Hooks** — `HOOK <event> <command> <file>` from `settings.json`'s `hooks` key. Arbitrary
+  shell on agent events: a bigger unguarded execution + supply-chain surface than the Bash
+  allow/deny list, and previously unscanned.
+- **Installed skills** — `SKILL <name> <path> <has-bin> <scope>` for `.claude/skills/`
+  (repo + user). Skills carry instructions and optional bin scripts — a supply-chain
+  surface (cf. `/cso`); Header is itself a skill, so this is dogfood-credible.
+- **`@import` following + nested files** — the auditor now follows `@path` imports inline
+  (`IMPORT` edges; imported files emitted as always-loaded `FILE` rows, so the per-turn
+  token sum is no longer undercounted) and reports subdir `CLAUDE.md`/`AGENTS.md` apart as
+  `NESTED` (on-demand, not every turn). Depth- and cycle-guarded; vendor/build trees pruned.
+- **Model staleness** — `MODEL-STALE <value> <why>` when the pinned model names a superseded
+  tier (Claude 3.x/2.x/instant, early Opus 4.0/4.1). Conservative — current ids aren't
+  flagged; the briefing supplies the current target. Pure model-migration hypothesis.
+
+### Two net-new finding types
+
+- **Stale references** — `STALE-REF <path> <lineno> <ref> <why>`: a harness file names a
+  path/script (backtick-quoted, path-shaped) or `@import`s a file that no longer exists.
+  Deterministic and conservative (doc placeholders like `path/to/x` skipped); high-trust
+  `[Apply with review]` material. SKILL.md also asks the agent to flag the semantic
+  contradictions greps can't catch (tabs-vs-spaces, delegate-vs-never, dead flags).
+- **Briefing-driven patterns** — `header-audit` now appends extra debt patterns from
+  `${HEADER_HOME:-$HOME/.header}/patterns.tsv` (`HEADER_PATTERNS_FILE` to override): one
+  `id<TAB>regex<TAB>why` line each, malformed lines skipped. The flow writes the briefing's
+  named patterns there before scanning, so new hypotheses ship without a skill release.
+  `header-audit patterns` lists them and notes the source.
+
+Docs (Step 3/4, "What the audit scans", Cost analytics) updated throughout; `audit.test.sh`
+grows from 24 to 49 assertions covering every new line type. No behavior change to `deps`,
+`gate`, or the existing `harness` outputs.
+
 ## 0.14.1 — Hypothesis front-and-center in the synced payload
 
 0.14.0 synced a `hypothesis` object that was *pointer metadata* — `ledger_key`, a
