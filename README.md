@@ -79,7 +79,7 @@ Invoke the skill:
 Every invocation:
 
 1. **Runs the audit** locally — `header-audit harness` (prompt-config debt, `CLAUDE.md`/`AGENTS.md` size, model declaration, cargo-cult patterns, Bash-tool permission posture) and `header-audit deps` (ecosystems, install-cooldown gate, supply-chain posture).
-2. **Fetches the latest briefing** for the resolved topic (arg > personal `REPO_TOPIC` > committed `TEAM_TOPIC` > default `Self Improving Agent`).
+2. **Fetches the latest briefing** for the resolved topic (arg > personal `REPO_TOPIC` > committed `TEAM_TOPIC` > the built-in public default). With no custom topic, the default fetches and **merges both public topics — `Self Improving Agent` + `Agentic Coding`**; setting `HEADER_DEFAULT_TOPIC` (or a binding) replaces them with your one topic.
 3. **Cross-references** the briefing's `key_developments` + `summary` against your actual stack (read from package manifests, `CLAUDE.md`, README, recent git activity).
 4. **Surfaces unified recommendations** — a scorecard plus a ranked list. Findings split into **apply-now** (deletions, the supply-chain gate, security patches — deterministic, low-risk) and **`[Experiment]`** _(beta)_ — changes whose payoff must be proven (model swaps, major upgrades, behavioral rewrites). For these, `header-experiment` (see below) runs a local A/B against your tasks; the skill itself doesn't auto-experiment yet.
 5. **Offers to implement** the apply-now items right there.
@@ -194,7 +194,7 @@ Configuration comes from four places, highest priority first: **environment vari
 |----------|-------------|
 | `HEADER_API_KEY` | Header API key (`hdr_sk_...`) for authenticated workflows. Only needed for custom topics and on-demand briefing generation. |
 | `HEADER_LANGUAGE` _(Beta)_ | Language for output rendering (e.g. `Turkish`, `Spanish`). Defaults to English. The agent translates the presentation; API content stays English. |
-| `HEADER_DEFAULT_TOPIC` | Topic UUID used when no argument, repo binding, or team topic applies. Defaults to the "Self Improving Agent" public topic. |
+| `HEADER_DEFAULT_TOPIC` | A single topic UUID used when no argument, repo binding, or team topic applies. Unset (the default): both public topics — "Self Improving Agent" + "Agentic Coding" — are fetched and merged. Setting it replaces the pair. |
 | `HEADER_STALENESS_DAYS` | Maximum briefing age (in days) before the audit flags the enrichment briefing as stale. Defaults to 7. |
 | `HEADER_HOME` | Override the state directory. Defaults to `~/.header`. |
 | `HEADER_NONINTERACTIVE` | Set to `1` for scheduled / unattended runs so onboarding prompts are suppressed (`CI=1` is treated the same way). |

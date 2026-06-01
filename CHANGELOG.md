@@ -3,6 +3,30 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.17.0 — Two public default topics, fetched and merged
+
+The built-in public default (the no-argument, no-key path everyone gets) now draws
+from **two** hardcoded topics instead of one:
+
+- `1991163f-…` — **Self Improving Agent** (unchanged)
+- `bf25c29e-…` — **Agentic Coding** (new)
+
+When nothing else resolves a topic (no `/header <arg>`, no personal `REPO_TOPIC`, no
+committed `TEAM_TOPIC`, no `HEADER_DEFAULT_TOPIC`), the flow fetches the **latest
+briefing from both** and **merges** them for enrichment: `key_developments` and
+`source_articles` are concatenated and de-duplicated (same headline / same source URL),
+items labeled by topic where origin matters, and staleness is checked per-briefing
+(warn if either is stale). `summary`/`sources` output modes show both, labeled.
+
+Precedence is unchanged otherwise: an explicit argument, a personal/team binding, or
+`HEADER_DEFAULT_TOPIC` still resolves a **single** topic that **replaces** the pair — a
+user's tuned topic isn't diluted. If only one of the two default topics 404s, the flow
+proceeds with the other.
+
+Docs only (SKILL.md Step 0–2 + env table + caching/fallback notes, README, the
+`header-config` default comment) — no binary behavior change; `header-config get
+default_topic` still returns empty so SKILL.md owns the fallback. VERSION → 0.17.0.
+
 ## 0.16.0 — Git-history task mining + tests-oracle verifier (the keystone)
 
 The experiment engine was mature but hard to feed: `new`/`define` still required the

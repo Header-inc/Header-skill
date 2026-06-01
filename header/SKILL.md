@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.16.0
+version: 0.17.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -213,7 +213,7 @@ Configuration resolves in this order, highest priority first: **environment vari
 |---|---|---|
 | `HEADER_API_KEY` | — | API key (`hdr_sk_...`) for authenticated workflows (custom topics, on-demand generation). |
 | `HEADER_LANGUAGE` _(Beta)_ | `English` | Language for output rendering. API content stays English; the agent translates the presentation. |
-| `HEADER_DEFAULT_TOPIC` | `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent) | Topic UUID used when no argument, repo binding, or team topic applies. |
+| `HEADER_DEFAULT_TOPIC` | *(unset → built-in pair)* | A single topic UUID used when no argument, repo binding, or team topic applies. **Unset (the default): both public topics are fetched & merged — `1991163f-…` Self Improving Agent + `bf25c29e-…` Agentic Coding.** Setting it (or `~/.header/config default_topic`) replaces the pair with your one topic. |
 | `HEADER_STALENESS_DAYS` | `7` | Maximum briefing age in days before the audit flags the enrichment briefing as stale. |
 | `HEADER_TEAM_DIR` | git toplevel, else `$PWD` | Directory whose `.header/config` is read as the team layer. Override mainly for testing. |
 
@@ -233,14 +233,18 @@ The topic determines which briefing is pulled in for enrichment. Fallback chain 
    - Anything else → search `/api/v2/topics/public/catalog` for a case-insensitive substring match on `name`. One match → use its `id`; multiple → ask to disambiguate; none → fall through.
 2. **Personal binding for this repo** — if `REPO_TOPIC` is non-empty **and** `HAS_KEY: yes`, use it (it wins over `TEAM_TOPIC`). Bound topics are private — use the authenticated endpoints, and run the session-start freshness check (see "Bound repos — freshness & schedule"). If `REPO_TOPIC` is set but no key is available, skip and fall through. A `404` means the topic was deleted server-side — offer `header-repo clear` and fall through.
 3. **Team topic for this repo** — if `TEAM_TOPIC` is non-empty **and** `HAS_KEY: yes`, use it via the authenticated endpoints (same freshness check). Without a key, tell the user this repo pins a team topic that needs an API key (offer to sign up), then fall through. On `404` tell the user to fix `.header/config` (never auto-edit a committed file) and fall through.
-4. **Resolved default topic** — `DEFAULT_TOPIC` if non-empty.
-5. **Hardcoded default** → `1991163f-be9c-4df2-a33c-046a4d1357e1` (Self Improving Agent).
+4. **Resolved default topic** — `DEFAULT_TOPIC` if non-empty. This is an explicit override (env `HEADER_DEFAULT_TOPIC` or `~/.header/config`): a **single** topic that **replaces** the built-in pair below.
+5. **Built-in public default — BOTH hardcoded topics (no auth).** When nothing above resolves, always enrich from **both** public topics:
+   - `1991163f-be9c-4df2-a33c-046a4d1357e1` — **Self Improving Agent**
+   - `bf25c29e-de97-46f2-9c46-47e4e9d75e40` — **Agentic Coding**
+
+   Run Steps 1–2 for **each** id, then **merge** the two briefings for enrichment (see "Merging the default briefings" under Step 2). This is the default for every no-argument, no-key run. (A single topic resolved in 1–4 is unchanged: one briefing, no merge.)
 
 **Claude Code only:** the explicit argument is delivered as `$ARGUMENTS` when invoked via `/header <topic>`. Other harnesses: extract the topic identifier from the user's message text.
 
 ### Step 1 — Get the latest briefing ID
 
-*Skip if Step 0 resolved a briefing ID directly.*
+*Skip if Step 0 resolved a briefing ID directly.* When Step 0 resolved the **built-in two-topic default**, run Steps 1–2 **once per topic id** and keep both `latest_briefing.id`s.
 
 ```bash
 curl -sS --retry 1 -w "\n%{http_code}" \
@@ -259,6 +263,8 @@ curl -sS --retry 1 -w "\n%{http_code}" \
 From the JSON, pull `summary`, `key_developments`, `source_articles` (title + url), and `generated_at`. `key_developments` is a JSON-encoded string — parse it into a structured list.
 
 **Staleness:** compare `generated_at` to today. If older than `${HEADER_STALENESS_DAYS:-7}` days, prepend a one-line warning to the audit output. With an API key, suggest re-triggering generation via `POST /api/v2/goals/{goal_id}/briefings`.
+
+**Merging the default briefings (two-topic default only).** When you fetched both public topics, pull `summary` / `key_developments` / `source_articles` / `generated_at` from each, then combine: concatenate `key_developments` and `source_articles` across both briefings and **de-duplicate** near-identical items (same headline, or same source URL), keeping one. When the origin matters, label a surfaced item with its topic (*Self Improving Agent* / *Agentic Coding*). Apply the staleness check **per briefing** — warn if **either** is older than `${HEADER_STALENESS_DAYS:-7}` days, naming which. For the `summary` / `sources` output modes on the two-topic default, show **both** (each labeled by topic). A single resolved topic (Steps 1–4) is unchanged: one briefing, no merge.
 
 ### Step 3 — Run the audit
 
@@ -332,7 +338,7 @@ Use the same `<ledger-key>` you logged to the recommendation ledger (e.g. `mcp-s
 
 **Output language:** render all user-facing output in `${HEADER_LANGUAGE:-English}`. Translate prose, headings, rationale; keep proper nouns, code identifiers, and URLs verbatim. API content stays English on the wire.
 
-**Caching within a session:** hold the `briefing_id` + `generated_at` + the audit output in conversation context. On re-invocation in the same session, reuse it unless the user says "refresh", "latest", "new", or "re-audit".
+**Caching within a session:** hold the `briefing_id`(s) + `generated_at`(s) + the audit output in conversation context (the two-topic default caches both). On re-invocation in the same session, reuse it unless the user says "refresh", "latest", "new", or "re-audit".
 
 ### Recommendation ledger
 
@@ -372,7 +378,7 @@ Records nothing unless the user opted into telemetry; only sends usage metadata 
 
 ### Fallback
 
-If the default topic returns 404, browse the public catalog and pick a relevant topic:
+On the built-in two-topic default, if **one** topic 404s, proceed with the other (note the miss in one line). If **both** default topics 404 — or a single resolved default topic does — browse the public catalog and pick a relevant topic:
 
 ```bash
 curl -sS -w "\n%{http_code}" https://joinheader.com/api/v2/topics/public/catalog

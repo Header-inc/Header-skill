@@ -65,7 +65,7 @@ TEAM_HEADER='# Header TEAM config — committed to the repo so everyone here sha
 # this when a key is absent from the config file.
 lookup_default() {
   case "$1" in
-    default_topic)           echo "" ;;        # empty → SKILL.md falls back to its hardcoded UUID
+    default_topic)           echo "" ;;        # empty → SKILL.md falls back to its built-in public topic pair
     language)                echo "English" ;;
     staleness_days)          echo "7" ;;
     schedule_frequency_days) echo "" ;;        # team-only; no personal default
