@@ -3,7 +3,7 @@ Engine-adoption snapshot — Claude Opus 4.8. Bundled, grounded card content for
 `/header opus-4.8`. Source of truth: System Card: Claude Opus 4.8 (May 28 2026).
 This is a curated, versioned snapshot (refreshed per skill release), NOT a live
 fetch. The agent renders it PERSONALIZED by the user's detected engine + spend,
-and labels it a projection — the verdict is earned by `header-experiment adopt`.
+and labels it a projection — the verdict is earned by `header-experiment mine --adopt`.
 Keep every claim attributable to the System Card §s noted inline.
 -->
 
@@ -18,7 +18,7 @@ Keep every claim attributable to the System Card §s noted inline.
 **Switch for coding — but tune effort, don't just flip the model.** The decision is
 not "is it worth more money" (same price); it's "does it behave better on *your*
 work *at the effort you actually run*." Lead the user to **prove it on their repo**
-(`header-experiment adopt`), not to take this card's word for it.
+(`header-experiment mine --adopt`), not to take this card's word for it.
 
 ## Verdict by the engine you run today
 
@@ -71,9 +71,9 @@ This card is a **projection** from the System Card + your spend. The verdict for
 is earned on *your* tasks:
 
 ```
-header-experiment adopt            # A = your current engine, B = opus-4-8 @high
-                                   #   mines this repo's history, runs a model+effort A/B
-header-experiment adopt --effort xhigh   # then test the higher-effort arm too
+header-experiment mine --adopt          # A = your current engine, B = opus-4-8 @high
+                                        #   mines this repo's history, runs a model+effort A/B
+header-experiment mine --adopt --sweep  # + offer a 3rd arm at xhigh (the effort frontier)
 ```
 
 The proof needs a git repo (it mines your real fixes). Outside a repo, this card is the answer

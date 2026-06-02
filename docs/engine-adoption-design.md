@@ -20,9 +20,9 @@ The forks resolved in design discussion (do not relitigate during build):
    engine on generic code, not the user's, and reads as a mini-benchmark).
 2. **Proof arm — model + effort**, not model-only. The control is the user's *actual* current
    engine (model + effort); the treatment is Opus 4.8 at a chosen effort (default `high`).
-   **Shipped 2-arm per run** — the analyzer is pairwise (`A=Arms[1]; B=Arms[2]`), and an N-arm
-   "effort frontier" analyzer is the riskiest code in the repo, so testing a second effort
-   (`xhigh`) is a second A/B against the same control, not a third arm (see §5, §8 fast-follows).
+   **Shipped 2-arm by default, with `--sweep` offering a 3rd arm** (the effort frontier) —
+   interactive y/N on a TTY. The analyzer stays pairwise (`A=Arms[1]; B=Arms[2]`); `--vs ARM`
+   compares the control against any arm into a side `result-vs-<ARM>.json` (see §5).
 3. **Repo line — the card is repo-independent; the verdict is earned on a repo.** "Independent of
    git repo" applies to the *card* (an explicitly-labeled projection, personalized from
    installation-level signals), not to the proof. See §1.
@@ -57,7 +57,7 @@ slice. The feature serves the highest rung available:
 | --- | --- | --- | --- | --- |
 | **1 · Card** | grounded verdict from the System Card snapshot + the user's own engine/spend | population-level evidence; *a labeled projection* | no | §3, §4 |
 | 2 · Bundled pack | *(considered, dropped)* | engine as a controlled proxy | no | — |
-| **3 · Repo-mined** | `header-experiment adopt` → engine-swap A/B (model+effort) on the user's FAIL_TO_PASS history | engine **and** fit on the user's distribution | yes | §5 |
+| **3 · Repo-mined** | `header-experiment mine --adopt` → engine-swap A/B (model+effort) on the user's FAIL_TO_PASS history | engine **and** fit on the user's distribution | yes | §5 |
 
 The card is a projection and is labeled as one; the *verdict* is still earned on a repo. That keeps
 the "prove it, don't project it" thesis intact while still giving the user something that runs
@@ -73,7 +73,7 @@ dashboard) is a separate system and is **untouched** by the launch:
   next model ships). No live briefing required.
 - **Personalization** reads installation-level signals already available locally: current model +
   effort from settings, realized spend from `header-cost` over `~/.claude` transcripts.
-- **Per-arm effort / engine-swap / `adopt` / merge / `MODEL-UPGRADE`** are bin + SKILL.md changes.
+- **Per-arm effort / engine-swap / `mine --adopt` / merge / `MODEL-UPGRADE`** are bin + SKILL.md changes.
 - **Experiment sync** rides the existing endpoint unchanged. Per `docs/experiments-sync-api.md`:
   *"Nothing executes server-side… store it, show it,"* and the `kind` field *"may carry other
   values if a future client sets a precise kind — treat as a label."* Emitting `kind:"engine-swap"`
@@ -193,7 +193,7 @@ WATCH    toy-eval honesty ≠ long unattended runs (card says so) ·
          grader-speculation trend · Terminal-Bench: GPT-5.5 ahead ·
          proxies may still serve you 4.7
 
-NEXT  ▸ prove it on your code →  cd <repo> && header-experiment adopt
+NEXT  ▸ prove it on your code →  cd <repo> && header-experiment mine --adopt
 ```
 
 ## 5. Rung 3 — the engine-swap experiment
@@ -218,42 +218,45 @@ arm a pure engine swap rather than tripping the overrides → `harness-change` c
 
 Arm A ("current") **must not be ambient**. Effort precedence means an unpinned control inherits
 whatever floats in the environment. Detect the user's actual effort (`CLAUDE_CODE_EFFORT_LEVEL` →
-`effortLevel` setting → model default) and pass it explicitly as arm A's `effort`, so the control is
-reproducible and the verdict reads against the engine the user *actually* runs (usually
-`4.7 @xhigh`, **not** `@max`).
+`effortLevel` setting → model default) and **model** (`ANTHROPIC_MODEL` → settings `model` → the
+most recent primary model in `~/.claude/projects` transcripts — *what actually ran*, the key fix for
+"why can't we detect it"), and pass both explicitly as arm A, so the control is reproducible and the
+verdict reads against the engine the user *actually* runs (usually `4.7 @xhigh`, **not** `@max`).
 
 ### 5.3 New `engine-swap` kind
 
-`detect_kind` (`header-experiment` ~:2485) currently keys on distinct model count (≥2 →
+`infer_kind` (`header-experiment` ~:2485) currently keys on distinct model count (≥2 →
 `model-swap`). Two arms sharing a model but differing on effort (`4.8 @high` vs `4.8 @xhigh`) would
 slip to `generic`. Add **`engine-swap`** = arms differ on model **and/or** effort. Thread `effort`
 into the sync arm objects and the `report` scorecard (show the effort dimension).
 
-### 5.4 `merge` — engine-aware advisory
+### 5.4 `merge` — offers to apply (the user's final call)
 
-Today a `model-swap` merge is advisory (`~:2346`, "update your default — header-config doesn't
-manage model"). For `engine-swap` it **stays advisory** (shipped): hand-editing a user's real
-`settings.json` JSON in bash (no `jq` dependency) is fragile, and a bad rewrite is worse than a
-copy. The advice became engine-aware — it prints the exact `model` + `effortLevel` to set, with the
-`/effort max` / `CLAUDE_CODE_EFFORT_LEVEL` caveat when the win is on `max` (which settings can't
-persist). Auto-writing `settings.json` is a deferred fast-follow if demand warrants it.
+Today a `model-swap` merge is advisory (`~:2346`). For an `engine-swap` win, `merge` now **offers
+to apply** it: it prints the exact `model` + `effortLevel`, then shows a **diff** of the proposed
+`.claude/settings.json` and **asks y/N** (`--yes` confirms) before writing — the user's final call,
+never a blind edit. Persistable levels only; `max` stays advisory (settings can't hold it). No `jq`:
+a text-level key setter (`_json_set_str` — replace-or-insert top-level string keys), with the
+diff+confirm as the safety net for any edge the text edit doesn't handle.
 
-### 5.5 The `adopt` scaffolder
+### 5.5 The `mine --adopt` scaffolder
 
-`header-experiment adopt` (thin wrapper over `mine` + `--kind engine-swap`; the engine-adoption
-card's CTA) pre-fills:
+`header-experiment mine --adopt` (the engine-adoption card's CTA — **a flag on `mine`, not a new
+verb**, so there's one fewer command to learn) pre-fills:
 
 - **Arm A** = detected current model @ detected current effort (the pinned control, §5.2)
-- **Arm B** = `claude-opus-4-8` @ `high` (`--to` / `--effort` override; `--from` / `--from-effort`
-  override the control)
+- **Arm B** = `claude-opus-4-8` @ `high` (`--to` / `--effort` override; `--from[@effort]` /
+  `--from-effort` override the control)
+- **Arm C** *(optional)* = target @ the next effort up, when `--sweep` (interactive y/N on a TTY)
 - **Tasks** = `mine`d from the repo's FAIL_TO_PASS history (the keystone), tests-oracle verify
 - **Hypothesis** = "`<target>` @`<effort>` matches your current `<from>`@`<from-effort>` on this
   repo's own historical fixes (tests-oracle), at equal-or-lower cost."
 
-**2-arm**, because the analyzer is pairwise. Testing a second effort is a second run
-(`adopt --effort xhigh`); an N-arm effort-frontier analyzer is a fast-follow (§8). When the current
-engine is undetectable, `adopt` assumes `claude-opus-4-7` and **says so** (a wrong control
-invalidates the A/B) — `--from` overrides. Generalize: `adopt --to <model>` for future releases.
+**2-arm by default; `--sweep` offers the 3rd arm.** The analyzer is pairwise, so `analyze`/`report`
+`--vs C` compares the control against arm C (a side `result-vs-C.json`; the canonical `result.json`
+stays A-vs-B). Effort is `@`-encoded per arm in the spec writer (`model@effort` → `model:`/`effort:`
+lines). When the current engine is undetectable, it assumes `claude-opus-4-7` and **says so**
+(`--from` overrides). Generalize: `mine --adopt --to <model>` for future releases.
 
 ### 5.6 Optional — `ultracode` arm (fast-follow)
 
@@ -267,7 +270,7 @@ default.
 Add a `header-audit` line **`MODEL-UPGRADE <current> <recommended>`** — an *opportunity*, distinct
 from `MODEL-STALE` *debt* (4.7 → 4.8 isn't stale). Fires when the snapshot/briefing names a newer
 recommended engine than the detected model. Carries the `[Experiment]` disposition and links to
-the card + `header-experiment adopt`, so it reaches users two ways: explicit `/header opus-4.8`, and
+the card + `header-experiment mine --adopt`, so it reaches users two ways: explicit `/header opus-4.8`, and
 inside any normal audit. Shipped conservative like `MODEL-STALE` — fires only for a recognized Opus
 tier below the current flagship (4.5/4.6/4.7), naming `claude-opus-4-8`; never on 4.8 or a stale tier.
 
@@ -284,17 +287,19 @@ backs the card.
 **v0.18.0 (the launch cut, all client-side) — shipped:**
 1. Bundled snapshot `header/data/engine-adoption/opus-4.8.md` (§3, §4.2).
 2. Card render mode + `/header opus-4.8` routing + personalized verdict (§4).
-3. `engine-swap`: arm `effort` + `--effort` plumbing + control-pinning + report + sync arm field
-   (§5.1–5.3). The spec carries `kind: engine-swap`; `infer_kind` already honors an explicit kind.
-4. `merge` engine-aware advisory (§5.4).
-5. `adopt` scaffolder + `mine --effort-a/--effort-b/--kind` (§5.5).
+3. `engine-swap`: arm `effort` (`@`-encoded) + `--effort` plumbing + control-pinning + report +
+   sync arm field (§5.1–5.3). The spec carries `kind: engine-swap`; `infer_kind` honors it.
+4. `merge` **offers to apply** the engine win to `settings.json` (diff + y/N; §5.4).
+5. `mine --adopt` scaffolder (no new verb) + `--sweep` offer + `analyze`/`report`/`merge --vs ARM`
+   for the 3rd arm + transcript-based engine detection (§5.5, §5.2).
 6. `MODEL-UPGRADE` audit line (§6).
 
-**Fast-follows (don't block launch):** **N-arm effort-frontier analyzer** — turns the 2-arm proof
-into a true sweep (A vs each effort in one run), the riskiest stat change so deferred out of the
-launch; `ultracode` arm (§5.6); auto-write `settings.json` on merge (§5.4); live adoption briefing +
-dashboard effort column (§2, backend); wire to the schedule integration already on the
-[experiments roadmap](../ROADMAP.md) ("new Opus dropped → queue a migration experiment").
+**Fast-follows (don't block launch):** **combined effort-frontier report** — `--vs` already gives
+the pairwise A-vs-C comparison; a single report that shows A-vs-B and A-vs-C side by side (and
+picks the cheapest non-inferior effort) is the polish on top; `ultracode` arm (§5.6); prettier
+`settings.json` formatting on merge-apply (currently a text edit, human-reviewed via the diff); live
+adoption briefing + dashboard effort column (§2, backend); wire to the schedule integration already
+on the [experiments roadmap](../ROADMAP.md) ("new Opus dropped → queue a migration experiment").
 
 ## 9. Testing
 
@@ -303,9 +308,13 @@ Match existing suites (`header/test/audit.test.sh`, `experiment.test.sh`, `insta
 - **engine-swap:** `--effort` (and model) reach the agent via the widened adapter contract
   (capture-stub argv); control effort is detected + pinned; sync payload carries arm `effort` +
   `kind: engine-swap`; `report` names each arm's engine; `validate` rejects an unknown effort.
-- **merge:** engine-aware advisory prints the exact `model` + `effortLevel` to set.
-- **`adopt`:** emits A=current / B=4.8@high (2-arm) with a mined task + the model+effort hypothesis;
-  validates; refuses the degenerate A==B case; rejects an invalid `--effort`.
+- **`mine --adopt`:** emits A=current / B=4.8@high (2-arm) with a mined task + the model+effort
+  hypothesis; validates; refuses the degenerate A==B case; rejects an invalid `--effort`; defaults
+  the id + detects the model from a (sandboxed) recent transcript.
+- **`--sweep` / `--vs`:** `--sweep` adds arm C @ xhigh; `analyze`/`report --vs C` produce a side
+  `result-vs-C.json` and name arm C's engine.
+- **merge:** on a B-wins engine swap, `--yes` writes `model` + `effortLevel` into `settings.json`
+  (preserving other keys).
 - **audit:** `MODEL-UPGRADE` fires for a pre-4.8 Opus, naming 4.8; never on the current flagship or
   a superseded (stale) tier.
 - **install:** the snapshot ships (`data/` is copied by `install.sh`).

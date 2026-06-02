@@ -19,25 +19,31 @@ and the caveats the lab itself flags (toy-eval honesty ≠ long runs; grader-spe
 Terminal-Bench/GPQA; proxy lag). It is explicitly a **projection** — the verdict is earned
 on your tasks.
 
-**The proof (rung 3) — `header-experiment adopt`.** Detects the model **and effort** you run
-today (arm A) and pits it against a target (arm B, default `opus-4-8 @high`) on tasks mined
-from this repo's own history. The win is often "same quality, cheaper" — which only a
-model+effort A/B surfaces. **2-arm by design** (the analyzer is pairwise; a second effort is
-a second run, `--effort xhigh`).
+**The proof (rung 3) — `header-experiment mine --adopt`.** No new verb — it's the `mine` you
+already know, plus a flag. Detects the model **and effort** you run today (arm A) and pits it
+against a target (arm B, default `opus-4-8 @high`) on tasks mined from this repo's own history.
+The win is often "same quality, cheaper" — which only a model+effort A/B surfaces. **2-arm by
+default; `--sweep` offers a 3rd arm** at the next effort up (interactive y/N on a TTY).
 
 New mechanics:
 - **Per-arm `effort:`** in the spec, threaded through `run_one` as Claude Code's `--effort`
   flag (symmetric to `--model`); `validate` guards the level. The adapter contract widened to
   `<task> <arm> <rep> <prompt> <model> <effort>` so non-Claude adapters (and tests) see the engine.
-- **`engine-swap` kind** (model and/or effort change) in the spec + sync payload; `report` now
-  names each arm's engine (`model@effort`); `merge`'s advisory is engine-aware (the exact
-  `model` + `effortLevel` to set, with the `max`/`ultracode` caveat — still advisory, no
-  fragile JSON rewrites). `mine` gained `--effort-a`/`--effort-b`/`--kind`.
+- **`engine-swap` kind** (model and/or effort change) in the spec + sync payload; effort is
+  `@`-encoded per arm (`--from claude-opus-4-7@xhigh`); `report` names each arm's engine.
+- **`--sweep` + `--vs`** — `--sweep` adds a 3rd arm (the effort frontier) as an *offer*, not a
+  default; `analyze`/`report`/`merge --vs ARM` compare the control against any arm, writing a
+  side `result-vs-<ARM>.json` so the canonical (synced) `result.json` stays the A-vs-B.
+- **`merge` offers to apply** — on a B-wins engine swap it writes `model` + persistable
+  `effortLevel` into `.claude/settings.json` after showing a diff and asking (the user's final
+  call; `max` stays advisory). No `jq` — a text-level key setter with diff+confirm as the net.
+- **Detection that works** — `detect_current_model` falls back to the most recent primary model
+  in the user's transcripts (`~/.claude/projects`) when settings pin nothing: what actually ran.
 - **`MODEL-UPGRADE` audit line** — a same-family, same-price newer model (Opus 4.5/4.6/4.7 →
   4.8) surfaced as an *opportunity*, distinct from `MODEL-STALE` debt; routes to the card +
-  `adopt`. Conservative: never on the current flagship or a superseded tier.
+  `mine --adopt`. Conservative: never on the current flagship or a superseded tier.
 
-Tests: +20 (experiment), +4 (audit), +1 (install — the snapshot ships). VERSION → 0.18.0.
+Tests: +31 (experiment), +4 (audit), +1 (install — the snapshot ships). VERSION → 0.18.0.
 
 ## 0.17.0 — Two public default topics, fetched and merged
 

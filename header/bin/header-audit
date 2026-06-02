@@ -287,7 +287,7 @@ _model_upgrade() {
     *opus-4-8*) : ;;                                   # already the current flagship
     *opus-4-5*|*opus-4-6*|*opus-4-7*)
       printf 'MODEL-UPGRADE\t%s\t%s\t%s\n' "$1" "claude-opus-4-8" \
-        "Opus 4.8 has shipped (same price; stronger coding/agentic + ~4x fewer unremarked code flaws). Weigh it: '/header opus-4.8', then prove it on your repo with 'header-experiment adopt'." ;;
+        "Opus 4.8 has shipped (same price; stronger coding/agentic + ~4x fewer unremarked code flaws). Weigh it: '/header opus-4.8', then prove it on your repo with 'header-experiment mine --adopt'." ;;
   esac
 }
 
