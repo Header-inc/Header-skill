@@ -254,9 +254,12 @@ verb**, so there's one fewer command to learn) pre-fills:
 
 **2-arm by default; `--sweep` offers the 3rd arm.** The analyzer is pairwise, so `analyze`/`report`
 `--vs C` compares the control against arm C (a side `result-vs-C.json`; the canonical `result.json`
-stays A-vs-B). Effort is `@`-encoded per arm in the spec writer (`model@effort` → `model:`/`effort:`
-lines). When the current engine is undetectable, it assumes `claude-opus-4-7` and **says so**
-(`--from` overrides). Generalize: `mine --adopt --to <model>` for future releases.
+stays A-vs-B). **`report <id> --frontier`** synthesizes them: it auto-analyzes every arm vs the
+control, prints them side by side, and recommends the **cheapest arm that holds quality** (success
+non-inferior) — the effort frontier — with the `merge` command to apply it (`_report_frontier` /
+`_result_fields`). Effort is `@`-encoded per arm in the spec writer (`model@effort` →
+`model:`/`effort:` lines). When the current engine is undetectable, it assumes `claude-opus-4-7` and
+**says so** (`--from` overrides). Generalize: `mine --adopt --to <model>` for future releases.
 
 ### 5.6 Optional — `ultracode` arm (fast-follow)
 
@@ -291,15 +294,15 @@ backs the card.
    sync arm field (§5.1–5.3). The spec carries `kind: engine-swap`; `infer_kind` honors it.
 4. `merge` **offers to apply** the engine win to `settings.json` (diff + y/N; §5.4).
 5. `mine --adopt` scaffolder (no new verb) + `--sweep` offer + `analyze`/`report`/`merge --vs ARM`
-   for the 3rd arm + transcript-based engine detection (§5.5, §5.2).
-6. `MODEL-UPGRADE` audit line (§6).
+   for the 3rd arm + **`report --frontier`** (the combined N-arm view: every arm vs the control,
+   cheapest-that-holds recommended) + transcript-based engine detection (§5.5, §5.2).
+6. `MODEL-UPGRADE` audit line — and `header-audit`'s `MODEL` detection gained the same transcript
+   fallback, so a plain `/header` surfaces the upgrade even when the user pins no model (§6).
 
-**Fast-follows (don't block launch):** **combined effort-frontier report** — `--vs` already gives
-the pairwise A-vs-C comparison; a single report that shows A-vs-B and A-vs-C side by side (and
-picks the cheapest non-inferior effort) is the polish on top; `ultracode` arm (§5.6); prettier
-`settings.json` formatting on merge-apply (currently a text edit, human-reviewed via the diff); live
-adoption briefing + dashboard effort column (§2, backend); wire to the schedule integration already
-on the [experiments roadmap](../ROADMAP.md) ("new Opus dropped → queue a migration experiment").
+**Fast-follows (don't block launch):** `ultracode` arm (§5.6); prettier `settings.json` formatting
+on merge-apply (currently a text edit, human-reviewed via the diff); live adoption briefing +
+dashboard effort column (§2, backend); wire to the schedule integration already on the
+[experiments roadmap](../ROADMAP.md) ("new Opus dropped → queue a migration experiment").
 
 ## 9. Testing
 
@@ -311,10 +314,13 @@ Match existing suites (`header/test/audit.test.sh`, `experiment.test.sh`, `insta
 - **`mine --adopt`:** emits A=current / B=4.8@high (2-arm) with a mined task + the model+effort
   hypothesis; validates; refuses the degenerate A==B case; rejects an invalid `--effort`; defaults
   the id + detects the model from a (sandboxed) recent transcript.
-- **`--sweep` / `--vs`:** `--sweep` adds arm C @ xhigh; `analyze`/`report --vs C` produce a side
-  `result-vs-C.json` and name arm C's engine.
+- **`--sweep` / `--vs` / `--frontier`:** `--sweep` adds arm C @ xhigh; `report --vs C` produces a
+  side `result-vs-C.json`; `report --frontier` renders the combined view, lists every arm's engine,
+  prints a recommendation, and says "stay on A" when the treatment regresses.
 - **merge:** on a B-wins engine swap, `--yes` writes `model` + `effortLevel` into `settings.json`
   (preserving other keys).
+- **audit detection:** with no pinned model but a (sandboxed) recent transcript, `header-audit
+  harness` emits `MODEL` + `MODEL-UPGRADE` off the transcript model.
 - **audit:** `MODEL-UPGRADE` fires for a pre-4.8 Opus, naming 4.8; never on the current flagship or
   a superseded (stale) tier.
 - **install:** the snapshot ships (`data/` is copied by `install.sh`).

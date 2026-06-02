@@ -1372,8 +1372,7 @@ EOF
   echo "    header-experiment run $id --aa     # noise-floor / flaky-test check FIRST"
   echo "    header-experiment run $id          # the matrix (all arms)"
   if [ "${#arms[@]}" -ge 3 ]; then
-    echo "    header-experiment analyze $id && header-experiment report $id              # A vs B"
-    echo "    header-experiment analyze $id --vs C && header-experiment report $id --vs C   # A vs C (effort frontier)"
+    echo "    header-experiment report $id --frontier   # all arms vs A + the cheapest-that-holds-quality pick"
   else
     echo "    header-experiment analyze $id && header-experiment report $id"
   fi
@@ -2292,18 +2291,91 @@ _fmt_engine() {
   fi
 }
 
+# _result_fields <result.json> → tab line: A_mean  B_mean  favorable(yes/no)
+#   non_inferior(yes/no)  verdict. Parses our own result JSON (stable shape).
+_result_fields() {
+  awk '
+    function num(t,k,  s){ if (match(t, "\""k"\":[[:space:]]*-?[0-9.]+")) { s=substr(t,RSTART,RLENGTH); sub(/.*:[[:space:]]*/,"",s); return s+0 } return 0 }
+    { all = all $0 "\n" }
+    END {
+      cb = all; sub(/.*"cost":[[:space:]]*{/,"",cb); sub(/}.*/,"",cb)
+      sbk = all; sub(/.*"success":[[:space:]]*{/,"",sbk); sub(/}.*/,"",sbk)
+      fav = (cb ~ /"favorable":[[:space:]]*true/) ? "yes" : "no"
+      ni  = (sbk ~ /"non_inferior":[[:space:]]*true/) ? "yes" : "no"
+      v=""; if (match(all, /"verdict":[[:space:]]*"[^"]*"/)) { s=substr(all,RSTART,RLENGTH); sub(/.*"verdict":[[:space:]]*"/,"",s); sub(/"$/,"",s); v=s }
+      printf "%.6f\t%.6f\t%s\t%s\t%s\n", num(cb,"A_mean"), num(cb,"B_mean"), fav, ni, v
+    }
+  ' "$1"
+}
+
+# _report_frontier <id> — the combined effort-frontier view for an N-arm engine
+# experiment: every treatment arm vs the control A, side by side, plus the
+# recommendation (the cheapest arm that holds quality). Auto-analyzes any missing
+# A-vs-arm comparison from the existing runs, so one command does the synthesis.
+_report_frontier() {
+  local id="$1" dir; dir="$(exp_dir "$id")"
+  local spec="$dir/spec"
+  [ -f "$spec" ] || { err "no spec for $id"; return 1; }
+  local arms=() L; for L in $(spec_list_sections "$spec" arm); do arms+=("$L"); done
+  [ "${#arms[@]}" -ge 2 ] || { err "frontier needs ≥2 arms (got ${#arms[@]})"; return 1; }
+  [ -s "$dir/runs.jsonl" ] || { err "no runs yet — run the matrix first: header-experiment run $id"; return 1; }
+  local control="${arms[0]}" a_eng
+  a_eng="$(_fmt_engine "$(spec_section_get "$spec" arm "$control" model)" "$(spec_section_get "$spec" arm "$control" effort)")"
+  [ -n "$a_eng" ] || a_eng="(defaults)"
+
+  beta_banner
+  printf '\nEngine-adoption frontier — %s\n' "$id"
+  printf '  Control A = %s   ·   each treatment vs A (cheapest arm that holds quality wins):\n\n' "$a_eng"
+  printf '  %-4s %-28s %11s %9s   %s\n' "arm" "engine" "cost/task" "vs A" "success"
+
+  local i T rf eng am bm fav ni verdict
+  local best_arm="" best_eng="" best_cost="" best_fav=""
+  for (( i=1; i<${#arms[@]}; i++ )); do
+    T="${arms[$i]}"
+    if [ "$i" -eq 1 ]; then rf="$dir/result.json"; [ -f "$rf" ] || cmd_analyze "$id" >/dev/null 2>&1
+    else rf="$dir/result-vs-${T}.json"; [ -f "$rf" ] || cmd_analyze "$id" --vs "$T" >/dev/null 2>&1; fi
+    [ -f "$rf" ] || { err "couldn't analyze A vs $T (run the matrix first)"; return 1; }
+    eng="$(_fmt_engine "$(spec_section_get "$spec" arm "$T" model)" "$(spec_section_get "$spec" arm "$T" effort)")"
+    [ -n "$eng" ] || eng="(defaults)"
+    IFS=$'\t' read -r am bm fav ni verdict < <(_result_fields "$rf")
+    local pct cost_str ni_str
+    pct="$(awk -v a="$am" -v b="$bm" -v f="$fav" 'BEGIN{ if(a>0){ printf "%+.0f%%%s",(b-a)/a*100,(f=="yes"?" \xe2\x9c\x93":"") } else printf "n/a" }')"
+    cost_str="$(awk -v b="$bm" 'BEGIN{printf "$%.4f", b}')"
+    ni_str="$([ "$ni" = yes ] && echo "hold" || echo "REGRESS")"
+    printf '  %-4s %-28s %11s %9s   %s\n' "$T" "$eng" "$cost_str" "$pct" "$ni_str"
+    if [ "$ni" = yes ] && { [ -z "$best_cost" ] || awk -v a="$bm" -v b="$best_cost" 'BEGIN{exit !(a<b)}'; }; then
+      best_arm="$T"; best_eng="$eng"; best_cost="$bm"; best_fav="$fav"
+    fi
+  done
+
+  printf '\n'
+  if [ -n "$best_arm" ]; then
+    if [ "$best_fav" = yes ]; then
+      printf '  \xe2\x86\x92 Recommendation: adopt %s (%s) — the cheapest effort that holds quality, cost win proven.\n' "$best_arm" "$best_eng"
+    else
+      printf '  \xe2\x86\x92 Recommendation: %s (%s) is the cheapest non-inferior arm, but its cost win is not proven\n     (CI straddles 0) — add tasks before trusting the saving.\n' "$best_arm" "$best_eng"
+    fi
+    printf '     Apply it:  header-experiment merge %s%s\n' "$id" "$([ "$best_arm" != "${arms[1]}" ] && printf ' --vs %s' "$best_arm")"
+  else
+    printf '  \xe2\x86\x92 No arm holds quality (success non-inferior) vs the control — stay on A.\n'
+  fi
+  printf '\n  (Per-arm detail: header-experiment report %s [--vs <arm>])\n' "$id"
+}
+
 # ── REPORT ────────────────────────────────────────────────────
 cmd_report() {
-  local id="" aa=0 vs=""
+  local id="" aa=0 vs="" frontier=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --aa)      aa=1; shift ;;
-      --vs)      vs="${2:-}"; shift 2 ;;
-      -h|--help) echo "Usage: header-experiment report <id> [--aa] [--vs ARM]"; return 0 ;;
+      --aa)       aa=1; shift ;;
+      --vs)       vs="${2:-}"; shift 2 ;;
+      --frontier) frontier=1; shift ;;
+      -h|--help)  echo "Usage: header-experiment report <id> [--aa] [--vs ARM] [--frontier]"; return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
   [ -n "$id" ] || { err "<id> required"; return 1; }
+  [ "$frontier" -eq 1 ] && { _report_frontier "$id"; return $?; }
   local dir; dir="$(exp_dir "$id")"
   local rf
   if [ "$aa" -eq 1 ]; then rf="$dir/result-aa.json"

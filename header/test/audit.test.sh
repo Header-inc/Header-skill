@@ -125,6 +125,17 @@ printf '{ "model": "claude-opus-4-1-20250805" }\n' > "$rstale/.claude/settings.j
 assert_not_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" "MODEL-UPGRADE" \
   "a superseded tier is flagged STALE, not as an upgrade opportunity"
 
+# ── detection: no pinned model → fall back to the most recent transcript model ──
+# (so plain /header offers the upgrade even when the user rides the default alias)
+sb_tx="$(make_sandbox)"; rtx="$sb_tx/r"; mkdir -p "$rtx" "$sb_tx/.claude/projects"
+printf '# x\n' > "$rtx/CLAUDE.md"   # NO .claude/settings.json → unpinned
+printf '{"type":"assistant","message":{"model":"claude-opus-4-7","usage":{}}}\n' > "$sb_tx/.claude/projects/s.jsonl"
+Htx="$(HOME="$sb_tx" "$AU" harness --repo "$rtx")"
+assert_contains "$Htx" $'MODEL\tclaude-opus-4-7' \
+  "MODEL is detected from the most recent transcript when settings pin nothing"
+assert_contains "$Htx" $'MODEL-UPGRADE\tclaude-opus-4-7\tclaude-opus-4-8' \
+  "MODEL-UPGRADE fires off the transcript-detected model (plain /header offers it unpinned)"
+
 # ── @import following + stale references ──────────────────────
 sb_imp="$(make_sandbox)"; rimp="$sb_imp/r"; mkdir -p "$rimp/docs" "$rimp/scripts"
 printf 'x\n' > "$rimp/scripts/deploy.sh"          # exists → not stale

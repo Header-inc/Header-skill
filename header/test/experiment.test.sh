@@ -1286,6 +1286,38 @@ assert_eq "yes" "$([ -f "$(exp_dir_for adopt-sweep)/result-vs-C.json" ] && echo 
 assert_contains "$(EXP report adopt-sweep --vs C 2>&1)" "claude-opus-4-8@xhigh" \
   "report --vs C names arm C's engine"
 
+# ── report --frontier: combined N-arm view + cheapest-that-holds recommendation ──
+fr_out="$(EXP report adopt-sweep --frontier 2>&1)"
+assert_contains "$fr_out" "Engine-adoption frontier"  "report --frontier renders the combined view"
+assert_contains "$fr_out" "claude-opus-4-8@high"      "frontier lists arm B's engine"
+assert_contains "$fr_out" "claude-opus-4-8@xhigh"     "frontier lists arm C's engine"
+assert_contains "$fr_out" "Recommendation:"           "frontier prints a recommendation"
+# "stay on A" when the (only) treatment regresses on success
+mkdir -p "$(exp_dir_for frn)"
+printf 'x\n' > "$(exp_dir_for frn)/runs.jsonl"
+cat > "$(exp_dir_for frn)/spec" <<'EOF'
+id: frn
+repo: .
+replicates: 1
+non_inferiority_margin: 0.02
+kind: engine-swap
+
+[arm:A]
+model: claude-opus-4-7
+overrides_dir:
+
+[arm:B]
+model: claude-opus-4-8
+overrides_dir:
+
+[task:t1]
+prompt: x
+verify: true
+EOF
+printf '{ "cost":{"A_mean":0.40,"B_mean":0.20,"favorable":true}, "success":{"non_inferior":false}, "verdict":"no proven win" }\n' > "$(exp_dir_for frn)/result.json"
+assert_contains "$(EXP report frn --frontier 2>&1)" "No arm holds quality" \
+  "frontier recommends staying on A when the treatment regresses on success"
+
 # ── merge offers to apply the engine win to settings.json (--yes = the y/N) ──
 mkdir -p "$(exp_dir_for em)/logs" "$(exp_dir_for em)/tasks" "$sb/em-repo/.claude"
 printf 'x\n' > "$(exp_dir_for em)/tasks/t.md"

@@ -13,7 +13,7 @@
 #         FILE       <path>  <bytes>  <est_tokens>      (always-loaded harness file)
 #         IMPORT     <parent>  <imported-path>          (@import edge; child is always-loaded)
 #         NESTED     <path>  <bytes>  <est_tokens>      (subdir CLAUDE.md/AGENTS.md; on-demand)
-#         MODEL      <value>                            (from settings, if found)
+#         MODEL      <value>                            (settings, else most recent transcript)
 #         MODEL-STALE <value>  <why>                    (model id is a superseded tier)
 #         MODEL-UPGRADE <value>  <recommended>  <why>   (newer same-family model shipped)
 #         HIT        <path>  <lineno>  <pattern_id>  <excerpt>
@@ -291,6 +291,19 @@ _model_upgrade() {
   esac
 }
 
+# _recent_transcript_model — the most recent PRIMARY model (opus/sonnet, not the
+# background haiku) in the user's Claude Code transcripts. Lets MODEL / staleness
+# / upgrade detection work for users who pin no `model` in settings (they ride the
+# default alias) — what actually ran. Mirrors header-experiment's detector.
+_recent_transcript_model() {
+  tdir="$HOME/.claude/projects"
+  [ -d "$tdir" ] || return 0
+  newest="$(ls -t "$tdir"/*.jsonl 2>/dev/null | head -1)"
+  [ -f "$newest" ] || return 0
+  grep -oE '"model":"claude-(opus|sonnet)-[0-9][^"]*"' "$newest" 2>/dev/null \
+    | tail -1 | sed 's/.*"model":"//; s/"$//'
+}
+
 # _bash_security <settings.json> — emit raw Bash-tool permission signals, one per
 # line, by tracking which permissions sub-array each Bash(...) entry sits in:
 #   BYPASS               defaultMode = bypassPermissions (no gating)
@@ -343,10 +356,15 @@ case "$sub" in
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json"; do
       [ -f "$s" ] || continue
       m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
-      [ -n "$m" ] && { printf 'MODEL\t%s\n' "$m"; break; }
+      [ -n "$m" ] && break
     done
-    [ -n "$m" ] && _model_staleness "$m"
-    [ -n "$m" ] && _model_upgrade "$m"
+    # Fall back to the most recent model actually run (transcripts) when nothing is
+    # pinned, so the MODEL line and the staleness / upgrade flags fire for users who
+    # ride the default alias — matching the card / `mine --adopt` detection.
+    em="$m"; [ -n "$em" ] || em="$(_recent_transcript_model)"
+    [ -n "$em" ] && printf 'MODEL\t%s\n' "$em"
+    [ -n "$em" ] && _model_staleness "$em"
+    [ -n "$em" ] && _model_upgrade "$em"
     # Bash tool security posture (whitelist > blacklist; blacklists are
     # bypassable — see the briefing). Classify each settings file's policy.
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \

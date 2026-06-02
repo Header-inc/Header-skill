@@ -31,14 +31,17 @@ New mechanics:
   `<task> <arm> <rep> <prompt> <model> <effort>` so non-Claude adapters (and tests) see the engine.
 - **`engine-swap` kind** (model and/or effort change) in the spec + sync payload; effort is
   `@`-encoded per arm (`--from claude-opus-4-7@xhigh`); `report` names each arm's engine.
-- **`--sweep` + `--vs`** — `--sweep` adds a 3rd arm (the effort frontier) as an *offer*, not a
-  default; `analyze`/`report`/`merge --vs ARM` compare the control against any arm, writing a
-  side `result-vs-<ARM>.json` so the canonical (synced) `result.json` stays the A-vs-B.
+- **`--sweep` + `--vs` + `--frontier`** — `--sweep` adds a 3rd arm (the effort frontier) as an
+  *offer*, not a default; `analyze`/`report`/`merge --vs ARM` compare the control against any arm
+  (side `result-vs-<ARM>.json`; canonical `result.json` stays A-vs-B). **`report <id> --frontier`**
+  is the one-command synthesis — every arm vs the control, side by side, with the cheapest arm
+  that holds quality recommended and the `merge` command to apply it.
 - **`merge` offers to apply** — on a B-wins engine swap it writes `model` + persistable
   `effortLevel` into `.claude/settings.json` after showing a diff and asking (the user's final
   call; `max` stays advisory). No `jq` — a text-level key setter with diff+confirm as the net.
-- **Detection that works** — `detect_current_model` falls back to the most recent primary model
-  in the user's transcripts (`~/.claude/projects`) when settings pin nothing: what actually ran.
+- **Detection that works** — `detect_current_model` (and `header-audit`'s `MODEL` line) fall back
+  to the most recent primary model in the user's transcripts (`~/.claude/projects`) when settings
+  pin nothing: what actually ran. So plain `/header` offers `MODEL-UPGRADE` even for unpinned users.
 - **`MODEL-UPGRADE` audit line** — a same-family, same-price newer model (Opus 4.5/4.6/4.7 →
   4.8) surfaced as an *opportunity*, distinct from `MODEL-STALE` debt; routes to the card +
   `mine --adopt`. Conservative: never on the current flagship or a superseded tier.
