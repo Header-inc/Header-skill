@@ -1259,5 +1259,12 @@ assert_exit 1 "$rc" "adopt refuses when arm A already equals arm B"
 # adopt rejects an invalid --effort up front (no repo work needed)
 EXP adopt adopt-bad --effort bogus --from x --from-effort high >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "adopt rejects an invalid --effort level"
+# adopt with NO explicit id + a value-taking passthrough flag (--verify): the
+# flag's VALUE must not be captured as the id (regression — it became the id).
+EXP adopt --repo "$mine_repo" --verify "$VC" \
+  --from claude-opus-4-7 --from-effort xhigh --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "adopt with no explicit id forwards --verify and uses the default id"
+assert_eq "yes" "$([ -f "$(exp_dir_for adopt-opus-4-8)/spec" ] && echo yes || echo no)" \
+  "adopt defaults the id to adopt-<model> when none is given"
 
 t_done

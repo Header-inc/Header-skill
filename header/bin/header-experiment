@@ -1371,7 +1371,12 @@ cmd_adopt() {
       --effort)      effort="${2:-}"; shift 2 ;;
       --from)        from="${2:-}"; shift 2 ;;
       --from-effort) from_effort="${2:-}"; shift 2 ;;
+      --id)          id="${2:-}"; shift 2 ;;
       --repo)        repo="${2:-}"; passthrough+=(--repo "${2:-}"); shift 2 ;;
+      # mine's value-taking flags — forward WITH their value, so the value can't
+      # be mistaken for the (optional) positional id.
+      --verify|--limit|--max-files|--max-tasks|--replicates|--margin|--since|--timeout)
+                     passthrough+=("$1" "${2:-}"); shift 2 ;;
       -h|--help)
         cat <<EOF
 Usage: header-experiment adopt [<id>] [options]
@@ -1390,7 +1395,10 @@ against a target (arm B) at a chosen effort. Launch default: Opus 4.8 @high.
 --effort xhigh — a second A/B against the same control.
 EOF
         return 0 ;;
-      *) [ -z "$id" ] && id="$1" || passthrough+=("$1"); shift ;;
+      # A bare token is the optional id (first one wins); any other flag we don't
+      # recognize is forwarded for mine to handle or reject.
+      -*) passthrough+=("$1"); shift ;;
+      *)  [ -z "$id" ] && id="$1" || passthrough+=("$1"); shift ;;
     esac
   done
 
