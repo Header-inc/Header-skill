@@ -19,6 +19,8 @@ assert_eq "yes" "$([ -f "$dest/SKILL.md" ] && echo yes || echo no)" "SKILL.md in
 assert_eq "yes" "$([ -f "$dest/VERSION" ] && echo yes || echo no)" "VERSION installed"
 assert_eq "yes" "$([ -x "$dest/bin/header-config" ] && echo yes || echo no)" \
   "bin/header-config installed and executable"
+assert_eq "yes" "$([ -f "$dest/data/engine-adoption/opus-4.8.md" ] && echo yes || echo no)" \
+  "engine-adoption snapshot installed (data/ ships with the skill)"
 assert_eq "no" "$([ -e "$dest/.git" ] && echo yes || echo no)" \
   "no .git copied into the installed skill"
 

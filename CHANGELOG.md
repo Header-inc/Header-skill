@@ -3,6 +3,42 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.18.0 — Engine adoption: "should you use Opus 4.8 in your harness?"
+
+A first-class motion for a new model release, grounded on the Opus 4.8 System Card and
+provable on your own code. Two halves, a fidelity ladder apart — and **client-only**
+(no backend change; the sync endpoint already treats new `kind` values as labels). Full
+spec: [docs/engine-adoption-design.md](docs/engine-adoption-design.md).
+
+**The card (rung 1) — repo-independent.** `/header opus-4.8` (also `opus-4-8`, `adopt`)
+renders an **engine-adoption card**: a grounded "should you switch?" verdict, personalized
+from installation-level signals (your `MODEL` + effort + spend) with **no repo and no key**.
+Content is a bundled, versioned snapshot (`data/engine-adoption/opus-4.8.md`) cut from the
+System Card — the effort lever (*min-effort 4.8 ≈ max-effort 4.7*), the honesty numbers,
+and the caveats the lab itself flags (toy-eval honesty ≠ long runs; grader-speculation;
+Terminal-Bench/GPQA; proxy lag). It is explicitly a **projection** — the verdict is earned
+on your tasks.
+
+**The proof (rung 3) — `header-experiment adopt`.** Detects the model **and effort** you run
+today (arm A) and pits it against a target (arm B, default `opus-4-8 @high`) on tasks mined
+from this repo's own history. The win is often "same quality, cheaper" — which only a
+model+effort A/B surfaces. **2-arm by design** (the analyzer is pairwise; a second effort is
+a second run, `--effort xhigh`).
+
+New mechanics:
+- **Per-arm `effort:`** in the spec, threaded through `run_one` as Claude Code's `--effort`
+  flag (symmetric to `--model`); `validate` guards the level. The adapter contract widened to
+  `<task> <arm> <rep> <prompt> <model> <effort>` so non-Claude adapters (and tests) see the engine.
+- **`engine-swap` kind** (model and/or effort change) in the spec + sync payload; `report` now
+  names each arm's engine (`model@effort`); `merge`'s advisory is engine-aware (the exact
+  `model` + `effortLevel` to set, with the `max`/`ultracode` caveat — still advisory, no
+  fragile JSON rewrites). `mine` gained `--effort-a`/`--effort-b`/`--kind`.
+- **`MODEL-UPGRADE` audit line** — a same-family, same-price newer model (Opus 4.5/4.6/4.7 →
+  4.8) surfaced as an *opportunity*, distinct from `MODEL-STALE` debt; routes to the card +
+  `adopt`. Conservative: never on the current flagship or a superseded tier.
+
+Tests: +20 (experiment), +4 (audit), +1 (install — the snapshot ships). VERSION → 0.18.0.
+
 ## 0.17.0 — Two public default topics, fetched and merged
 
 The built-in public default (the no-argument, no-key path everyone gets) now draws

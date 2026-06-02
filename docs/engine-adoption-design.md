@@ -18,8 +18,11 @@ The forks resolved in design discussion (do not relitigate during build):
    instantly; its CTA hands off to the existing experiment runner for the real verdict (rung 3).
    No bundled "standard battery" task pack (rung 2 was considered and dropped — it proves the
    engine on generic code, not the user's, and reads as a mini-benchmark).
-2. **Proof arm — model + effort sweep**, not model-only. The control is the user's *actual*
-   current engine; treatment arms add Opus 4.8 at `high` and `xhigh` (see §5).
+2. **Proof arm — model + effort**, not model-only. The control is the user's *actual* current
+   engine (model + effort); the treatment is Opus 4.8 at a chosen effort (default `high`).
+   **Shipped 2-arm per run** — the analyzer is pairwise (`A=Arms[1]; B=Arms[2]`), and an N-arm
+   "effort frontier" analyzer is the riskiest code in the repo, so testing a second effort
+   (`xhigh`) is a second A/B against the same control, not a third arm (see §5, §8 fast-follows).
 3. **Repo line — the card is repo-independent; the verdict is earned on a repo.** "Independent of
    git repo" applies to the *card* (an explicitly-labeled projection, personalized from
    installation-level signals), not to the proof. See §1.
@@ -54,7 +57,7 @@ slice. The feature serves the highest rung available:
 | --- | --- | --- | --- | --- |
 | **1 · Card** | grounded verdict from the System Card snapshot + the user's own engine/spend | population-level evidence; *a labeled projection* | no | §3, §4 |
 | 2 · Bundled pack | *(considered, dropped)* | engine as a controlled proxy | no | — |
-| **3 · Repo-mined** | `header-experiment mine` → engine-swap A/B/C on the user's FAIL_TO_PASS history | engine **and** fit on the user's distribution | yes | §5 |
+| **3 · Repo-mined** | `header-experiment adopt` → engine-swap A/B (model+effort) on the user's FAIL_TO_PASS history | engine **and** fit on the user's distribution | yes | §5 |
 
 The card is a projection and is labeled as one; the *verdict* is still earned on a repo. That keeps
 the "prove it, don't project it" thesis intact while still giving the user something that runs
@@ -70,7 +73,7 @@ dashboard) is a separate system and is **untouched** by the launch:
   next model ships). No live briefing required.
 - **Personalization** reads installation-level signals already available locally: current model +
   effort from settings, realized spend from `header-cost` over `~/.claude` transcripts.
-- **Effort sweep / engine-swap / scaffolder / merge / `MODEL-UPGRADE`** are bin + SKILL.md changes.
+- **Per-arm effort / engine-swap / `adopt` / merge / `MODEL-UPGRADE`** are bin + SKILL.md changes.
 - **Experiment sync** rides the existing endpoint unchanged. Per `docs/experiments-sync-api.md`:
   *"Nothing executes server-side… store it, show it,"* and the `kind` field *"may carry other
   values if a future client sets a precise kind — treat as a label."* Emitting `kind:"engine-swap"`
@@ -151,12 +154,13 @@ cost/latency* — not "pay more for more."
 
 ### 4.2 Composition — snapshot ⊕ local audit
 
-The bundled snapshot is **briefing-shaped JSON** (same schema as a fetched briefing: `summary`,
-`key_developments`, `source_articles`) plus a `decision` block (`verdict_by_engine`, `rubric`,
-`watch_outs`, `effort_note`). Reusing the briefing schema means the card flows through the **same
-render path** as a live briefing — a future live adoption topic (§2 fast-follow) is then a drop-in
-content swap, no new client code. Proposed path: `header/data/engine-adoption/opus-4.8.json`,
-seeded from §3 with citations.
+**Shipped as structured markdown** (`header/data/engine-adoption/opus-4.8.md`), not briefing-shaped
+JSON. For the launch — bundled, client-only, no live briefing to share a render path with — a
+markdown card template is simpler for the agent to render and reviewable as prose in the repo. It
+carries the grounded evidence, a **verdict-by-engine rubric** the agent selects from, the effort
+lever, and the caveats, every claim attributed to the System Card (§3). (Deferred: when a live
+adoption briefing lands (§2 fast-follow), the render mode can branch on briefing-shaped JSON so the
+two share a path. Not worth the parsing now.)
 
 The card = snapshot (grounded population evidence) **⊕** local audit (personalization):
 
@@ -189,7 +193,7 @@ WATCH    toy-eval honesty ≠ long unattended runs (card says so) ·
          grader-speculation trend · Terminal-Bench: GPT-5.5 ahead ·
          proxies may still serve you 4.7
 
-NEXT  ▸ prove it on your code →  cd <repo> && header experiment opus-4.8
+NEXT  ▸ prove it on your code →  cd <repo> && header-experiment adopt
 ```
 
 ## 5. Rung 3 — the engine-swap experiment
@@ -225,27 +229,31 @@ reproducible and the verdict reads against the engine the user *actually* runs (
 slip to `generic`. Add **`engine-swap`** = arms differ on model **and/or** effort. Thread `effort`
 into the sync arm objects and the `report` scorecard (show the effort dimension).
 
-### 5.4 `merge` — persistable wins write settings
+### 5.4 `merge` — engine-aware advisory
 
 Today a `model-swap` merge is advisory (`~:2346`, "update your default — header-config doesn't
-manage model"). Upgrade for `engine-swap`: when the winning arm's level is **persistable**
-(`low`–`xhigh`), `merge` offers to write `model` + `effortLevel` into `settings.json` (still shows
-the diff, still asks). When the win is on `max`/`ultracode` (not settings-persistable), stay
-advisory and print the exact `/effort` / env-var instruction.
+manage model"). For `engine-swap` it **stays advisory** (shipped): hand-editing a user's real
+`settings.json` JSON in bash (no `jq` dependency) is fragile, and a bad rewrite is worse than a
+copy. The advice became engine-aware — it prints the exact `model` + `effortLevel` to set, with the
+`/effort max` / `CLAUDE_CODE_EFFORT_LEVEL` caveat when the win is on `max` (which settings can't
+persist). Auto-writing `settings.json` is a deferred fast-follow if demand warrants it.
 
-### 5.5 The `opus-4.8` scaffolder
+### 5.5 The `adopt` scaffolder
 
-`header experiment opus-4.8` (thin wrapper over `mine` + `new --kind engine-swap`) pre-fills:
+`header-experiment adopt` (thin wrapper over `mine` + `--kind engine-swap`; the engine-adoption
+card's CTA) pre-fills:
 
 - **Arm A** = detected current model @ detected current effort (the pinned control, §5.2)
-- **Arm B** = `claude-opus-4-8` @ `high`
-- **Arm C** = `claude-opus-4-8` @ `xhigh`
+- **Arm B** = `claude-opus-4-8` @ `high` (`--to` / `--effort` override; `--from` / `--from-effort`
+  override the control)
 - **Tasks** = `mine`d from the repo's FAIL_TO_PASS history (the keystone), tests-oracle verify
-- **Hypothesis** = "Opus 4.8 is non-inferior on success and cheaper-or-better than `<current>` on
-  this repo's own historical fixes — at the lowest effort that holds quality."
-- **`audit_basis`** = the adoption snapshot id (provenance for the sync payload / ledger)
+- **Hypothesis** = "`<target>` @`<effort>` matches your current `<from>`@`<from-effort>` on this
+  repo's own historical fixes (tests-oracle), at equal-or-lower cost."
 
-Generalize the name: `header experiment <model>` for future releases.
+**2-arm**, because the analyzer is pairwise. Testing a second effort is a second run
+(`adopt --effort xhigh`); an N-arm effort-frontier analyzer is a fast-follow (§8). When the current
+engine is undetectable, `adopt` assumes `claude-opus-4-7` and **says so** (a wrong control
+invalidates the A/B) — `--from` overrides. Generalize: `adopt --to <model>` for future releases.
 
 ### 5.6 Optional — `ultracode` arm (fast-follow)
 
@@ -259,8 +267,9 @@ default.
 Add a `header-audit` line **`MODEL-UPGRADE <current> <recommended>`** — an *opportunity*, distinct
 from `MODEL-STALE` *debt* (4.7 → 4.8 isn't stale). Fires when the snapshot/briefing names a newer
 recommended engine than the detected model. Carries the `[Experiment]` disposition and links to
-`header experiment opus-4.8`, so the card reaches users two ways: explicit `/header opus-4.8`, and
-inside any normal audit. Conservative like `MODEL-STALE`: only fires on a named, shipped successor.
+the card + `header-experiment adopt`, so it reaches users two ways: explicit `/header opus-4.8`, and
+inside any normal audit. Shipped conservative like `MODEL-STALE` — fires only for a recognized Opus
+tier below the current flagship (4.5/4.6/4.7), naming `claude-opus-4-8`; never on 4.8 or a stale tier.
 
 ## 7. Sync & privacy
 
@@ -272,34 +281,34 @@ backs the card.
 
 ## 8. Launch cut vs fast-follows
 
-**v0.18.0 (the launch cut, all client-side):**
-1. Bundled snapshot `header/data/engine-adoption/opus-4.8.json` (§3, §4.2).
+**v0.18.0 (the launch cut, all client-side) — shipped:**
+1. Bundled snapshot `header/data/engine-adoption/opus-4.8.md` (§3, §4.2).
 2. Card render mode + `/header opus-4.8` routing + personalized verdict (§4).
-3. `engine-swap`: arm `effort`, `--effort` plumbing, control-pinning, `detect_kind`, report,
-   sync arm field (§5.1–5.3).
-4. `merge` writes `model`+`effortLevel` for persistable wins (§5.4).
-5. `header experiment opus-4.8` scaffolder (§5.5).
+3. `engine-swap`: arm `effort` + `--effort` plumbing + control-pinning + report + sync arm field
+   (§5.1–5.3). The spec carries `kind: engine-swap`; `infer_kind` already honors an explicit kind.
+4. `merge` engine-aware advisory (§5.4).
+5. `adopt` scaffolder + `mine --effort-a/--effort-b/--kind` (§5.5).
 6. `MODEL-UPGRADE` audit line (§6).
 
-**Fast-follows (don't block launch):** `ultracode` arm (§5.6); live adoption briefing + dashboard
-effort column (§2, backend); wire to the schedule integration already on the
+**Fast-follows (don't block launch):** **N-arm effort-frontier analyzer** — turns the 2-arm proof
+into a true sweep (A vs each effort in one run), the riskiest stat change so deferred out of the
+launch; `ultracode` arm (§5.6); auto-write `settings.json` on merge (§5.4); live adoption briefing +
+dashboard effort column (§2, backend); wire to the schedule integration already on the
 [experiments roadmap](../ROADMAP.md) ("new Opus dropped → queue a migration experiment").
 
 ## 9. Testing
 
-Match existing suites (`header/test/audit.test.sh`, `experiment.test.sh`, `cost.test.sh`):
+Match existing suites (`header/test/audit.test.sh`, `experiment.test.sh`, `install.test.sh`):
 
-- **engine-swap:** `--effort` reaches the adapter (assert via `HEADER_EXPERIMENT_ADAPTER` stub
-  capturing argv); control effort is detected + pinned; `detect_kind` returns `engine-swap` for
-  same-model/diff-effort and for diff-model arms; sync payload carries `effort` + `engine-swap`.
-- **merge:** persistable win writes `model`+`effortLevel` to `settings.json`; `max` win stays
-  advisory.
-- **scaffolder:** `header experiment opus-4.8` emits A=detected / B=4.8@high / C=4.8@xhigh with a
-  mined task and the hypothesis/audit_basis filled.
-- **audit:** `MODEL-UPGRADE` fires only with a named successor in the snapshot; does not fire when
-  already on the recommended engine.
-- **card:** render mode composes snapshot ⊕ local audit; verdict branch matches detected engine;
-  runs with no repo and no key.
+- **engine-swap:** `--effort` (and model) reach the agent via the widened adapter contract
+  (capture-stub argv); control effort is detected + pinned; sync payload carries arm `effort` +
+  `kind: engine-swap`; `report` names each arm's engine; `validate` rejects an unknown effort.
+- **merge:** engine-aware advisory prints the exact `model` + `effortLevel` to set.
+- **`adopt`:** emits A=current / B=4.8@high (2-arm) with a mined task + the model+effort hypothesis;
+  validates; refuses the degenerate A==B case; rejects an invalid `--effort`.
+- **audit:** `MODEL-UPGRADE` fires for a pre-4.8 Opus, naming 4.8; never on the current flagship or
+  a superseded (stale) tier.
+- **install:** the snapshot ships (`data/` is copied by `install.sh`).
 
 ## 10. References
 

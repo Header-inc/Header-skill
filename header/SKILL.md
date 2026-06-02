@@ -1,8 +1,8 @@
 ---
 name: header
-version: 0.17.0
+version: 0.18.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
-when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used."
+when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
 allowed-tools: Bash, AskUserQuestion
 ---
@@ -221,11 +221,13 @@ Configuration resolves in this order, highest priority first: **environment vari
 
 Every invocation runs this flow. The audit is local and read-only; the briefing is fetched from Header for enrichment.
 
-> **Mode routing:** the audit always runs. A short word at the end of the invocation switches **what gets shown**, not what gets done: `summary` → render only the briefing's `summary` field, no audit output; `sources` → only `source_articles`, no audit output; `add-source <url>` → see "Add a source"; `since-last` → see "Since-last digest"; `cost` → see "Cost analytics". Anything else (a topic name/UUID/briefing URL, or no argument) runs the full audit-led flow below.
+> **Mode routing:** the audit always runs. A short word at the end of the invocation switches **what gets shown**, not what gets done: `summary` → render only the briefing's `summary` field, no audit output; `sources` → only `source_articles`, no audit output; `add-source <url>` → see "Add a source"; `since-last` → see "Since-last digest"; `cost` → see "Cost analytics". One argument is special-cased to a *different* flow: `opus-4.8` (also `opus-4-8`, `adopt`) → render the **engine-adoption card** (see "Engine-adoption card (`/header opus-4.8`)"), a self-contained "should you move your harness to this model?" answer — not a topic. Anything else (a topic name/UUID/briefing URL, or no argument) runs the full audit-led flow below.
 
 ### Step 0 — Resolve the topic
 
 The topic determines which briefing is pulled in for enrichment. Fallback chain (first match wins):
+
+> **Engine-adoption short-circuit:** if the argument is `opus-4.8` / `opus-4-8` / `adopt` (or a `<model>-adoption` keyword), this is **not a topic** — render the **engine-adoption card** (see that section) and skip Steps 1–4. The card reads a bundled snapshot + the user's detected engine, not a briefing.
 
 1. **Explicit argument** — if the user passed an identifier:
    - URL containing `/briefings/<uuid>` → extract the UUID, treat as a **briefing ID**, skip Step 1, go straight to Step 2 with `/api/v2/public/briefings/<uuid>`.
@@ -278,7 +280,7 @@ Local, read-only — nothing leaves the machine. Run **all three** scans. `<AUDI
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in `key_developments`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. Keep regexes conservative (`grep -iE`); malformed lines (not exactly three tab fields) are skipped. This is how the distribution wedge feeds new hypotheses into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `SPEND`, `ROUTE-CANDIDATE`); you'll join them with the briefing in the next step.
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `SPEND`, `ROUTE-CANDIDATE`); you'll join them with the briefing in the next step.
 
 ### Step 4 — Cross-reference and present
 
@@ -290,7 +292,7 @@ The audit's findings + the briefing's items become **one ranked recommendation l
 
 Build the unified list by combining:
 
-- **Audit findings** — every `HIT` (prompt-debt pattern, built-in *or* briefing-supplied), `FILE` size signal (heavy always-loaded `CLAUDE.md`/`AGENTS.md` — **sum `FILE` + `IMPORT`ed files**, since @imports are loaded every turn too; `NESTED` files are on-demand, count them apart), `MODEL` mismatch / `MODEL-STALE` (pinned to a superseded tier → model-migration `[Experiment]`), `SECURITY` posture, `HOOK` (arbitrary shell on agent events — the biggest unguarded execution + supply-chain surface; treat an unexpected/opaque hook command as a security finding), `SKILL` (installed skills are a supply-chain surface — note any carrying `has-bin yes`, à la `/cso`), `STALE-REF` (a referenced path/script or @import that no longer exists), and `GATE absent` from `header-audit`.
+- **Audit findings** — every `HIT` (prompt-debt pattern, built-in *or* briefing-supplied), `FILE` size signal (heavy always-loaded `CLAUDE.md`/`AGENTS.md` — **sum `FILE` + `IMPORT`ed files**, since @imports are loaded every turn too; `NESTED` files are on-demand, count them apart), `MODEL` mismatch / `MODEL-STALE` (pinned to a superseded tier → model-migration `[Experiment]`), `MODEL-UPGRADE` (a newer same-family model shipped, e.g. Opus 4.8 → offer the **engine-adoption card** (`/header opus-4.8`) and `header-experiment adopt` to prove it — opportunity, not debt), `SECURITY` posture, `HOOK` (arbitrary shell on agent events — the biggest unguarded execution + supply-chain surface; treat an unexpected/opaque hook command as a security finding), `SKILL` (installed skills are a supply-chain surface — note any carrying `has-bin yes`, à la `/cso`), `STALE-REF` (a referenced path/script or @import that no longer exists), and `GATE absent` from `header-audit`.
 - **Consistency findings** — `STALE-REF` lines are the deterministic half: surface each as `[Apply with review]` (fix the reference or delete the dead instruction). The other half is yours to judge — while reading `CLAUDE.md`/`AGENTS.md`, flag **mutually contradictory instructions** the greps can't catch (e.g. "use tabs" *and* "use spaces" for the same files; "always delegate to a subagent" *and* "never spawn subagents"; a rule that names a flag/command the tool no longer has). High-signal, low-risk — usually `[Apply now]` / `[Apply with review]`.
 - **Briefing-derived recommendations** — items in the briefing's `key_developments` or `summary` that touch the project's stack/tooling (read package manifests, lockfiles, language version files, build/test/CI configs, container/infra definitions, agent/skill definitions, `CLAUDE.md`, README), or that name a pattern the project doesn't yet use (or uses a now-legacy version of). The bias is toward **deletion** and toward changes the briefing endorses on the model currently configured. For a `MODEL-STALE` hit, cross-reference the briefing for the *current* recommended tier — the bin flags that it's stale; the briefing names what to move to.
 - **Known issues** — themes from learnings/post-mortems/runbooks/architecture-decision-records/incident reports + a quick `TODO`/`FIXME`/`HACK` density scan. A recommendation that addresses a known issue jumps the queue.
@@ -534,6 +536,7 @@ The premise — *"prompts are technical debt too"*: harness instructions are wri
 - `NESTED <path> <bytes> <est_tokens>` — a subdir `CLAUDE.md`/`AGENTS.md`. Loaded **on demand** when the agent works in that subtree, *not* every turn — so count it apart from the always-loaded total (it still rots; flag debt the same way).
 - `MODEL <value>` — the model declared in settings, if any.
 - `MODEL-STALE <value> <why>` — the model id names a **superseded tier** (Claude 3.x/2.x/instant; early Opus 4.0/4.1). Pure hypothesis-generation: cross-reference the briefing for the current recommended tier and surface a model-migration `[Experiment]`. Conservative by design — current ids aren't flagged.
+- `MODEL-UPGRADE <value> <recommended> <why>` — a newer, **same-price, same-family** model has shipped (e.g. Opus 4.5/4.6/4.7 → Opus 4.8). An **opportunity, not debt** (distinct from `MODEL-STALE`): offer the **engine-adoption card** (`/header opus-4.8`) for the grounded case + caveats, then `header-experiment adopt` to prove it on the repo. Conservative — never fires on the current flagship or a superseded tier.
 - `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern (built-in or briefing-supplied). Run `<AUDIT> patterns` to list the ids and why each is debt.
 - `STALE-REF <path> <lineno> <ref> <why>` — the harness names a path/script or `@import`s a file that **doesn't exist** (moved, renamed, deleted). High-trust, low-risk: fix the reference or delete the dead instruction — usually `[Apply with review]`. (Deterministic and conservative — only path-shaped backtick tokens and unresolved imports; documentation placeholders like `path/to/x` are skipped.)
 - `HOOK <event> <command-excerpt> <file>` — a shell command wired to an agent event (`PreToolUse`, `Stop`, …) in Claude Code settings. The **biggest unguarded execution + supply-chain surface**, and one the Bash-posture check is blind to (a hook runs regardless of the Bash allow/deny list). Surface any unexpected or opaque hook command as a security finding; an attacker who can write settings owns the agent.
@@ -615,6 +618,25 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report --since
 
 Other subcommands: `"<COST>" refresh [--url U]`, `"<COST>" prices`, `"<COST>" cost <model> <in> <out> [cache_read] [cache_write_5m] [cache_write_1h]`. Add `--json` for machine output.
 
+## Engine-adoption card (`/header opus-4.8`)
+
+A self-contained, repo-independent answer to **"should you move your coding harness to a newer model?"** — launch instance: Opus 4.8. Triggered by `/header opus-4.8` (also `opus-4-8`, `adopt`), or offered from a `MODEL-UPGRADE` audit finding. It does **not** fetch a briefing; it composes a grounded card from a bundled snapshot + the user's own engine, then hands off to `header-experiment adopt` for the actual proof. Full rationale: `docs/engine-adoption-design.md`.
+
+**Render it:**
+
+1. **Read the snapshot.** It ships with the skill at `data/engine-adoption/opus-4.8.md` (relative to the skill dir — the parent of `HEADER_BIN`'s directory). It carries the grounded evidence, the verdict-by-engine rubric, the effort lever, and the caveats, every claim attributed to the Opus 4.8 System Card.
+
+2. **Detect the current engine (the personalization — no repo, no key needed).**
+   - **Model:** the `MODEL` line from `<AUDIT> harness`, else `ANTHROPIC_MODEL`, else the `model` in `.claude/settings.json`.
+   - **Effort:** `CLAUDE_CODE_EFFORT_LEVEL` → `effortLevel` in settings → the model default (`xhigh` for Opus 4.7, `high` otherwise).
+   - **Spend (optional):** `<AUDIT> cost` — if the current model has a `SPEND` line, frame the effort-drop saving against real money.
+
+3. **Present the card.** Lead with the **verdict row matching the detected engine** (the snapshot's "Verdict by the engine you run today" table). Show WHY (the grounded numbers) and — non-negotiable — WATCH (the caveats: toy-eval honesty ≠ long runs, grader-speculation, Terminal-Bench/GPQA, proxy lag). Keep it honest: **this card is a projection**; the verdict for their harness is earned on their tasks.
+
+4. **CTA → prove it.** End on `header-experiment adopt` (mines this repo's history, runs a model+effort A/B of their current engine vs `opus-4-8 @high`; add `--effort xhigh` for the higher arm). If they're **not** in a git repo, say so — the card is the answer they get without one (grounded, but a projection); the proof needs a repo.
+
+**Repo-independence is deliberate:** the card runs anywhere (snapshot + local settings/spend); the *proof* needs a repo. The engine (model + effort) is the repo-independent slice of the harness — which is exactly what this decides. **Future models** generalize the same flow: a `<model>` snapshot under `data/engine-adoption/` + `header-experiment adopt --to <model>`.
+
 ## Experiments (`header-experiment`) — beta
 
 > **Beta — the experiment loop** (Phase 2 of `docs/experiments-design.md`). Locally A/B-test a harness change (prompt-debt deletion, model swap, etc.) on the user's own tasks: paired-by-task bootstrap CI on per-task cost differences, with success non-inferiority as the merge gate (§6.5). Local-only — every run executes in an isolated `git worktree` and nothing leaves the machine. **Scope:** `mine` (git-history task mining + tests-oracle verifier, §11), `new` (audit-aware scaffolder), `validate`, `run` (`--aa` noise-floor; `setup:`/`teardown:` ephemeral infra), `analyze`, `report`, `merge` (apply arm B after a B-wins verdict). **Not yet:** σ-based power analysis, LLM judges, cross-customer aggregate submit.
@@ -632,6 +654,18 @@ header-experiment mine <id> --from <model> --to <model>  # set the A/B arms (def
 What it does: scans the last `--limit` commits for fixes touching source + tests (≤ `--max-files`), then **validates** each by checking out the parent, re-applying the fix's test files, and running the suite — keeping only those that **fail** (a real fix exists). It writes a complete experiment whose tasks each pin the fix's parent `commit` and carry `apply_from`/`apply_paths`/`lock_paths`; at run time the runner applies the tests before the agent and **re-locks them before grading**, so "make the test pass" can't be won by editing the test (the reward-hacking defense). The default arms are a **model swap** — this is the keystone for "model-routing experiments at scale," the moat's first named learning: *is the cheaper model good enough on this repo's own real fixes?*
 
 **This is the recommended way to start a model-swap experiment** — far less friction than authoring tasks. Reach for `new --kind model-swap` only when you want to test on a *specific* task you have in mind rather than mined history.
+
+### Engine adoption (`adopt`) — "should you move to this model?"
+
+`adopt` is `mine` with the engine-adoption question pre-wired: it detects the model **and effort** the user runs today (arm A), pits it against a target (arm B, default `claude-opus-4-8 @high`), and writes a `kind: engine-swap` experiment. It's the rung-3 proof behind the engine-adoption card (`/header opus-4.8`).
+
+```bash
+header-experiment adopt                         # A = your current engine, B = opus-4-8 @high
+header-experiment adopt --effort xhigh          # then test the higher-effort arm (a second A/B)
+header-experiment adopt --to <model> --from <model> --from-effort <level>   # override any of it
+```
+
+Why model **and** effort: the System Card's headline is that Opus 4.8 at a *lower* effort can match the prior model at a *higher* one — so the win is often "same quality, cheaper," which only a model+effort A/B can surface. **2-arm by design** (the analyzer is pairwise A vs B); a second effort is a second run, not a third arm. If `adopt` can't detect the current model it **assumes `claude-opus-4-7` and says so** — pass `--from` to correct it (arm A is the control; a wrong identity invalidates the comparison). The proof needs a git repo (it mines real fixes); outside one, point the user at the card instead.
 
 Scope honesty (state it when you surface results): mine's per-candidate check confirms the new tests *fail at the parent* (a FAIL_TO_PASS exists); it relies on `run --aa` to expose flaky/baseline-broken tasks (a task arm A can't pass either). The suite runs in a bare `git worktree`, so dep dirs (`node_modules`, `.venv`, …) are auto-symlinked via `worktree_include`; if validation finds nothing, the suite usually needs a build/env the worktree lacks — pass a `--verify` that runs standalone. Tier-1 proves correctness on covered behavior, not taste — don't overclaim.
 
