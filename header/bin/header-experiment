@@ -1235,7 +1235,7 @@ EOF
   fi
 
   # ── validate newest-first until max_tasks (soft cap on attempts) ──
-  local valid=() examined=0 cap=$(( max_tasks * 5 )); [ "$cap" -lt 10 ] && cap=10
+  local valid=() examined=0 n_nofail=0 n_error=0 cap=$(( max_tasks * 5 )); [ "$cap" -lt 10 ] && cap=10
   local c child parent nsrc paths status
   for c in "${candidates[@]}"; do
     [ "${#valid[@]}" -ge "$max_tasks" ] && break
@@ -1246,16 +1246,39 @@ EOF
     status="$(_mine_validate "$repo" "$parent" "$child" "$verify" "$vtimeout" "$paths" "$include_list")"
     case "$status" in
       valid)  printf 'tests fail at parent → TASK\n' >&2; valid+=("$child|$parent|$paths") ;;
-      nofail) printf 'tests already pass → skip\n' >&2 ;;
-      *)      printf 'could not build/apply → skip\n' >&2 ;;
+      nofail) printf 'tests already pass → skip\n' >&2; n_nofail=$(( n_nofail + 1 )) ;;
+      *)      printf 'could not build/apply → skip\n' >&2; n_error=$(( n_error + 1 )) ;;
     esac
+    # Early bail: if the first several source+test commits ALL pass cleanly at
+    # their parent (no real FAIL_TO_PASS, zero run errors), the parent's code is
+    # almost certainly not under test — worktree isolation is defeated. Stop now
+    # instead of running the full suite through every remaining candidate for nothing.
+    if [ "${#valid[@]}" -eq 0 ] && [ "$n_error" -eq 0 ] && [ "$n_nofail" -ge 5 ]; then
+      echo "  (stopping early: $n_nofail candidates' tests all PASSED at their parent — see the diagnosis below)" >&2
+      break
+    fi
   done
 
   local n_valid="${#valid[@]}"
   if [ "$n_valid" -lt 1 ]; then
-    err "no valid tasks: no candidate's re-applied tests failed at its parent."
-    err "Common cause: the suite can't run in a bare worktree (needs deps/build/env)."
-    err "Try: --verify with a command that works standalone, or check that $include_list exists in the repo."
+    if [ "$n_nofail" -gt 0 ]; then
+      # The suite RAN and PASSED at the parent — so the parent's (unfixed) code
+      # wasn't actually under test. The dominant cause is defeated isolation.
+      err "no valid tasks: every examined candidate's re-applied tests PASSED at its parent ($n_nofail/$examined)."
+      err "That means the parent's code wasn't under test — worktree isolation is almost certainly defeated:"
+      err "  • A PEP 660 editable install (a sys.meta_path finder with ABSOLUTE paths), or a globally-installed"
+      err "    copy of your package, shadows the worktree — imports resolve to your CURRENT (fixed) code, not the"
+      err "    checked-out parent. 'worktree_include: venv' does NOT help here (the finder's paths are absolute)."
+      err "    Fix: reinstall editable in compat mode —  pip install -e . --config-settings editable_mode=compat"
+      err "    (a path-based .pth; revert anytime with 'pip install -e .'), or use a per-worktree venv."
+      err "  • Less often: these commits aren't genuine FAIL_TO_PASS fixes (the test doesn't exercise the change)."
+      err "  Confirm:  git worktree add /tmp/wt HEAD~5 && cd /tmp/wt && python -c 'import <pkg>,inspect;print(inspect.getfile(<pkg>))'"
+      err "            — if that path is OUTSIDE /tmp/wt, isolation is the cause."
+    else
+      err "no valid tasks: no candidate's re-applied tests ran to a clean FAIL at its parent ($n_error/$examined errored)."
+      err "Common cause: the suite can't run in a bare worktree (needs deps/build/env)."
+      err "Try: --verify with a command that works standalone, or check that $include_list exists in the repo."
+    fi
     return 1
   fi
 

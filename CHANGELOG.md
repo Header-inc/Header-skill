@@ -3,6 +3,25 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.18.1 — mine: detect defeated worktree isolation (editable installs)
+
+Fix surfaced by a real `/header` run on a repo with a **PEP 660 editable install**.
+`header-experiment mine` validates each candidate fix by checking out its parent into
+a git worktree and asserting the re-applied tests FAIL there. But a `sys.meta_path`
+editable finder (absolute paths) — or any globally-installed copy of the package —
+shadows the worktree, so imports resolve to your *current* (fixed) code: every
+candidate's tests PASS at the parent, `mine` rejects all of them, and it churned the
+full suite through every candidate before printing a misleading "suite can't run in a
+bare worktree."
+
+`mine` now **bails early** once several candidates pass cleanly at their parent (zero
+run-errors), and the no-valid-tasks message **names the real cause** — defeated worktree
+isolation via an editable install / global shadow — with the compat-mode reinstall fix
+(`pip install -e . --config-settings editable_mode=compat`) and a one-line confirm,
+instead of the env-flavored red herring. The same defeat would silently corrupt a later
+A/B (both arms test the parent tree), so SKILL.md's mine section documents the
+requirement. +2 tests. VERSION → 0.18.1.
+
 ## 0.18.0 — Engine adoption: "should you use Opus 4.8 in your harness?"
 
 A first-class motion for a new model release, grounded on the Opus 4.8 System Card and

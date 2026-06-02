@@ -1167,6 +1167,21 @@ nm_err="$(EXP mine mnm2 --repo "$nomanifest" 2>&1)"
 assert_contains "$nm_err" "couldn't detect a test command" \
   "mine without --verify and no manifest explains it needs a test command"
 
+# ── candidates that PASS at their parent → worktree-isolation diagnostic ──
+# (the PEP 660 editable-install footgun: a non-FAIL_TO_PASS commit stands in for
+# the defeated-isolation case — the suite runs and passes against parent code.)
+nofix="$sb/nofix"; mkdir -p "$nofix/tests"
+( cd "$nofix" && git init -q && git config user.email t@t.t && git config user.name t && \
+  printf 'foo(){ echo ok; }\n' > impl.sh && printf 'set -e\n. ./impl.sh\n[ "$(foo)" = ok ]\n' > tests/a.sh && \
+  git add -A && git commit -qm init && \
+  printf 'foo(){ echo ok; } # tweak\n' > impl.sh && printf 'set -e\n. ./impl.sh\n[ "$(foo)" = ok ]\n' > tests/b.sh && \
+  git add -A && git commit -qm "chore: tweak impl + add test b" )
+nofix_err="$(EXP mine mnofx --repo "$nofix" --verify "bash tests/a.sh && bash tests/b.sh" --yes 2>&1)"
+assert_contains "$nofix_err" "PASSED at its parent" \
+  "mine flags candidates whose tests pass at the parent (not a real FAIL_TO_PASS)"
+assert_contains "$nofix_err" "editable install" \
+  "mine names the PEP 660 editable-install / worktree-isolation cause"
+
 # ════════════════════════════════════════════════════════════════════
 # 0.18.0 — engine adoption: per-arm effort, `mine --adopt` (+ --sweep / --vs),
 # transcript-based model detection, and merge's offer-to-apply.
