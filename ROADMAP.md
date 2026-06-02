@@ -84,6 +84,32 @@ Full design — measurement, the A/A noise floor, statistics, verifiers & task m
 the local / Header-infra / hybrid architecture, build order, and the CLI spec — lives
 in [docs/experiments-design.md](docs/experiments-design.md).
 
+### Engine adoption — "should you use this model in your harness?" (v0.18.0, the launch cut)
+
+**Status:** locked for build (2026-06-01). Launch instance: **Opus 4.8**. Full spec in
+[docs/engine-adoption-design.md](docs/engine-adoption-design.md).
+
+The first-class motion for a new model release, and the realization of the *"new Opus dropped →
+queue a migration experiment"* schedule-integration bullet above. Two halves:
+
+- **The card (rung 1) — repo-independent.** `/header opus-4.8` surfaces a grounded **adoption
+  verdict**, personalized from installation-level signals (current model/effort from settings,
+  realized spend from `header-cost` over `~/.claude`) — runs with no repo and no key. Content is a
+  **bundled, briefing-shaped snapshot** cut from the Opus 4.8 System Card (same render path as a
+  live briefing, so a future live topic is a drop-in swap). It is an explicitly-labeled
+  *projection*; the verdict is still earned on a repo.
+- **The proof (rung 3) — `header experiment opus-4.8`.** Mines the repo's FAIL_TO_PASS history and
+  runs a **model + effort sweep** (A = the user's *actual* pinned current engine, B = 4.8 `@high`,
+  C = 4.8 `@xhigh`) to find the cheapest effort that's non-inferior — the under-covered lever the
+  System Card surfaces (*min-effort 4.8 ≈ max-effort 4.7* on SWE-bench Pro).
+
+New mechanics it adds to the engine: an arm **`effort:`** field threaded as `--effort` (symmetric to
+`--model`), a pinned control, a new **`engine-swap`** kind (`detect_kind` for same-model/diff-effort
+arms), `merge` writing `model`+`effortLevel` for persistable wins, and a **`MODEL-UPGRADE`** audit
+line (opportunity, distinct from `MODEL-STALE` debt). **Client-only — no backend changes** (the sync
+endpoint already treats new `kind` values as labels). Fast-follows: an `ultracode` arm, a live
+adoption briefing, and a dashboard effort column.
+
 ## Deferred
 
 ### Claude Code `/plugin` marketplace distribution
