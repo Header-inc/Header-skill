@@ -111,6 +111,20 @@ printf '{ "model": "claude-opus-4-1-20250805" }\n' > "$rstale/.claude/settings.j
 assert_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" $'MODEL-STALE\tclaude-opus-4-1' \
   "early Opus 4 (4.1) is flagged as superseded by Opus 4.5+"
 
+# ── model upgrade opportunity (newer same-family model — not debt) ──
+printf '{ "model": "claude-opus-4-7" }\n' > "$rstale/.claude/settings.json"
+Hup="$(HOME="$sb_stale" "$AU" harness --repo "$rstale")"
+assert_contains "$Hup" $'MODEL-UPGRADE\tclaude-opus-4-7\tclaude-opus-4-8' \
+  "Opus 4.7 → MODEL-UPGRADE names Opus 4.8 as the newer same-family candidate"
+assert_not_contains "$Hup" "MODEL-STALE" \
+  "a current (4.7) model is an upgrade opportunity, not stale debt"
+printf '{ "model": "claude-opus-4-8" }\n' > "$rstale/.claude/settings.json"
+assert_not_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" "MODEL-UPGRADE" \
+  "the current flagship (Opus 4.8) is not flagged for upgrade"
+printf '{ "model": "claude-opus-4-1-20250805" }\n' > "$rstale/.claude/settings.json"
+assert_not_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" "MODEL-UPGRADE" \
+  "a superseded tier is flagged STALE, not as an upgrade opportunity"
+
 # ── @import following + stale references ──────────────────────
 sb_imp="$(make_sandbox)"; rimp="$sb_imp/r"; mkdir -p "$rimp/docs" "$rimp/scripts"
 printf 'x\n' > "$rimp/scripts/deploy.sh"          # exists → not stale

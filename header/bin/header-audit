@@ -15,6 +15,7 @@
 #         NESTED     <path>  <bytes>  <est_tokens>      (subdir CLAUDE.md/AGENTS.md; on-demand)
 #         MODEL      <value>                            (from settings, if found)
 #         MODEL-STALE <value>  <why>                    (model id is a superseded tier)
+#         MODEL-UPGRADE <value>  <recommended>  <why>   (newer same-family model shipped)
 #         HIT        <path>  <lineno>  <pattern_id>  <excerpt>
 #         STALE-REF  <path>  <lineno>  <ref>  <why>     (referenced path / @import not found)
 #         HOOK       <event>  <command-excerpt>  <file> (shell run on an agent event)
@@ -273,6 +274,23 @@ _model_staleness() {
   esac
 }
 
+# _model_upgrade <model-id> — flag an in-tier OPPORTUNITY (not debt): a newer,
+# same-price model in the SAME family has shipped that the current engine could
+# move to. Distinct from MODEL-STALE — the current model is fine, not superseded;
+# this is "a better default may exist, weigh it." Conservative: fires only for
+# recognized Opus tiers below the current flagship. The card (`/header opus-4.8`)
+# and the briefing carry the actual case + caveats; the audit just surfaces that
+# an opportunity exists and routes it to a provable experiment.
+_model_upgrade() {
+  lm="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  case "$lm" in
+    *opus-4-8*) : ;;                                   # already the current flagship
+    *opus-4-5*|*opus-4-6*|*opus-4-7*)
+      printf 'MODEL-UPGRADE\t%s\t%s\t%s\n' "$1" "claude-opus-4-8" \
+        "Opus 4.8 has shipped (same price; stronger coding/agentic + ~4x fewer unremarked code flaws). Weigh it: '/header opus-4.8', then prove it on your repo with 'header-experiment adopt'." ;;
+  esac
+}
+
 # _bash_security <settings.json> — emit raw Bash-tool permission signals, one per
 # line, by tracking which permissions sub-array each Bash(...) entry sits in:
 #   BYPASS               defaultMode = bypassPermissions (no gating)
@@ -328,6 +346,7 @@ case "$sub" in
       [ -n "$m" ] && { printf 'MODEL\t%s\n' "$m"; break; }
     done
     [ -n "$m" ] && _model_staleness "$m"
+    [ -n "$m" ] && _model_upgrade "$m"
     # Bash tool security posture (whitelist > blacklist; blacklists are
     # bypassable — see the briefing). Classify each settings file's policy.
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
