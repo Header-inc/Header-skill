@@ -1168,7 +1168,8 @@ assert_contains "$nm_err" "couldn't detect a test command" \
   "mine without --verify and no manifest explains it needs a test command"
 
 # ════════════════════════════════════════════════════════════════════
-# 0.18.0 — engine adoption: per-arm effort + the `adopt` scaffolder.
+# 0.18.0 — engine adoption: per-arm effort, `mine --adopt` (+ --sweep / --vs),
+# transcript-based model detection, and merge's offer-to-apply.
 # ════════════════════════════════════════════════════════════════════
 
 # ── per-arm effort reaches the agent invocation ──────────────────────
@@ -1235,12 +1236,12 @@ eff_rep="$(EXP report eff-1 2>&1)"
 assert_contains "$eff_rep" "[claude-opus-4-7@xhigh]" "report names arm A's engine (model@effort)"
 assert_contains "$eff_rep" "[claude-opus-4-8@high]"  "report names arm B's engine (model@effort)"
 
-# ── adopt: detect-current vs target, model+effort A/B (reuses mine fixture) ──
-# Pass --from / --from-effort so the test is deterministic (detection reads the
-# dev's real ~/.claude + env, which we must not depend on).
-EXP adopt adopt-1 --repo "$mine_repo" --verify "$VC" \
+# ── mine --adopt: detect-current vs target, model+effort A/B (reuses fixture) ──
+# Pass --from / --from-effort for a deterministic spec (detection reads the dev's
+# real ~/.claude + env, which we must not depend on — covered separately below).
+EXP mine adopt-1 --adopt --repo "$mine_repo" --verify "$VC" \
   --from claude-opus-4-7 --from-effort xhigh --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
-assert_exit 0 "$rc" "adopt scaffolds an engine-swap from the mine fixture"
+assert_exit 0 "$rc" "mine --adopt scaffolds an engine-swap from the fixture"
 adopt_spec="$(cat "$(exp_dir_for adopt-1)/spec")"
 assert_contains "$adopt_spec" "kind: engine-swap"       "adopt records kind: engine-swap"
 assert_contains "$adopt_spec" "model: claude-opus-4-7"  "adopt arm A = the current model (--from)"
@@ -1252,19 +1253,72 @@ assert_contains "$adopt_spec" "'claude-opus-4-8' @high matches your current 'cla
 EXP validate adopt-1 >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "the adopt-generated spec passes validate"
 
-# adopt refuses the degenerate case (already on the target engine)
-EXP adopt adopt-dup --repo "$mine_repo" --verify "$VC" \
+# refuses the degenerate case (already on the target engine) — BEFORE mining
+EXP mine adopt-dup --adopt --repo "$mine_repo" --verify "$VC" \
   --from claude-opus-4-8 --from-effort high --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
-assert_exit 1 "$rc" "adopt refuses when arm A already equals arm B"
-# adopt rejects an invalid --effort up front (no repo work needed)
-EXP adopt adopt-bad --effort bogus --from x --from-effort high >/dev/null 2>&1; rc=$?
-assert_exit 1 "$rc" "adopt rejects an invalid --effort level"
-# adopt with NO explicit id + a value-taking passthrough flag (--verify): the
-# flag's VALUE must not be captured as the id (regression — it became the id).
-EXP adopt --repo "$mine_repo" --verify "$VC" \
-  --from claude-opus-4-7 --from-effort xhigh --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
-assert_exit 0 "$rc" "adopt with no explicit id forwards --verify and uses the default id"
-assert_eq "yes" "$([ -f "$(exp_dir_for adopt-opus-4-8)/spec" ] && echo yes || echo no)" \
-  "adopt defaults the id to adopt-<model> when none is given"
+assert_exit 1 "$rc" "mine --adopt refuses when arm A already equals arm B"
+# rejects an invalid --effort up front (no mining)
+EXP mine adopt-bad --adopt --effort bogus --from x --from-effort high --repo "$mine_repo" --verify "$VC" >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "mine --adopt rejects an invalid --effort level"
+
+# detection: no --from + no id → defaults the id AND reads the current model from
+# the most recent transcript (a sandboxed HOME so it's deterministic).
+mkdir -p "$sb/fakehome/.claude/projects"
+printf '{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{}}}\n' > "$sb/fakehome/.claude/projects/sess.jsonl"
+env -u ANTHROPIC_MODEL -u CLAUDE_CODE_EFFORT_LEVEL HOME="$sb/fakehome" HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 \
+  "$HE" mine --adopt --repo "$mine_repo" --verify "$VC" --from-effort high --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "mine --adopt with no id + no --from: defaults the id and detects the model"
+det_spec="$(cat "$(exp_dir_for adopt-opus-4-8)/spec" 2>/dev/null)"
+assert_contains "$det_spec" "model: claude-opus-4-6" "arm A model detected from the most recent transcript"
+
+# ── --sweep: a 3rd effort arm + analyze/report --vs C (the offered frontier) ──
+EXP mine adopt-sweep --adopt --repo "$mine_repo" --verify "$VC" \
+  --from claude-opus-4-7 --from-effort xhigh --to claude-opus-4-8 --effort high --sweep --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "mine --adopt --sweep scaffolds a 3-arm engine-swap"
+sweep_spec="$(cat "$(exp_dir_for adopt-sweep)/spec")"
+assert_contains "$sweep_spec" "[arm:C]" "sweep adds a third arm C"
+assert_contains "$sweep_spec" $'[arm:C]\nmodel: claude-opus-4-8\neffort: xhigh' "arm C = target @ the next effort up (xhigh)"
+EXP run adopt-sweep --k 1 --adapter "$sb/adapter.sh" >/dev/null 2>&1
+EXP analyze adopt-sweep --vs C >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "analyze --vs C exits 0 on a 3-arm experiment"
+assert_eq "yes" "$([ -f "$(exp_dir_for adopt-sweep)/result-vs-C.json" ] && echo yes || echo no)" \
+  "analyze --vs C writes a side result file (canonical result.json preserved)"
+assert_contains "$(EXP report adopt-sweep --vs C 2>&1)" "claude-opus-4-8@xhigh" \
+  "report --vs C names arm C's engine"
+
+# ── merge offers to apply the engine win to settings.json (--yes = the y/N) ──
+mkdir -p "$(exp_dir_for em)/logs" "$(exp_dir_for em)/tasks" "$sb/em-repo/.claude"
+printf 'x\n' > "$(exp_dir_for em)/tasks/t.md"
+printf '{ "model": "claude-opus-4-7" }\n' > "$sb/em-repo/.claude/settings.json"
+cat > "$(exp_dir_for em)/spec" <<EOF
+id: em
+hypothesis: engine win
+repo: $sb/em-repo
+commit: HEAD
+replicates: 1
+non_inferiority_margin: 0.02
+kind: engine-swap
+
+[arm:A]
+model: claude-opus-4-7
+effort: xhigh
+overrides_dir:
+
+[arm:B]
+model: claude-opus-4-8
+effort: high
+overrides_dir:
+
+[task:t1]
+prompt: tasks/t.md
+verify: true
+timeout_s: 60
+EOF
+printf '{ "mode":"ab","arms":["A","B"],"verdict":"B wins (cost lower, success non-inferior)" }\n' > "$(exp_dir_for em)/result.json"
+EXP merge em --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "merge on an engine-swap with --yes exits 0"
+em_applied="$(cat "$sb/em-repo/.claude/settings.json")"
+assert_contains "$em_applied" '"model": "claude-opus-4-8"'  "merge --yes wrote the winning model into settings.json"
+assert_contains "$em_applied" '"effortLevel": "high"'        "merge --yes wrote the winning effortLevel into settings.json"
 
 t_done

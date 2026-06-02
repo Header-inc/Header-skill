@@ -1038,7 +1038,8 @@ _mine_validate() {
 cmd_mine() {
   local id="" repo="" limit=150 max_files=5 max_tasks=8 verify_override=""
   local from="" to="" arm_in=() reps=3 margin=0.02 since="" vtimeout=600
-  local list_only=0 yes=0 desc="" hypothesis="" effort_a="" effort_b="" kind=""
+  local list_only=0 yes=0 desc="" hypothesis="" kind=""
+  local adopt=0 effort="" from_effort="" sweep=0 sweep_explicit=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo)        repo="${2:-}"; shift 2 ;;
@@ -1048,8 +1049,11 @@ cmd_mine() {
       --verify)      verify_override="${2:-}"; shift 2 ;;
       --from)        from="${2:-}"; shift 2 ;;
       --to)          to="${2:-}"; shift 2 ;;
-      --effort-a)    effort_a="${2:-}"; shift 2 ;;
-      --effort-b)    effort_b="${2:-}"; shift 2 ;;
+      --adopt)       adopt=1; shift ;;
+      --effort)      effort="${2:-}"; shift 2 ;;
+      --from-effort) from_effort="${2:-}"; shift 2 ;;
+      --sweep)       sweep=1; sweep_explicit=1; shift ;;
+      --no-sweep)    sweep=0; sweep_explicit=1; shift ;;
       --kind)        kind="${2:-}"; shift 2 ;;
       --arm)         arm_in+=("${2:-}"); shift 2 ;;
       --replicates)  reps="${2:-3}"; shift 2 ;;
@@ -1073,9 +1077,8 @@ by the repo's own suite. No task prompts or verify commands to hand-author.
   --max-files N     skip commits changing more than N files (default 5)
   --max-tasks N     stop after N validated tasks (default 8)
   --verify CMD      test command (default: auto-detected from manifests)
-  --from M --to N   model-swap arms A=M, B=N (default: opus-4-8 vs sonnet-4-6)
-  --effort-a LEVEL  effort for arm A (low|medium|high|xhigh|max); default-arm path
-  --effort-b LEVEL  effort for arm B (default-arm path; see also: adopt)
+  --from M --to N   model-swap arms A=M, B=N (default: opus-4-8 vs sonnet-4-6).
+                    Effort is @-encoded per arm: --from claude-opus-4-7@xhigh.
   --kind KIND       record an explicit kind: in the spec (e.g. engine-swap)
   --arm L[:M[:OVD]] explicit arm (repeatable) — overrides --from/--to
   --replicates N    replicates per (task,arm) (default 3)
@@ -1083,11 +1086,23 @@ by the repo's own suite. No task prompts or verify commands to hand-author.
   --timeout S       per-candidate suite timeout during validation (default 600)
   --list            discover candidates and print them; no suite runs, no write
   --yes             skip the validation confirmation prompt
+
+Engine adoption — "should you move your harness to a newer model?":
+  --adopt           arm A = the model+effort you run TODAY (auto-detected);
+                    arm B = --to MODEL (default claude-opus-4-8) @ --effort LEVEL
+                    (default high). Writes kind: engine-swap. The card's proof.
+  --effort LEVEL    arm B effort (low|medium|high|xhigh|max; default high)
+  --from MODEL[@E]  override the detected current model (and effort)
+  --from-effort L   override the detected current effort
+  --sweep           offer a 3rd arm at the next effort up (the effort frontier);
+                    interactive by default — --sweep forces it, --no-sweep skips
 EOF
         return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
+  # --adopt defaults the id to adopt-<target> so the card's CTA is a bare command.
+  [ "$adopt" -eq 1 ] && [ -z "$id" ] && id="adopt-$(printf '%s' "${to:-claude-opus-4-8}" | sed 's/^claude-//; s/[^a-zA-Z0-9._-]/-/g')"
   [ -n "$id" ] || { err "<id> required"; return 1; }
   case "$id" in *[!a-zA-Z0-9_.-]*) err "id must be [a-zA-Z0-9_.-]+ (got '$id')"; return 1 ;; esac
   case "$limit$max_files$max_tasks$vtimeout" in *[!0-9]*) err "--limit/--max-files/--max-tasks/--timeout must be integers"; return 1 ;; esac
@@ -1096,6 +1111,44 @@ EOF
   [ -n "$repo" ] || repo="$(pwd)"
   repo="$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" \
     || { err "not a git repository (mine needs git history): ${repo:-$(pwd)}"; return 1; }
+
+  # ── engine-adoption setup (--adopt): resolve arms + guards BEFORE mining, so a
+  # degenerate/invalid config fails fast instead of after the suite-validation pass.
+  local adopt_sweep_eff=""
+  if [ "$adopt" -eq 1 ]; then
+    [ -n "$to" ] || to="claude-opus-4-8"
+    [ -n "$effort" ] || effort="high"
+    case "$effort" in low|medium|high|xhigh|max) ;; *) err "--effort must be low|medium|high|xhigh|max (got '$effort')"; return 1 ;; esac
+    # Arm A = the engine you run today. Detect unless overridden; an @-suffix on
+    # --from carries its effort. Undetectable → assume pre-4.8 Opus and flag loudly.
+    case "$from" in *@*) from_effort="${from_effort:-${from##*@}}"; from="${from%@*}" ;; esac
+    local _assumed=0
+    [ -n "$from" ] || from="$(detect_current_model "$repo")"
+    [ -n "$from" ] || { from="claude-opus-4-7"; _assumed=1; }
+    [ -n "$from_effort" ] || from_effort="$(detect_current_effort "$from" "$repo")"
+    case "$from_effort" in low|medium|high|xhigh|max) ;; *) err "current effort must be low|medium|high|xhigh|max (got '$from_effort'); pass --from-effort"; return 1 ;; esac
+    [ -n "$kind" ] || kind="engine-swap"
+    [ -n "$hypothesis" ] || hypothesis="'${to}' @${effort} matches your current '${from}' @${from_effort} on this repo's own historical fixes (tests-oracle), at equal-or-lower cost."
+    [ -n "$desc" ] || desc="Adopt ${to}: engine swap vs current ${from}@${from_effort}"
+    if [ "$from" = "$to" ] && [ "$from_effort" = "$effort" ]; then
+      err "arm A ($from@$from_effort) already equals arm B ($to@$effort) — nothing to compare. Use --effort or --to to differ."
+      return 1
+    fi
+    [ "$_assumed" -eq 1 ] && {
+      err "couldn't detect your current model (no ANTHROPIC_MODEL / pinned settings / recent transcript) — ASSUMING arm A = claude-opus-4-7@${from_effort}."
+      err "Re-run with --from <your-model> [--from-effort <level>] if wrong — arm A is the control, and a wrong identity invalidates the comparison."
+    }
+    # --sweep: offer a 3rd arm at the next effort up (the effort frontier).
+    if [ "$sweep" -eq 0 ] && [ "$sweep_explicit" -eq 0 ] && [ "$yes" -ne 1 ] && [ -t 0 ]; then
+      printf 'Also add a 3rd arm above %s@%s to map the effort frontier? [y/N] ' "$to" "$effort" >&2
+      local _sw=""; IFS= read -r _sw; case "$_sw" in [yY]|[yY][eE][sS]) sweep=1 ;; esac
+    fi
+    if [ "$sweep" -eq 1 ]; then
+      case "$effort" in high) adopt_sweep_eff="xhigh" ;; xhigh) adopt_sweep_eff="max" ;; *) adopt_sweep_eff="" ;; esac
+      [ -n "$adopt_sweep_eff" ] || echo "mine --adopt: --sweep has no distinct effort above '$effort' — running 2-arm." >&2
+    fi
+    echo "Engine-adoption — A=${from}@${from_effort} (current)  vs  B=${to}@${effort}$([ -n "$adopt_sweep_eff" ] && printf '  +C=%s@%s' "$to" "$adopt_sweep_eff") (candidate)" >&2
+  fi
 
   if [ "$list_only" -eq 0 ]; then
     local dir_pre; dir_pre="$(exp_dir "$id")"
@@ -1206,9 +1259,14 @@ EOF
     return 1
   fi
 
-  # ── arms (default: a model swap; --from/--to or --arm override) ──
+  # ── arms (default: a model swap; --adopt / --arm / --from/--to override) ──
+  # Effort is @-encoded in the arm's model token ("model@effort"); the spec
+  # writer below splits it back into model: / effort: lines.
   local arms=()
-  if [ "${#arm_in[@]}" -gt 0 ]; then
+  if [ "$adopt" -eq 1 ]; then
+    arms=("A:${from}@${from_effort}" "B:${to}@${effort}")
+    [ -n "$adopt_sweep_eff" ] && arms+=("C:${to}@${adopt_sweep_eff}")
+  elif [ "${#arm_in[@]}" -gt 0 ]; then
     arms=("${arm_in[@]}")
   elif [ -n "$from" ] || [ -n "$to" ]; then
     arms=("A:${from}" "B:${to}")
@@ -1274,19 +1332,16 @@ EOF
     [ -n "$kind" ] && printf 'kind: %s\n' "$kind"
     [ -n "$include_list" ] && printf 'worktree_include: %s\n' "$include_list"
     printf '\n'
-    local arm label restp model ovd
+    local arm label restp model ovd eff
     for arm in "${arms[@]}"; do
       label="${arm%%:*}"; restp="${arm#*:}"; [ "$restp" = "$arm" ] && restp=""
       model="${restp%%:*}"; ovd=""
       case "$restp" in *:*) ovd="${restp#*:}" ;; esac
+      # Effort is @-encoded in the model token: "claude-opus-4-8@xhigh".
+      eff=""; case "$model" in *@*) eff="${model##*@}"; model="${model%@*}" ;; esac
       printf '[arm:%s]\n' "$label"
       printf 'model: %s\n' "$model"
-      # Per-arm effort for the default A/B arms (engine-swap / adopt). Generic
-      # --arm specs don't carry effort here — hand-edit the spec for that.
-      case "$label" in
-        A) [ -n "$effort_a" ] && printf 'effort: %s\n' "$effort_a" ;;
-        B) [ -n "$effort_b" ] && printf 'effort: %s\n' "$effort_b" ;;
-      esac
+      [ -n "$eff" ] && printf 'effort: %s\n' "$eff"
       printf 'overrides_dir: %s\n\n' "$ovd"
     done
     local v child parent paths
@@ -1315,23 +1370,37 @@ EOF
   echo ""
   echo "  Next:"
   echo "    header-experiment run $id --aa     # noise-floor / flaky-test check FIRST"
-  echo "    header-experiment run $id          # the A/B"
-  echo "    header-experiment analyze $id && header-experiment report $id"
+  echo "    header-experiment run $id          # the matrix (all arms)"
+  if [ "${#arms[@]}" -ge 3 ]; then
+    echo "    header-experiment analyze $id && header-experiment report $id              # A vs B"
+    echo "    header-experiment analyze $id --vs C && header-experiment report $id --vs C   # A vs C (effort frontier)"
+  else
+    echo "    header-experiment analyze $id && header-experiment report $id"
+  fi
   _autosync "$id"        # status: defined
 }
 
-# ── ADOPT (engine adoption: "should you move your harness to <model>?") ───────
-# A thin front door over `mine`: detect the engine the user runs TODAY (arm A),
-# pit it against a target model at a chosen effort (arm B), on tasks mined from
-# THIS repo's own history. Launch instance: Opus 4.8. The headline it lets you
-# prove on your OWN code is the System Card finding that 4.8 at a LOWER effort can
-# match your current engine at a higher one — same quality, less cost. 2-arm by
-# design: the analyzer is pairwise (A vs B), so a second effort is a second run
-# (`--effort xhigh`), not a third arm.
+# ── Engine detection (for `mine --adopt`) ─────────────────────────────────────
+# Figure out the model + effort the user's harness runs TODAY, so the adoption
+# A/B's control (arm A) is their real engine, not a guess.
 
-# detect_current_model <repo> — the model the user's harness runs today, best
-# effort: $ANTHROPIC_MODEL, else the `model` in repo/user Claude Code settings.
-# Empty when undetectable — we never silently guess the control's identity.
+# _recent_transcript_model — the most recent PRIMARY model (opus/sonnet, not the
+# background haiku) in the user's Claude Code transcripts. This is the reliable
+# "what are you actually running" signal: settings often pin nothing (the user
+# rides the default alias), but every session records the model that really ran.
+_recent_transcript_model() {
+  local tdir="$HOME/.claude/projects" newest
+  [ -d "$tdir" ] || return 0
+  newest="$(ls -t "$tdir"/*.jsonl 2>/dev/null | head -1)"
+  [ -f "$newest" ] || return 0
+  grep -oE '"model":"claude-(opus|sonnet)-[0-9][^"]*"' "$newest" 2>/dev/null \
+    | tail -1 | sed 's/.*"model":"//; s/"$//'
+}
+
+# detect_current_model <repo> — the model the user's harness runs today. Order:
+# $ANTHROPIC_MODEL → the `model` in repo/user settings → the most recent primary
+# model in their transcripts (what actually ran). Empty only when there's no
+# signal at all (no env, no pinned model, no usage history).
 detect_current_model() {
   local repo="${1:-.}" m="" s
   [ -n "${ANTHROPIC_MODEL:-}" ] && { printf '%s' "$ANTHROPIC_MODEL"; return; }
@@ -1340,6 +1409,7 @@ detect_current_model() {
     m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
     [ -n "$m" ] && { printf '%s' "$m"; return; }
   done
+  _recent_transcript_model
 }
 
 # detect_current_effort <model> <repo> — the effort the harness runs today:
@@ -1360,82 +1430,6 @@ detect_current_effort() {
     *opus-4-7*) printf 'xhigh' ;;
     *)          printf 'high'  ;;
   esac
-}
-
-cmd_adopt() {
-  local id="" to="claude-opus-4-8" effort="high" from="" from_effort="" repo=""
-  local passthrough=()
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --to)          to="${2:-}"; shift 2 ;;
-      --effort)      effort="${2:-}"; shift 2 ;;
-      --from)        from="${2:-}"; shift 2 ;;
-      --from-effort) from_effort="${2:-}"; shift 2 ;;
-      --id)          id="${2:-}"; shift 2 ;;
-      --repo)        repo="${2:-}"; passthrough+=(--repo "${2:-}"); shift 2 ;;
-      # mine's value-taking flags — forward WITH their value, so the value can't
-      # be mistaken for the (optional) positional id.
-      --verify|--limit|--max-files|--max-tasks|--replicates|--margin|--since|--timeout)
-                     passthrough+=("$1" "${2:-}"); shift 2 ;;
-      -h|--help)
-        cat <<EOF
-Usage: header-experiment adopt [<id>] [options]
-
-"Should you move your coding harness to a newer model?" Mines THIS repo's git
-history into a tests-oracle experiment and pits your CURRENT engine (arm A)
-against a target (arm B) at a chosen effort. Launch default: Opus 4.8 @high.
-
-  --to MODEL        target model for arm B (default: claude-opus-4-8)
-  --effort LEVEL    arm B effort: low|medium|high|xhigh|max (default: high)
-  --from MODEL      override the detected current model (arm A)
-  --from-effort L   override the detected current effort (arm A)
-  + mine's flags:   --repo --limit --max-tasks --verify --replicates --list --yes
-
-2-arm by design (the analyzer is pairwise). To also test xhigh, run again with
---effort xhigh — a second A/B against the same control.
-EOF
-        return 0 ;;
-      # A bare token is the optional id (first one wins); any other flag we don't
-      # recognize is forwarded for mine to handle or reject.
-      -*) passthrough+=("$1"); shift ;;
-      *)  [ -z "$id" ] && id="$1" || passthrough+=("$1"); shift ;;
-    esac
-  done
-
-  case "$effort" in low|medium|high|xhigh|max) ;; *) err "--effort must be low|medium|high|xhigh|max (got '$effort')"; return 1 ;; esac
-
-  local det_repo="$repo"; [ -n "$det_repo" ] || det_repo="$(pwd)"
-
-  # Arm A = the engine you run today. Detect unless overridden; if undetectable,
-  # assume a pre-4.8 Opus and FLAG it loudly (a wrong control invalidates the A/B).
-  [ -n "$from" ] || from="$(detect_current_model "$det_repo")"
-  local assumed=0
-  [ -n "$from" ] || { from="claude-opus-4-7"; assumed=1; }
-  [ -n "$from_effort" ] || from_effort="$(detect_current_effort "$from" "$det_repo")"
-  if [ "$assumed" -eq 1 ]; then
-    err "couldn't detect your current model (no ANTHROPIC_MODEL / settings 'model') — ASSUMING arm A = claude-opus-4-7@${from_effort}."
-    err "If that's wrong, re-run with --from <your-model> [--from-effort <level>]. Arm A is the control; a wrong identity invalidates the comparison."
-  fi
-
-  [ -n "$id" ] || id="adopt-$(printf '%s' "$to" | sed 's/^claude-//; s/[^a-zA-Z0-9._-]/-/g')"
-
-  # Degenerate guard: A == B means you already run the target engine.
-  if [ "$from" = "$to" ] && [ "$from_effort" = "$effort" ]; then
-    err "arm A ($from@$from_effort) already equals arm B ($to@$effort) — nothing to compare."
-    err "Use --effort to test a different level, or --to a different model."
-    return 1
-  fi
-
-  local hypo desc
-  hypo="'${to}' @${effort} matches your current '${from}' @${from_effort} on this repo's own historical fixes (tests-oracle), at equal-or-lower cost."
-  desc="Adopt ${to}: engine swap vs current ${from}@${from_effort} (B=${to}@${effort})"
-
-  echo "Engine-adoption experiment — A=${from}@${from_effort} (current)  vs  B=${to}@${effort} (candidate)" >&2
-
-  local mine_args=("$id" --from "$from" --to "$to" --effort-a "$from_effort" --effort-b "$effort" \
-                   --kind engine-swap --hypothesis "$hypo" --description "$desc")
-  [ "${#passthrough[@]}" -gt 0 ] && mine_args+=("${passthrough[@]}")
-  cmd_mine "${mine_args[@]}"
 }
 
 # ── VALIDATE ──────────────────────────────────────────────────
@@ -2042,13 +2036,14 @@ EOF
 # bootstrap the per-task differences. CI = 2.5 / 97.5 percentiles of resampled
 # means. Verdict = §6.5: cost CI < 0 AND success diff CI ≥ −δ.
 cmd_analyze() {
-  local id="" aa=0 seed="42" boots="2000"
+  local id="" aa=0 seed="42" boots="2000" vs=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --aa)        aa=1; shift ;;
+      --vs)        vs="${2:-}"; shift 2 ;;
       --seed)      seed="${2:-42}"; shift 2 ;;
       --bootstrap) boots="${2:-2000}"; shift 2 ;;
-      -h|--help)   echo "Usage: header-experiment analyze <id> [--aa] [--seed N] [--bootstrap N]"; return 0 ;;
+      -h|--help)   echo "Usage: header-experiment analyze <id> [--aa] [--vs ARM] [--seed N] [--bootstrap N]"; return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
@@ -2063,12 +2058,16 @@ cmd_analyze() {
   if [ "$aa" -eq 1 ]; then
     runs_file="$dir/runs-aa.jsonl"; out_file="$dir/result-aa.json"; mode="aa"
   else
-    runs_file="$dir/runs.jsonl"; out_file="$dir/result.json"; mode="ab"
+    runs_file="$dir/runs.jsonl"; mode="ab"
+    # --vs ARM compares the control (A) against ARM instead of the 2nd arm, and
+    # writes a side file so the canonical result.json (A vs B, the synced one)
+    # is preserved — for the engine-adoption effort sweep (A vs B@high, A vs C@xhigh).
+    if [ -n "$vs" ]; then out_file="$dir/result-vs-${vs}.json"; else out_file="$dir/result.json"; fi
   fi
   [ -f "$runs_file" ] && [ -s "$runs_file" ] || { err "no runs at $runs_file (run first)"; return 1; }
 
   awk -v seed="$seed" -v boots="$boots" -v margin="$margin" -v mode="$mode" \
-      -v out_file="$out_file" '
+      -v out_file="$out_file" -v target="$vs" '
     function jnum(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*-?[0-9.]+"
       if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return s+0 } return 0 }
     function jstr(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*\"[^\"]*\""
@@ -2114,7 +2113,8 @@ cmd_analyze() {
           print "analyze: need 2 arms in runs.jsonl" > "/dev/stderr"
         exit 1
       }
-      A = Arms[1]; B = Arms[2]
+      if (target != "" && !(target in Aseen)) { printf "analyze: --vs arm \"%s\" not found in runs.jsonl\n", target > "/dev/stderr"; exit 1 }
+      A = Arms[1]; B = (target != "" ? target : Arms[2])
       # Per-task means per arm; per-task pair-diff (B − A).
       n_paired = 0
       n_per_arm_A = 0; n_per_arm_B = 0
@@ -2279,7 +2279,7 @@ cmd_analyze() {
 
       printf "Wrote %s\n", out_file
     }' "$runs_file"
-  if [ "$aa" -eq 0 ]; then _autosync "$id"; fi   # status: analyzed (skip --aa); never alters exit
+  if [ "$aa" -eq 0 ] && [ -z "$vs" ]; then _autosync "$id"; fi   # sync the canonical A-vs-B result (skip --aa / side --vs); never alters exit
 }
 
 # _fmt_engine <model> <effort> → "model@effort" | "model" | "@effort" | "" (empty
@@ -2294,28 +2294,33 @@ _fmt_engine() {
 
 # ── REPORT ────────────────────────────────────────────────────
 cmd_report() {
-  local id="" aa=0
+  local id="" aa=0 vs=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --aa)      aa=1; shift ;;
-      -h|--help) echo "Usage: header-experiment report <id> [--aa]"; return 0 ;;
+      --vs)      vs="${2:-}"; shift 2 ;;
+      -h|--help) echo "Usage: header-experiment report <id> [--aa] [--vs ARM]"; return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
   [ -n "$id" ] || { err "<id> required"; return 1; }
   local dir; dir="$(exp_dir "$id")"
-  local rf; rf="$dir/$([ "$aa" -eq 1 ] && echo result-aa.json || echo result.json)"
-  [ -f "$rf" ] || { err "no result at $rf — run 'analyze $id$([ "$aa" -eq 1 ] && echo ' --aa')' first"; return 1; }
+  local rf
+  if [ "$aa" -eq 1 ]; then rf="$dir/result-aa.json"
+  elif [ -n "$vs" ]; then rf="$dir/result-vs-${vs}.json"
+  else rf="$dir/result.json"; fi
+  [ -f "$rf" ] || { err "no result at $rf — run 'analyze $id$([ "$aa" -eq 1 ] && echo ' --aa')$([ -n "$vs" ] && echo " --vs $vs")' first"; return 1; }
 
   beta_banner
 
-  # Engine descriptors (model@effort) for the first two arms, read from the spec
-  # so the report names what each arm actually ran — central to engine-swap.
-  local spec="$dir/spec" eng_a="" eng_b="" _arms=() _l
+  # Engine descriptors (model@effort), read from the spec so the report names what
+  # each arm actually ran. The treatment is the 2nd arm, or --vs ARM when set.
+  local spec="$dir/spec" eng_a="" eng_b="" _arms=() _l _btgt=""
   if [ -f "$spec" ]; then
     for _l in $(spec_list_sections "$spec" arm); do _arms+=("$_l"); done
     [ "${#_arms[@]}" -ge 1 ] && eng_a="$(_fmt_engine "$(spec_section_get "$spec" arm "${_arms[0]}" model)" "$(spec_section_get "$spec" arm "${_arms[0]}" effort)")"
-    [ "${#_arms[@]}" -ge 2 ] && eng_b="$(_fmt_engine "$(spec_section_get "$spec" arm "${_arms[1]}" model)" "$(spec_section_get "$spec" arm "${_arms[1]}" effort)")"
+    _btgt="${_arms[1]:-}"; [ -n "$vs" ] && _btgt="$vs"
+    [ -n "$_btgt" ] && eng_b="$(_fmt_engine "$(spec_section_get "$spec" arm "$_btgt" model)" "$(spec_section_get "$spec" arm "$_btgt" effort)")"
   fi
 
   awk -v eng_a="$eng_a" -v eng_b="$eng_b" '
@@ -2443,22 +2448,59 @@ EOF
 #   - arms/B/ is empty (model-swap) → no files to copy; print "the win is the
 #     model — update your default to <B's model>" and stop (the harness
 #     doesn't manage your runtime model selection for you).
+# _json_set_str <json-text> <key> <value> → the JSON with top-level "key":"value"
+# set (replaced if present, else inserted after the opening brace). Empty value →
+# unchanged. No jq: good enough for the simple top-level string keys we set
+# (model / effortLevel), and `merge` shows a diff + asks before writing, so the
+# human is the safety net for any edge the text edit doesn't handle.
+_json_set_str() {
+  local json="$1" key="$2" val="$3"
+  [ -n "$val" ] || { printf '%s' "$json"; return; }
+  if printf '%s' "$json" | grep -q "\"$key\"[[:space:]]*:"; then
+    printf '%s' "$json" | sed "s/\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"$key\": \"$val\"/"
+  else
+    printf '%s' "$json" | awk -v k="$key" -v v="$val" '
+      BEGIN{done=0}
+      !done && /{/ {
+        i=index($0,"{"); head=substr($0,1,i); tail=substr($0,i+1)
+        rest=tail; sub(/^[[:space:]]*/,"",rest)
+        if (rest ~ /^}/) printf "%s\n  \"%s\": \"%s\"%s\n", head, k, v, tail
+        else            printf "%s\n  \"%s\": \"%s\",%s\n", head, k, v, tail
+        done=1; next
+      }
+      {print}
+    '
+  fi
+}
+
+# _settings_apply_engine <file> <model> <effortLevel> → the proposed settings.json
+# content (existing content or a bare {} with model/effortLevel set). Empty args
+# are left unset (e.g. effort omitted for a max win — settings can't hold it).
+_settings_apply_engine() {
+  local file="$1" model="$2" eff="$3" json
+  if [ -s "$file" ]; then json="$(cat "$file")"; else json="{}"; fi
+  json="$(_json_set_str "$json" model "$model")"
+  json="$(_json_set_str "$json" effortLevel "$eff")"
+  printf '%s' "$json"
+}
+
 cmd_merge() {
-  local id="" yes=0 force=0
+  local id="" yes=0 force=0 vs=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --yes|-y)  yes=1; shift ;;
       --force)   force=1; shift ;;
-      -h|--help) echo "Usage: header-experiment merge <id> [--yes] [--force]"; return 0 ;;
+      --vs)      vs="${2:-}"; shift 2 ;;
+      -h|--help) echo "Usage: header-experiment merge <id> [--yes] [--force] [--vs ARM]"; return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
   [ -n "$id" ] || { err "<id> required"; return 1; }
   local dir; dir="$(exp_dir "$id")"
   local spec="$dir/spec"
-  local rf="$dir/result.json"
+  local rf="$dir/result.json"; [ -n "$vs" ] && rf="$dir/result-vs-${vs}.json"
   [ -f "$spec" ] || { err "no spec for $id"; return 1; }
-  [ -f "$rf" ]   || { err "no result.json — run 'analyze $id' first"; return 1; }
+  [ -f "$rf" ]   || { err "no $(basename "$rf") — run 'analyze $id$([ -n "$vs" ] && echo " --vs $vs")' first"; return 1; }
 
   # Pull the verdict + arm labels out of result.json. (Simple greps; the file
   # is written by us so the shape is stable.)
@@ -2480,7 +2522,7 @@ cmd_merge() {
   case "$repo" in /*) ;; *) repo="$dir/$repo" ;; esac
   [ -d "$repo" ] || { err "repo not found: $repo"; return 1; }
 
-  # Locate arm B by reading the [arm:*] sections — second declared arm is B.
+  # Locate the control (A, first arm) and the treatment (2nd arm, or --vs ARM).
   local arms_list; arms_list="$(spec_list_sections "$spec" arm)"
   local i=0 first_arm="" second_arm=""
   local L
@@ -2490,7 +2532,11 @@ cmd_merge() {
     [ "$i" -eq 1 ] && first_arm="$L"
     [ "$i" -eq 2 ] && second_arm="$L"
   done
-  [ -n "$second_arm" ] || { err "couldn't find arm B in spec"; return 1; }
+  if [ -n "$vs" ]; then
+    printf '%s\n' "$arms_list" | grep -qx "$vs" || { err "--vs arm '$vs' is not in the spec"; return 1; }
+    second_arm="$vs"
+  fi
+  [ -n "$second_arm" ] || { err "couldn't find the treatment arm in spec"; return 1; }
 
   local b_overrides b_model
   b_overrides="$(spec_section_get "$spec" arm "$second_arm" overrides_dir)"
@@ -2515,20 +2561,48 @@ This experiment's win is an engine change (model and/or effort), not a code chan
 
 No override files to copy. Point your harness at arm B's engine:
 EOF
-    [ -n "$b_model" ] && echo "  • model:  \"model\": \"$b_model\" in .claude/settings.json   (or /model $b_model)"
+    [ -n "$b_model" ] && echo "  • model:  \"model\": \"$b_model\"   (or /model $b_model)"
     if [ -n "$b_eff" ]; then
       if [ "$b_eff" = "max" ]; then
         echo "  • effort: /effort max   (session-only — settings.json can't persist max; or export CLAUDE_CODE_EFFORT_LEVEL=max)"
       else
-        echo "  • effort: \"effortLevel\": \"$b_eff\" in .claude/settings.json   (or /effort $b_eff)"
+        echo "  • effort: \"effortLevel\": \"$b_eff\"   (or /effort $b_eff)"
       fi
     fi
     echo ""
-    echo "(header-config doesn't manage model/effort — these live in your Claude Code settings.)"
+
+    # Offer to apply it (the user's final call). Persistable levels only — settings
+    # can't hold max — and we show the resulting file + confirm before writing.
+    local settings="$repo/.claude/settings.json"
+    local persist_eff="$b_eff"; [ "$b_eff" = "max" ] && persist_eff=""
+    if [ -n "$b_model" ] || [ -n "$persist_eff" ]; then
+      local proposed; proposed="$(_settings_apply_engine "$settings" "$b_model" "$persist_eff")"
+      echo "── proposed $settings ──"
+      if [ -f "$settings" ]; then diff -u "$settings" <(printf '%s\n' "$proposed") || true
+      else printf '%s\n' "$proposed" | sed 's/^/+ /'; fi
+      echo "────────────────────────"
+      local do_apply=0
+      if [ "$yes" -eq 1 ]; then do_apply=1
+      elif [ -t 0 ]; then
+        printf 'Apply this to %s? [y/N] ' "$settings"
+        local _ans=""; IFS= read -r _ans; case "$_ans" in [yY]|[yY][eE][sS]) do_apply=1 ;; esac
+      else
+        echo "(no TTY — not applying; re-run with --yes to write it, or set the lines above yourself.)"
+      fi
+      if [ "$do_apply" -eq 1 ]; then
+        mkdir -p "$repo/.claude"
+        printf '%s\n' "$proposed" > "$settings"
+        : > "$dir/.merged" 2>/dev/null || true
+        echo "✓ Applied to $settings."
+        [ "$b_eff" = "max" ] && echo "  (effort 'max' is session-only — also run '/effort max'; settings can't persist it.)"
+        echo "  Review & commit:  cd $repo && git add .claude/settings.json && git commit"
+      else
+        echo "Not applied — set it yourself with the lines above."
+      fi
+    fi
     [ -n "$ledger_key" ] && {
       echo ""
-      echo "Once you've applied it manually, record the disposition:"
-      echo "  header-ledger record applied \"$ledger_key\" --title \"<short title>\""
+      echo "Record the disposition:  header-ledger record applied \"$ledger_key\" --title \"<short title>\""
     }
     return 0
   fi
@@ -2975,9 +3049,9 @@ Usage: header-experiment <command> ...
   mine <id>       MINE git history → a runnable tests-oracle experiment (no task
                     prompts or verify commands to author). --list to preview
                     candidates; --from/--to to set the model-swap arms.
-  adopt [<id>]    "should you move your harness to <model>?" — mine + a model+
-                    effort A/B of your CURRENT engine vs a target (default Opus
-                    4.8 @high). --to MODEL, --effort LEVEL, --from to override.
+                    --adopt → "should you move to a newer model?": A/B your
+                    CURRENT engine vs a target (default opus-4-8 @high); --sweep
+                    offers a 3rd effort arm. (The engine-adoption card's proof.)
   new <id>        audit-aware scaffolder (RECOMMENDED — interactive or one-shot)
                     --kind prompt-debt-deletion --file F --lines L1,L2,...
                     --kind model-swap --from M --to N
@@ -3000,7 +3074,6 @@ EOF
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
   mine)     cmd_mine     "$@" ;;
-  adopt)    cmd_adopt    "$@" ;;
   new)      cmd_new      "$@" ;;
   define)   cmd_define   "$@" ;;
   validate) cmd_validate "$@" ;;
