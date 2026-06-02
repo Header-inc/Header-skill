@@ -69,10 +69,12 @@
 #
 #   [arm:A]
 #   model: claude-opus-4-7
+#   effort:                       # OPTIONAL — low|medium|high|xhigh|max; blank = inherit
 #   overrides_dir:                # blank = no overrides (control)
 #
 #   [arm:B]
 #   model: claude-sonnet-4-6
+#   effort: high                  # OPTIONAL — Claude Code reasoning effort for this arm
 #   overrides_dir: arms/B         # optional: dir of files copied into worktree
 #
 #   [task:t1]
@@ -82,11 +84,13 @@
 #
 # Env:
 #   HEADER_HOME                 state dir (default: $HOME/.header)
-#   HEADER_EXPERIMENT_ADAPTER   override the agent invocation (testing). When
-#                               set, the runner calls:
-#                                 $HEADER_EXPERIMENT_ADAPTER <task_id> <arm> <rep> <prompt_file>
-#                               in the worktree CWD; the adapter must print one
-#                               JSON object on stdout with at least
+#   HEADER_EXPERIMENT_ADAPTER   override the agent invocation (testing; also the
+#                               seam for non-Claude harnesses). When set, the
+#                               runner calls:
+#                                 $HEADER_EXPERIMENT_ADAPTER <task_id> <arm> <rep> <prompt_file> <model> <effort>
+#                               in the worktree CWD; <model>/<effort> are the
+#                               arm's settings ("" = inherit). The adapter must
+#                               print one JSON object on stdout with at least
 #                               {"input_tokens":N,"output_tokens":N,...,
 #                                "total_cost_usd":F,"model":"..."}.
 #                               Defaults to a real `claude -p` invocation.
@@ -1034,7 +1038,7 @@ _mine_validate() {
 cmd_mine() {
   local id="" repo="" limit=150 max_files=5 max_tasks=8 verify_override=""
   local from="" to="" arm_in=() reps=3 margin=0.02 since="" vtimeout=600
-  local list_only=0 yes=0 desc="" hypothesis=""
+  local list_only=0 yes=0 desc="" hypothesis="" effort_a="" effort_b="" kind=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo)        repo="${2:-}"; shift 2 ;;
@@ -1044,6 +1048,9 @@ cmd_mine() {
       --verify)      verify_override="${2:-}"; shift 2 ;;
       --from)        from="${2:-}"; shift 2 ;;
       --to)          to="${2:-}"; shift 2 ;;
+      --effort-a)    effort_a="${2:-}"; shift 2 ;;
+      --effort-b)    effort_b="${2:-}"; shift 2 ;;
+      --kind)        kind="${2:-}"; shift 2 ;;
       --arm)         arm_in+=("${2:-}"); shift 2 ;;
       --replicates)  reps="${2:-3}"; shift 2 ;;
       --margin)      margin="${2:-0.02}"; shift 2 ;;
@@ -1067,6 +1074,9 @@ by the repo's own suite. No task prompts or verify commands to hand-author.
   --max-tasks N     stop after N validated tasks (default 8)
   --verify CMD      test command (default: auto-detected from manifests)
   --from M --to N   model-swap arms A=M, B=N (default: opus-4-8 vs sonnet-4-6)
+  --effort-a LEVEL  effort for arm A (low|medium|high|xhigh|max); default-arm path
+  --effort-b LEVEL  effort for arm B (default-arm path; see also: adopt)
+  --kind KIND       record an explicit kind: in the spec (e.g. engine-swap)
   --arm L[:M[:OVD]] explicit arm (repeatable) — overrides --from/--to
   --replicates N    replicates per (task,arm) (default 3)
   --since REF       only mine commits in REF..HEAD
@@ -1261,6 +1271,7 @@ EOF
     printf 'commit: HEAD\n'
     printf 'replicates: %s\n' "$reps"
     printf 'non_inferiority_margin: %s\n' "$margin"
+    [ -n "$kind" ] && printf 'kind: %s\n' "$kind"
     [ -n "$include_list" ] && printf 'worktree_include: %s\n' "$include_list"
     printf '\n'
     local arm label restp model ovd
@@ -1270,6 +1281,12 @@ EOF
       case "$restp" in *:*) ovd="${restp#*:}" ;; esac
       printf '[arm:%s]\n' "$label"
       printf 'model: %s\n' "$model"
+      # Per-arm effort for the default A/B arms (engine-swap / adopt). Generic
+      # --arm specs don't carry effort here — hand-edit the spec for that.
+      case "$label" in
+        A) [ -n "$effort_a" ] && printf 'effort: %s\n' "$effort_a" ;;
+        B) [ -n "$effort_b" ] && printf 'effort: %s\n' "$effort_b" ;;
+      esac
       printf 'overrides_dir: %s\n\n' "$ovd"
     done
     local v child parent paths
@@ -1301,6 +1318,116 @@ EOF
   echo "    header-experiment run $id          # the A/B"
   echo "    header-experiment analyze $id && header-experiment report $id"
   _autosync "$id"        # status: defined
+}
+
+# ── ADOPT (engine adoption: "should you move your harness to <model>?") ───────
+# A thin front door over `mine`: detect the engine the user runs TODAY (arm A),
+# pit it against a target model at a chosen effort (arm B), on tasks mined from
+# THIS repo's own history. Launch instance: Opus 4.8. The headline it lets you
+# prove on your OWN code is the System Card finding that 4.8 at a LOWER effort can
+# match your current engine at a higher one — same quality, less cost. 2-arm by
+# design: the analyzer is pairwise (A vs B), so a second effort is a second run
+# (`--effort xhigh`), not a third arm.
+
+# detect_current_model <repo> — the model the user's harness runs today, best
+# effort: $ANTHROPIC_MODEL, else the `model` in repo/user Claude Code settings.
+# Empty when undetectable — we never silently guess the control's identity.
+detect_current_model() {
+  local repo="${1:-.}" m="" s
+  [ -n "${ANTHROPIC_MODEL:-}" ] && { printf '%s' "$ANTHROPIC_MODEL"; return; }
+  for s in "$repo/.claude/settings.json" "$repo/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
+    [ -f "$s" ] || continue
+    m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
+    [ -n "$m" ] && { printf '%s' "$m"; return; }
+  done
+}
+
+# detect_current_effort <model> <repo> — the effort the harness runs today:
+# CLAUDE_CODE_EFFORT_LEVEL (highest precedence in Claude Code) → the `effortLevel`
+# setting → the model's documented default (xhigh for Opus 4.7, high otherwise).
+# "auto" is treated as unset (it means "use the model default").
+detect_current_effort() {
+  local model="${1:-}" repo="${2:-.}" e="" s
+  if [ -n "${CLAUDE_CODE_EFFORT_LEVEL:-}" ] && [ "${CLAUDE_CODE_EFFORT_LEVEL}" != "auto" ]; then
+    printf '%s' "$CLAUDE_CODE_EFFORT_LEVEL"; return
+  fi
+  for s in "$repo/.claude/settings.json" "$repo/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
+    [ -f "$s" ] || continue
+    e="$(sed -n 's/.*"effortLevel"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
+    [ -n "$e" ] && { printf '%s' "$e"; return; }
+  done
+  case "$(printf '%s' "$model" | tr 'A-Z' 'a-z')" in
+    *opus-4-7*) printf 'xhigh' ;;
+    *)          printf 'high'  ;;
+  esac
+}
+
+cmd_adopt() {
+  local id="" to="claude-opus-4-8" effort="high" from="" from_effort="" repo=""
+  local passthrough=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)          to="${2:-}"; shift 2 ;;
+      --effort)      effort="${2:-}"; shift 2 ;;
+      --from)        from="${2:-}"; shift 2 ;;
+      --from-effort) from_effort="${2:-}"; shift 2 ;;
+      --repo)        repo="${2:-}"; passthrough+=(--repo "${2:-}"); shift 2 ;;
+      -h|--help)
+        cat <<EOF
+Usage: header-experiment adopt [<id>] [options]
+
+"Should you move your coding harness to a newer model?" Mines THIS repo's git
+history into a tests-oracle experiment and pits your CURRENT engine (arm A)
+against a target (arm B) at a chosen effort. Launch default: Opus 4.8 @high.
+
+  --to MODEL        target model for arm B (default: claude-opus-4-8)
+  --effort LEVEL    arm B effort: low|medium|high|xhigh|max (default: high)
+  --from MODEL      override the detected current model (arm A)
+  --from-effort L   override the detected current effort (arm A)
+  + mine's flags:   --repo --limit --max-tasks --verify --replicates --list --yes
+
+2-arm by design (the analyzer is pairwise). To also test xhigh, run again with
+--effort xhigh — a second A/B against the same control.
+EOF
+        return 0 ;;
+      *) [ -z "$id" ] && id="$1" || passthrough+=("$1"); shift ;;
+    esac
+  done
+
+  case "$effort" in low|medium|high|xhigh|max) ;; *) err "--effort must be low|medium|high|xhigh|max (got '$effort')"; return 1 ;; esac
+
+  local det_repo="$repo"; [ -n "$det_repo" ] || det_repo="$(pwd)"
+
+  # Arm A = the engine you run today. Detect unless overridden; if undetectable,
+  # assume a pre-4.8 Opus and FLAG it loudly (a wrong control invalidates the A/B).
+  [ -n "$from" ] || from="$(detect_current_model "$det_repo")"
+  local assumed=0
+  [ -n "$from" ] || { from="claude-opus-4-7"; assumed=1; }
+  [ -n "$from_effort" ] || from_effort="$(detect_current_effort "$from" "$det_repo")"
+  if [ "$assumed" -eq 1 ]; then
+    err "couldn't detect your current model (no ANTHROPIC_MODEL / settings 'model') — ASSUMING arm A = claude-opus-4-7@${from_effort}."
+    err "If that's wrong, re-run with --from <your-model> [--from-effort <level>]. Arm A is the control; a wrong identity invalidates the comparison."
+  fi
+
+  [ -n "$id" ] || id="adopt-$(printf '%s' "$to" | sed 's/^claude-//; s/[^a-zA-Z0-9._-]/-/g')"
+
+  # Degenerate guard: A == B means you already run the target engine.
+  if [ "$from" = "$to" ] && [ "$from_effort" = "$effort" ]; then
+    err "arm A ($from@$from_effort) already equals arm B ($to@$effort) — nothing to compare."
+    err "Use --effort to test a different level, or --to a different model."
+    return 1
+  fi
+
+  local hypo desc
+  hypo="'${to}' @${effort} matches your current '${from}' @${from_effort} on this repo's own historical fixes (tests-oracle), at equal-or-lower cost."
+  desc="Adopt ${to}: engine swap vs current ${from}@${from_effort} (B=${to}@${effort})"
+
+  echo "Engine-adoption experiment — A=${from}@${from_effort} (current)  vs  B=${to}@${effort} (candidate)" >&2
+
+  local mine_args=("$id" --from "$from" --to "$to" --effort-a "$from_effort" --effort-b "$effort" \
+                   --kind engine-swap --hypothesis "$hypo" --description "$desc")
+  [ "${#passthrough[@]}" -gt 0 ] && mine_args+=("${passthrough[@]}")
+  cmd_mine "${mine_args[@]}"
 }
 
 # ── VALIDATE ──────────────────────────────────────────────────
@@ -1352,8 +1479,14 @@ cmd_validate() {
   local label
   for label in $arms_list; do
     [ -n "$label" ] || continue
-    # model can be empty (use claude default); just check the section exists by reading any key
-    :
+    # model can be empty (use claude default). effort is optional, but if set it
+    # must be a real Claude Code level — a typo would silently degrade to the
+    # model default rather than erroring at the API, corrupting the arm.
+    local eff; eff="$(spec_section_get "$spec" arm "$label" effort)"
+    case "$eff" in
+      ''|low|medium|high|xhigh|max) ;;
+      *) err "arm $label: effort must be low|medium|high|xhigh|max (got '$eff')"; rc=1 ;;
+    esac
   done
 
   local tid
@@ -1419,7 +1552,7 @@ EOF
 run_one() {
   local exp_dir="$1" repo="$2" commit="$3" task_id="$4" arm_label="$5" rep="$6"
   local model="$7" overrides_dir="$8" prompt_file="$9" verify_cmd="${10}" timeout_s="${11}"
-  local adapter="${12:-}"
+  local adapter="${12:-}" effort="${13:-}"
 
   local logs="$exp_dir/logs"
   mkdir -p "$logs"
@@ -1501,7 +1634,7 @@ run_one() {
   start="$(now_epoch)"
   local agent_rc=0
   if [ -n "$adapter" ]; then
-    ( cd "$wt" && "$adapter" "$task_id" "$arm_label" "$rep" "$prompt_file" ) > "$agent_log" 2> "$agent_err"
+    ( cd "$wt" && "$adapter" "$task_id" "$arm_label" "$rep" "$prompt_file" "$model" "$effort" ) > "$agent_log" 2> "$agent_err"
     agent_rc=$?
   else
     # Real run via claude headless. `--print` is the headless mode; combined
@@ -1510,6 +1643,7 @@ run_one() {
     # usage. timeout(1) caps wall-clock.
     local extra_args=()
     [ -n "$model" ] && extra_args+=(--model "$model")
+    [ -n "$effort" ] && extra_args+=(--effort "$effort")
     if command -v timeout >/dev/null 2>&1; then
       ( cd "$wt" && timeout "${timeout_s}s" claude --print --output-format json \
           --permission-mode bypassPermissions "${extra_args[@]}" \
@@ -1839,8 +1973,9 @@ EOF
         # Resolve the arm's config. In A/A both slots use first_arm's config.
         local arm_for_config="$arm"
         [ "$aa" -eq 1 ] && arm_for_config="$first_arm"
-        local model overrides
+        local model overrides effort
         model="$(spec_section_get "$spec" arm "$arm_for_config" model)"
+        effort="$(spec_section_get "$spec" arm "$arm_for_config" effort)"
         overrides="$(spec_section_get "$spec" arm "$arm_for_config" overrides_dir)"
         local overrides_abs=""; [ -n "$overrides" ] && overrides_abs="$(resolve_path "$dir" "$overrides")"
         local prompt verify timeout_s
@@ -1873,7 +2008,7 @@ EOF
         fi
         run_one "$dir" "$repo" "$task_commit_resolved" "$task" "$arm" "$r" \
                 "$model" "$overrides_abs" "$prompt_abs" "$verify" "$timeout_s" \
-                "$adapter" >> "$out_file"
+                "$adapter" "$effort" >> "$out_file"
         if [ -n "$TEARDOWN_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
           _run_teardown
         fi
@@ -2139,6 +2274,16 @@ cmd_analyze() {
   if [ "$aa" -eq 0 ]; then _autosync "$id"; fi   # status: analyzed (skip --aa); never alters exit
 }
 
+# _fmt_engine <model> <effort> → "model@effort" | "model" | "@effort" | "" (empty
+# when the arm pins neither — i.e. it inherits Claude Code's defaults).
+_fmt_engine() {
+  local m="${1:-}" e="${2:-}"
+  if   [ -n "$m" ] && [ -n "$e" ]; then printf '%s@%s' "$m" "$e"
+  elif [ -n "$m" ];                then printf '%s' "$m"
+  elif [ -n "$e" ];                then printf '@%s' "$e"
+  fi
+}
+
 # ── REPORT ────────────────────────────────────────────────────
 cmd_report() {
   local id="" aa=0
@@ -2156,7 +2301,16 @@ cmd_report() {
 
   beta_banner
 
-  awk '
+  # Engine descriptors (model@effort) for the first two arms, read from the spec
+  # so the report names what each arm actually ran — central to engine-swap.
+  local spec="$dir/spec" eng_a="" eng_b="" _arms=() _l
+  if [ -f "$spec" ]; then
+    for _l in $(spec_list_sections "$spec" arm); do _arms+=("$_l"); done
+    [ "${#_arms[@]}" -ge 1 ] && eng_a="$(_fmt_engine "$(spec_section_get "$spec" arm "${_arms[0]}" model)" "$(spec_section_get "$spec" arm "${_arms[0]}" effort)")"
+    [ "${#_arms[@]}" -ge 2 ] && eng_b="$(_fmt_engine "$(spec_section_get "$spec" arm "${_arms[1]}" model)" "$(spec_section_get "$spec" arm "${_arms[1]}" effort)")"
+  fi
+
+  awk -v eng_a="$eng_a" -v eng_b="$eng_b" '
     function jnum(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*-?[0-9.eE+-]+"
       if (match(line,re)){ s=substr(line,RSTART,RLENGTH); sub(/.*:[ \t]*/,"",s); return s+0 } return 0 }
     function jstr(line,key,  re,s){ re="\""key"\"[ \t]*:[ \t]*\"[^\"]*\""
@@ -2198,7 +2352,8 @@ cmd_report() {
       spair = jpair(sb_,"ci95"); split(spair, SI, ","); slo=SI[1]+0; shi=SI[2]+0
 
       printf "\nExperiment report — %s\n", (mode=="aa" ? "A/A (noise floor)" : "A vs B")
-      printf "  Arms: %s vs %s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n", A, B, tasks, boots, margin
+      printf "  Arms: %s%s vs %s%s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n", \
+        A, (eng_a!="" ? " [" eng_a "]" : ""), B, (eng_b!="" ? " [" eng_b "]" : ""), tasks, boots, margin
       if (analysis_method == "replicate-level") {
         printf "  Analysis: replicate-level bootstrap (N=1 task; bootstrap on within-task replicates per arm)\n"
       } else if (low_power) {
@@ -2335,16 +2490,33 @@ cmd_merge() {
 
   local ledger_key; ledger_key="$(spec_get_scalar "$spec" ledger_key)"
 
-  # Model-swap path: no files to apply; just say what to do.
+  # Engine-swap path (model and/or effort, no override files): nothing to copy —
+  # tell the user EXACTLY what to set. Advisory by design: we don't hand-edit the
+  # user's settings.json (no JSON dependency; a bad rewrite is worse than a copy).
   if [ -z "$b_overrides" ]; then
-    local a_model; a_model="$(spec_section_get "$spec" arm "$first_arm" model)"
+    local a_model a_eff b_eff a_eng b_eng
+    a_model="$(spec_section_get "$spec" arm "$first_arm" model)"
+    a_eff="$(spec_section_get "$spec" arm "$first_arm" effort)"
+    b_eff="$(spec_section_get "$spec" arm "$second_arm" effort)"
+    a_eng="$(_fmt_engine "$a_model" "$a_eff")"; [ -n "$a_eng" ] || a_eng="(inherits Claude Code defaults)"
+    b_eng="$(_fmt_engine "$b_model" "$b_eff")"; [ -n "$b_eng" ] || b_eng="(inherits Claude Code defaults)"
     cat <<EOF
-This experiment's win is a model swap, not a code change:
-  Arm A model: ${a_model:-(unset)}
-  Arm B model: ${b_model:-(unset)}
+This experiment's win is an engine change (model and/or effort), not a code change:
+  Arm A (control): $a_eng
+  Arm B (winner):  $b_eng
 
-There are no override files to copy. Update your default to '$b_model' wherever your agent reads its model setting (e.g. in CLAUDE.md / agent settings / wrapper script — header-config doesn't manage model selection).
+No override files to copy. Point your harness at arm B's engine:
 EOF
+    [ -n "$b_model" ] && echo "  • model:  \"model\": \"$b_model\" in .claude/settings.json   (or /model $b_model)"
+    if [ -n "$b_eff" ]; then
+      if [ "$b_eff" = "max" ]; then
+        echo "  • effort: /effort max   (session-only — settings.json can't persist max; or export CLAUDE_CODE_EFFORT_LEVEL=max)"
+      else
+        echo "  • effort: \"effortLevel\": \"$b_eff\" in .claude/settings.json   (or /effort $b_eff)"
+      fi
+    fi
+    echo ""
+    echo "(header-config doesn't manage model/effort — these live in your Claude Code settings.)"
     [ -n "$ledger_key" ] && {
       echo ""
       echo "Once you've applied it manually, record the disposition:"
@@ -2571,13 +2743,14 @@ build_payload() {
   [ -n "$briefing_ovr" ] && briefing="$briefing_ovr"
 
   # ── arms ──
-  local arms_json="" first=1 lbl model ovd role
+  local arms_json="" first=1 lbl model eff ovd role
   for lbl in $(spec_list_sections "$spec" arm); do
     model="$(spec_section_get "$spec" arm "$lbl" model)"
+    eff="$(spec_section_get "$spec" arm "$lbl" effort)"
     ovd="$(spec_section_get "$spec" arm "$lbl" overrides_dir)"
     role="treatment"; [ "$lbl" = "A" ] && role="control"
     [ "$first" -eq 1 ] || arms_json="$arms_json,"
-    arms_json="$arms_json{\"label\":\"$(json_escape "$lbl")\",\"model\":\"$(json_escape "$model")\",\"role\":\"$role\",\"overrides\":"
+    arms_json="$arms_json{\"label\":\"$(json_escape "$lbl")\",\"model\":\"$(json_escape "$model")\",\"effort\":\"$(json_escape "$eff")\",\"role\":\"$role\",\"overrides\":"
     if [ -n "$ovd" ]; then arms_json="$arms_json\"$(json_escape "$ovd")\"}"; else arms_json="${arms_json}null}"; fi
     first=0
   done
@@ -2794,6 +2967,9 @@ Usage: header-experiment <command> ...
   mine <id>       MINE git history → a runnable tests-oracle experiment (no task
                     prompts or verify commands to author). --list to preview
                     candidates; --from/--to to set the model-swap arms.
+  adopt [<id>]    "should you move your harness to <model>?" — mine + a model+
+                    effort A/B of your CURRENT engine vs a target (default Opus
+                    4.8 @high). --to MODEL, --effort LEVEL, --from to override.
   new <id>        audit-aware scaffolder (RECOMMENDED — interactive or one-shot)
                     --kind prompt-debt-deletion --file F --lines L1,L2,...
                     --kind model-swap --from M --to N
@@ -2816,6 +2992,7 @@ EOF
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
   mine)     cmd_mine     "$@" ;;
+  adopt)    cmd_adopt    "$@" ;;
   new)      cmd_new      "$@" ;;
   define)   cmd_define   "$@" ;;
   validate) cmd_validate "$@" ;;

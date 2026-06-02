@@ -53,7 +53,7 @@ Top level:
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | Client-local experiment id (unique per machine; globally unique with `installation_id`). |
-| `kind` | string enum | `harness-change` \| `model-swap` \| `generic`. (May carry other values if a future client sets a precise kind — treat as a label.) |
+| `kind` | string enum | `harness-change` \| `model-swap` \| `engine-swap` \| `generic`. (`engine-swap` = a model and/or reasoning-effort change, e.g. `adopt`. May carry other values if a future client sets a precise kind — treat as a label.) |
 | `description` | string | Human title of the experiment. Safe to display. |
 | `status` | string enum | `defined` \| `run` \| `analyzed` \| `merged`. **This is the "last status" the UI tracks.** Monotonic in normal use but don't assume it — trust each upsert. |
 | `replicates` | int \| null | Replicates per (task, arm). |
@@ -68,6 +68,7 @@ Top level:
 |---|---|---|
 | `label` | string | `A`, `B`, … |
 | `model` | string | Model id; may be empty string (e.g. prompt-debt experiments don't change the model). |
+| `effort` | string | Reasoning effort for the arm (`low`\|`medium`\|`high`\|`xhigh`\|`max`), or empty string when the arm inherits the harness default. Set on `engine-swap`. |
 | `role` | string enum | `control` (label `A`) \| `treatment`. |
 | `overrides` | string \| null | Relative **path** to the arm's override dir (e.g. `arms/B`), or `null`. **Path only — never file contents.** |
 
@@ -226,8 +227,8 @@ still valid JSON).
     "non_inferiority_margin": 0.02,
     "commit_ref": "HEAD",
     "arms": [
-      {"label":"A","model":"","role":"control","overrides":null},
-      {"label":"B","model":"","role":"treatment","overrides":"arms/B"}
+      {"label":"A","model":"","effort":"","role":"control","overrides":null},
+      {"label":"B","model":"","effort":"","role":"treatment","overrides":"arms/B"}
     ],
     "tasks": [
       {"id":"t1","title":"Add a 'briefing_count' field to the v2 Goal model and expose it on GET /api/v2/goals/{id…","title_source":"derived","verify":"pytest tests/v2/ -x -q --tb=short","prompt_ref":"tasks/t1.md","prompt_sha256":"b2938df744349024dae64f2b7696626d522353f2ea92277e5e77179b21ee768a","prompt_bytes":308}

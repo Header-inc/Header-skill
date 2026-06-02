@@ -868,10 +868,10 @@ EXP new swap-merge --kind model-swap --from claude-opus-4-7 --to claude-sonnet-4
 synth_runs swap-merge
 EXP analyze swap-merge --seed 7 >/dev/null
 swap_merge_out="$(EXP merge swap-merge --yes 2>&1)"
-assert_contains "$swap_merge_out" "model swap, not a code change" \
+assert_contains "$swap_merge_out" "engine change (model and/or effort), not a code change" \
   "merge on a model-swap spec explains there are no files to copy"
-assert_contains "$swap_merge_out" "Update your default to 'claude-sonnet-4-6'" \
-  "merge on a model-swap surfaces the target model"
+assert_contains "$swap_merge_out" "/model claude-sonnet-4-6" \
+  "merge on a model-swap surfaces the target model to set"
 assert_contains "$swap_merge_out" "header-ledger record applied \"route-boilerplate\"" \
   "merge on a model-swap still suggests the ledger record"
 
@@ -1166,5 +1166,98 @@ nomanifest="$sb/nomani"; mkdir -p "$nomanifest"
 nm_err="$(EXP mine mnm2 --repo "$nomanifest" 2>&1)"
 assert_contains "$nm_err" "couldn't detect a test command" \
   "mine without --verify and no manifest explains it needs a test command"
+
+# ════════════════════════════════════════════════════════════════════
+# 0.18.0 — engine adoption: per-arm effort + the `adopt` scaffolder.
+# ════════════════════════════════════════════════════════════════════
+
+# ── per-arm effort reaches the agent invocation ──────────────────────
+# The adapter contract gained <model> <effort> as args 5 & 6. A capture stub
+# records them so we can assert each arm's effort flows (the real-claude path
+# turns the same values into --model/--effort flags).
+cap="$sb/eff-args.log"; : > "$cap"
+cat > "$sb/eff-adapter.sh" <<EOF
+#!/usr/bin/env bash
+printf 'arm=%s model=%s effort=%s\n' "\$2" "\$5" "\$6" >> "$cap"
+printf '{"type":"result","model":"stub-%s","total_cost_usd":0.1,"usage":{"input_tokens":100,"output_tokens":10}}\n' "\$2"
+EOF
+chmod +x "$sb/eff-adapter.sh"
+
+mkdir -p "$(exp_dir_for eff-1)/logs" "$(exp_dir_for eff-1)/tasks"
+printf 'do the thing\n' > "$(exp_dir_for eff-1)/tasks/t.md"
+cat > "$(exp_dir_for eff-1)/spec" <<EOF
+id: eff-1
+hypothesis: effort flows per-arm
+repo: $git_repo
+commit: HEAD
+replicates: 1
+non_inferiority_margin: 0.02
+kind: engine-swap
+
+[arm:A]
+model: claude-opus-4-7
+effort: xhigh
+overrides_dir:
+
+[arm:B]
+model: claude-opus-4-8
+effort: high
+overrides_dir:
+
+[task:t1]
+prompt: tasks/t.md
+verify: true
+timeout_s: 60
+EOF
+EXP run eff-1 --yes --adapter "$sb/eff-adapter.sh" >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "engine-swap run with per-arm effort exits 0"
+cap_content="$(cat "$cap")"
+assert_contains "$cap_content" "arm=A model=claude-opus-4-7 effort=xhigh" "arm A's model+effort reach the agent invocation"
+assert_contains "$cap_content" "arm=B model=claude-opus-4-8 effort=high"  "arm B's model+effort reach the agent invocation"
+
+# ── validate guards the effort level (typos would silently degrade) ──
+sed -i 's/^effort: high/effort: bogus/' "$(exp_dir_for eff-1)/spec"
+EXP validate eff-1 >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "validate rejects an unknown effort level"
+sed -i 's/^effort: bogus/effort: high/' "$(exp_dir_for eff-1)/spec"
+EXP validate eff-1 >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "validate accepts a valid effort level"
+
+# ── sync payload carries kind + per-arm effort (forward-compatible) ──
+eff_payload="$(EXP push eff-1 --dry-run 2>/dev/null)"
+assert_contains "$eff_payload" '"kind": "engine-swap"' "explicit kind: engine-swap reaches the sync payload"
+assert_contains "$eff_payload" '"effort":"xhigh"' "arm A effort reaches the sync payload"
+assert_contains "$eff_payload" '"effort":"high"'  "arm B effort reaches the sync payload"
+
+# ── report names each arm's engine (model@effort) ───────────────────
+EXP analyze eff-1 >/dev/null 2>&1
+eff_rep="$(EXP report eff-1 2>&1)"
+assert_contains "$eff_rep" "[claude-opus-4-7@xhigh]" "report names arm A's engine (model@effort)"
+assert_contains "$eff_rep" "[claude-opus-4-8@high]"  "report names arm B's engine (model@effort)"
+
+# ── adopt: detect-current vs target, model+effort A/B (reuses mine fixture) ──
+# Pass --from / --from-effort so the test is deterministic (detection reads the
+# dev's real ~/.claude + env, which we must not depend on).
+EXP adopt adopt-1 --repo "$mine_repo" --verify "$VC" \
+  --from claude-opus-4-7 --from-effort xhigh --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "adopt scaffolds an engine-swap from the mine fixture"
+adopt_spec="$(cat "$(exp_dir_for adopt-1)/spec")"
+assert_contains "$adopt_spec" "kind: engine-swap"       "adopt records kind: engine-swap"
+assert_contains "$adopt_spec" "model: claude-opus-4-7"  "adopt arm A = the current model (--from)"
+assert_contains "$adopt_spec" "model: claude-opus-4-8"  "adopt arm B = the target model (--to)"
+assert_contains "$adopt_spec" "effort: xhigh"           "adopt arm A carries the current effort"
+assert_contains "$adopt_spec" "effort: high"            "adopt arm B carries the target effort"
+assert_contains "$adopt_spec" "'claude-opus-4-8' @high matches your current 'claude-opus-4-7' @xhigh" \
+  "adopt fills a model+effort hypothesis"
+EXP validate adopt-1 >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "the adopt-generated spec passes validate"
+
+# adopt refuses the degenerate case (already on the target engine)
+EXP adopt adopt-dup --repo "$mine_repo" --verify "$VC" \
+  --from claude-opus-4-8 --from-effort high --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "adopt refuses when arm A already equals arm B"
+# adopt rejects an invalid --effort up front (no repo work needed)
+EXP adopt adopt-bad --effort bogus --from x --from-effort high >/dev/null 2>&1; rc=$?
+assert_exit 1 "$rc" "adopt rejects an invalid --effort level"
 
 t_done
