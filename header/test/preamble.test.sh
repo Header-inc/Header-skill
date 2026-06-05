@@ -45,6 +45,29 @@ chmod +x "$sb/.claude/skills/header/bin/header-config"
 out="$(run_preamble "$sb/bogus-not-real" "$sb")"
 assert_contains "$out" "HEADER_INSTALL: ok" "fallback path ~/.claude/skills/header → ok"
 
+# ── self-heal: bin/ present but not executable (Codex/npx GitHub download) ──
+sb="$(make_sandbox)"
+mkdir -p "$sb/.claude/skills/header"
+cp -R "$SKILL_DIR/bin" "$sb/.claude/skills/header/bin"
+for _f in "$sb/.claude/skills/header/bin/"*; do chmod -x "$_f" 2>/dev/null; done
+out="$(run_preamble "$sb/bogus-not-real" "$sb")"
+assert_contains "$out" "HEADER_SELFHEAL:" "non-executable bin/ is chmod-repaired in the preamble"
+assert_contains "$out" "HEADER_INSTALL: ok" "self-heal makes an exec-bit-stripped install resolve ok"
+assert_eq "yes" "$([ -x "$sb/.claude/skills/header/bin/header-config" ] && echo yes || echo no)" \
+  "self-heal leaves header-config executable on disk"
+
+# ── HEADER_STATE: writable vs sandbox-readonly ────────────────
+sb="$(make_sandbox)"
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb")" "HEADER_STATE: ok" \
+  "writable HEADER_HOME → HEADER_STATE: ok"
+if [ "$(id -u)" != "0" ]; then   # root bypasses file perms — skip the negative case
+  sb="$(make_sandbox)"; mkdir -p "$sb/.header"; chmod 500 "$sb/.header"
+  out="$(run_preamble "$SKILL_DIR" "$sb")"
+  assert_contains "$out" "HEADER_STATE: readonly" "unwritable HEADER_HOME → HEADER_STATE: readonly"
+  assert_contains "$out" "HEADER_NOTICE:" "readonly state prints the actionable remedy"
+  chmod 700 "$sb/.header" 2>/dev/null || true
+fi
+
 # ── interactivity — ★ non-interactive regression ──────────────
 sb="$(make_sandbox)"
 out="$(run_preamble "$SKILL_DIR" "$sb")"
