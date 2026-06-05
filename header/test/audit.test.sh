@@ -36,7 +36,10 @@ assert_contains "$H" "	json-nag	" "harness flags JSON-format nagging"
 # token estimate present and numeric (bytes/4)
 fileline="$(printf '%s\n' "$H" | grep "FILE	$repo/CLAUDE.md")"
 est="$(printf '%s' "$fileline" | awk -F'\t' '{print $4}')"
-assert_eq "yes" "$(case "$est" in ''|*[!0-9]*) echo no ;; *) echo yes ;; esac)" \
+# Bash 3.2 (macOS default) mis-parses `case` inside command substitution, so
+# evaluate it as its own statement.
+case "$est" in ''|*[!0-9]*) est_numeric=no ;; *) est_numeric=yes ;; esac
+assert_eq "yes" "$est_numeric" \
   "harness FILE line carries a numeric token estimate"
 
 # a clean repo yields no HITs

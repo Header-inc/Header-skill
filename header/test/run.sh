@@ -74,6 +74,51 @@ if [ "$_HARNESS_PATH" != "${0}" ]; then
     printf '%s\n' "$d"
   }
 
+  # sed_sub — portable in-place substitution. `sed -i` is non-portable (GNU wants
+  # `-i`, BSD/macOS wants `-i ''`), so edit via a temp file then mv, the same idiom
+  # the bin/ helpers use. Usage: sed_sub <sed-expr> <file>
+  sed_sub() {
+    local _e="$1" _f="$2" _t
+    _t="$(mktemp "${TMPDIR:-/tmp}/header-sed.XXXXXX")"
+    sed "$_e" "$_f" > "$_t" && mv "$_t" "$_f"
+  }
+
+  # file_append_after — insert lines (read from stdin) immediately after the first
+  # line matching a glob <pattern>. Avoids BSD vs GNU `sed a\` differences (BSD does
+  # not interpret \n in the appended text). Usage: printf '...\n...' | file_append_after '<glob>' <file>
+  file_append_after() {
+    local _pat="$1" _f="$2" _t _ins _line _done=0
+    _ins="$(cat)"
+    _t="$(mktemp "${TMPDIR:-/tmp}/header-app.XXXXXX")"
+    while IFS= read -r _line || [ -n "$_line" ]; do
+      printf '%s\n' "$_line" >> "$_t"
+      if [ "$_done" = 0 ]; then
+        case "$_line" in
+          $_pat) printf '%s\n' "$_ins" >> "$_t"; _done=1 ;;
+        esac
+      fi
+    done < "$_f"
+    mv "$_t" "$_f"
+  }
+
+  # file_insert_before — insert lines (read from stdin) immediately before the first
+  # line matching a glob <pattern>. Portable counterpart to `sed '/pat/i text'`.
+  # Usage: printf '...\n...' | file_insert_before '<glob>' <file>
+  file_insert_before() {
+    local _pat="$1" _f="$2" _t _ins _line _done=0
+    _ins="$(cat)"
+    _t="$(mktemp "${TMPDIR:-/tmp}/header-ins.XXXXXX")"
+    while IFS= read -r _line || [ -n "$_line" ]; do
+      if [ "$_done" = 0 ]; then
+        case "$_line" in
+          $_pat) printf '%s\n' "$_ins" >> "$_t"; _done=1 ;;
+        esac
+      fi
+      printf '%s\n' "$_line" >> "$_t"
+    done < "$_f"
+    mv "$_t" "$_f"
+  }
+
   # t_done — call as the LAST line of every test file. Its absence on exit is
   # treated as a crash and fails the suite even with zero failed assertions.
   t_done() { _T_DONE=1; }
@@ -100,14 +145,55 @@ if [ "$_HARNESS_PATH" != "${0}" ]; then
 fi
 
 # ─────────────────── Runner mode (executed) ───────────────────
-_filter="${1:-}"
+# Usage: run.sh [repo|installed|smoke|<suite-name>]
+#   repo       run every suite, including install.test.sh (needs repo-root install.sh)
+#   installed  validate the installed payload only; skips install.test.sh
+#   smoke      alias for installed — a fast post-install check from ~/.codex/skills/header
+#   <name>     run only <name>.test.sh (e.g. 'audit')
+# With no argument the mode is auto-detected: 'repo' when the repo-root install.sh exists
+# (a full checkout), otherwise 'installed' (an installed skill directory has no install.sh).
+# ('repo'/'installed'/'smoke' are reserved words — don't name a suite after them.)
+_arg="${1:-}"
+_mode=""
+_filter=""
+case "$_arg" in
+  repo|installed) _mode="$_arg" ;;
+  smoke)          _mode="installed" ;;
+  "")             if [ -f "$_HARNESS_DIR/../../install.sh" ]; then _mode="repo"; else _mode="installed"; fi ;;
+  *)              _filter="$_arg"; _mode="filter" ;;
+esac
+
+if [ -n "$_filter" ]; then _mode_label="filter ($_filter)"; else _mode_label="$_mode"; fi
+printf 'mode: %s\n' "$_mode_label"
+
+# Installed mode: the helper binaries must be executable, or every suite that shells
+# out to them fails confusingly. Check once, up front, with a clear remedy (HEA-429).
+if [ "$_mode" = "installed" ]; then
+  _missing=""
+  for _b in "$_HARNESS_DIR"/../bin/*; do
+    [ -e "$_b" ] || continue
+    [ -x "$_b" ] || _missing="$_missing $(basename "$_b")"
+  done
+  if [ -n "$_missing" ]; then
+    printf '✗ helper binaries are not executable:%s\n' "$_missing" >&2
+    printf '  fix: chmod +x %s/bin/* %s/run.sh\n' \
+      "$(cd "$_HARNESS_DIR/.." && pwd)" "$_HARNESS_DIR" >&2
+    exit 1
+  fi
+fi
+
 _suite_rc=0
 _ran=0
 _failed=0
 for _tf in "$_HARNESS_DIR"/*.test.sh; do
   [ -f "$_tf" ] || continue
   _name="$(basename "$_tf" .test.sh)"
+  # filter mode: run only the named suite
   if [ -n "$_filter" ] && [ "$_name" != "$_filter" ]; then
+    continue
+  fi
+  # installed mode: skip suites that assume a full repo checkout (repo-root install.sh)
+  if [ "$_mode" = "installed" ] && [ "$_name" = "install" ]; then
     continue
   fi
   _ran=$((_ran + 1))
@@ -127,8 +213,8 @@ fi
 
 printf -- '----\n'
 if [ "$_suite_rc" -eq 0 ]; then
-  printf '✓ all %d suite(s) passed\n' "$_ran"
+  printf '✓ all %d suite(s) passed (mode: %s)\n' "$_ran" "$_mode_label"
 else
-  printf '✗ %d of %d suite(s) failed\n' "$_failed" "$_ran" >&2
+  printf '✗ %d of %d suite(s) failed (mode: %s)\n' "$_failed" "$_ran" "$_mode_label" >&2
 fi
 exit "$_suite_rc"
