@@ -555,13 +555,13 @@ gen_clause_add_arm_b() {
     err "clause-add needs --text or --text-file"; return 1
   fi
   # Position 0 = top of file (before line 1). Otherwise insert after line N.
+  # Use head/tail rather than `awk -v insert=...`: BSD awk (macOS) rejects a
+  # multi-line value passed via -v ("newline in string"), so multi-line
+  # --text-file content broke there.
   if [ "$after_line" -eq 0 ]; then
     { printf '%s\n' "$insert_text"; cat "$src"; } > "$out"
   else
-    awk -v N="$after_line" -v insert="$insert_text" '
-      { print }
-      NR == N { print insert }
-    ' "$src" > "$out"
+    { head -n "$after_line" "$src"; printf '%s\n' "$insert_text"; tail -n +"$((after_line + 1))" "$src"; } > "$out"
   fi
 }
 

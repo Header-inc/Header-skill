@@ -3,6 +3,45 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.19.0 — Codex / macOS support: install, validate, and run cleanly
+
+Dogfooding the skill in **Codex on macOS** surfaced install and validation rough
+edges (HEA-426). This release makes install + audit robust there, with the skill
+self-healing the common Codex friction instead of leaving it for the user.
+
+**Install resilience (preamble).**
+- **Exec-bit self-heal** — some download paths (Codex / `npx skills` GitHub
+  download) copy `bin/*` without the executable bit, which made the preamble
+  report `HEADER_INSTALL: missing`. The preamble now repairs it best-effort
+  (`chmod +x`) and echoes `HEADER_SELFHEAL:` when it does. Read-only skill dirs
+  fall back to the existing missing-install notice.
+- **Sandbox state probe** — under Codex `workspace-write` (which usually excludes
+  `~/.header`), ledger/config/marker writes silently no-op. The preamble probes
+  `${HEADER_HOME:-~/.header}` writability and emits `HEADER_STATE: ok|readonly`;
+  on `readonly` it surfaces one actionable `HEADER_NOTICE` (add `~/.header` to the
+  sandbox's writable roots, or set `HEADER_HOME`). The audit still runs.
+
+**macOS portability (real end-user bug + test suite).**
+- `header-experiment` `clause-add --text-file` with multi-line content failed on
+  macOS — BSD `awk` rejects a multi-line `-v` value. Rewritten with a `head`/`tail`
+  split. This shipped in `bin/`, so it affected actual macOS runs, not just tests.
+- Test suite made portable to Bash 3.2 + BSD `sed`/`awk`: portable
+  `sed_sub`/`file_append_after`/`file_insert_before` helpers replace 13 GNU
+  `sed -i` calls in `experiment.test.sh`; the `case`-in-command-substitution in
+  `audit.test.sh` is destructured. CI now runs an `ubuntu` + `macos-latest` matrix.
+
+**Test modes for installed payloads.**
+- `test/run.sh` gains `repo` / `installed` (alias `smoke`) modes, auto-detected by
+  the presence of the repo-root `install.sh`. `installed` skips the repo-only
+  `install.test.sh` and guards up front that `bin/*` is executable — a fast
+  post-install check runnable from `~/.codex/skills/header`. The single-suite-name
+  filter (`run.sh audit`) still works.
+
+**Docs.** README gains a dedicated **OpenAI Codex CLI** section (repo `Header-inc/Header-skill`,
+skill path `header`, installed location `$CODEX_HOME/skills/header`, why the repo
+root isn't the target, restart-after-install, and the exec-bit / sandbox remedies);
+`llms.txt` mirrors the install-location and preamble-signal notes. VERSION → 0.19.0.
+
 ## 0.18.1 — mine: detect defeated worktree isolation (editable installs)
 
 Fix surfaced by a real `/header` run on a repo with a **PEP 660 editable install**.

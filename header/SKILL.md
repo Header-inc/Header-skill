@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.18.1
+version: 0.19.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -27,6 +27,20 @@ for _d in "{SKILL_DIR}" "$HOME/.claude/skills/header" \
           ".agents/skills/header"; do
   [ -x "$_d/bin/header-config" ] && { _HC="$_d/bin/header-config"; break; }
 done
+# Self-heal: a Codex / npx GitHub-download install can copy bin/* without the
+# executable bit, so the -x test above misses an otherwise-complete install. If a
+# header-config exists but isn't executable, repair the bin dir best-effort.
+if [ -z "$_HC" ]; then
+  for _d in "{SKILL_DIR}" "$HOME/.claude/skills/header" \
+            ".claude/skills/header" "$HOME/.codex/skills/header" \
+            ".agents/skills/header"; do
+    if [ -f "$_d/bin/header-config" ] && [ ! -x "$_d/bin/header-config" ]; then
+      chmod +x "$_d/bin/"* 2>/dev/null || true
+      [ -f "$_d/test/run.sh" ] && chmod +x "$_d/test/run.sh" 2>/dev/null || true
+      [ -x "$_d/bin/header-config" ] && { _HC="$_d/bin/header-config"; echo "HEADER_SELFHEAL: chmod +x $_d/bin"; break; }
+    fi
+  done
+fi
 if [ -z "$_HC" ]; then
   echo "HEADER_INSTALL: missing"
   echo "HEADER_NOTICE: full install required — run: npx skills add Header-inc/Header-skill -g  (or)  curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh"
@@ -34,7 +48,17 @@ else
   echo "HEADER_INSTALL: ok"
   echo "HEADER_BIN: $_HC"
   _HH="${HEADER_HOME:-$HOME/.header}"
-  mkdir -p "$_HH"
+  mkdir -p "$_HH" 2>/dev/null || true
+  # Codex's filesystem sandbox (workspace-write) often excludes ~/.header, so
+  # ledger/last-run/config writes fail silently. Probe once and tell the user the
+  # remedy instead of letting persistence degrade invisibly. Normal shells: ok.
+  if ( : > "$_HH/.writable-probe" ) 2>/dev/null; then
+    rm -f "$_HH/.writable-probe" 2>/dev/null || true
+    echo "HEADER_STATE: ok"
+  else
+    echo "HEADER_STATE: readonly"
+    echo "HEADER_NOTICE: $_HH is not writable (Codex sandbox?) — ledger, config and run markers won't persist. Fix: add $_HH to the sandbox's writable roots, or set HEADER_HOME to a writable path (e.g. export HEADER_HOME=\"\$PWD/.header\")."
+  fi
   if [ -n "${CI:-}" ] || [ -n "${HEADER_NONINTERACTIVE:-}" ]; then
     echo "INTERACTIVE: no"
   else
@@ -70,7 +94,9 @@ fi
 # --- end preamble ---
 ```
 
-If `HEADER_INSTALL: missing` was echoed, print the `HEADER_NOTICE` line to the user and **stop**. The audit requires `bin/header-audit`; there is no fallback flow. Tell them to re-run after the install completes.
+If `HEADER_INSTALL: missing` was echoed, print the `HEADER_NOTICE` line to the user and **stop**. The audit requires `bin/header-audit`; there is no fallback flow. Tell them to re-run after the install completes. (If the preamble echoed `HEADER_SELFHEAL:` it repaired exec bits an installer stripped — e.g. a Codex/`npx skills` GitHub download — and resolved the install automatically; no action needed.)
+
+If `HEADER_STATE: readonly` was echoed, surface the accompanying `HEADER_NOTICE` once and **continue** — the audit still runs. Only local persistence degrades: the recommendation ledger, personal config, onboarding markers, and update snoozes won't be saved. This is common under Codex's `workspace-write` sandbox, which usually excludes `~/.header`; the remedy is to add `~/.header` to the sandbox's writable roots or point `HEADER_HOME` at a writable path.
 
 If `HEADER_INSTALL: ok`, use the echoed values for the rest of the session:
 
@@ -365,7 +391,7 @@ Record each recommendation's disposition so future runs adapt. Skip when `<HEADE
 <LEDGER> record wanted    "<key>"    # an [Experiment] the user wants (and isn't running locally via header-experiment)
 ```
 
-All ledger writes are best-effort, local-only, and never block the audit.
+All ledger writes are best-effort, local-only, and never block the audit. They land under `${HEADER_HOME:-$HOME/.header}` (`ledger.jsonl`, `.last-run`, `credentials`, onboarding markers). Under a restrictive filesystem sandbox — notably Codex `workspace-write`, which usually excludes `~/.header` — these writes silently no-op; the preamble's `HEADER_STATE: readonly` line flags this, and the fix is to make `${HEADER_HOME:-$HOME/.header}` writable (add it to the sandbox's writable roots) or set `HEADER_HOME` to a writable path.
 
 ### Usage logging (run last in the audit flow)
 

@@ -12,7 +12,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # macos-latest ships Bash 3.2 and BSD sed/awk — the exact environment a Codex
+    # user hits. Running both catches GNU-only assumptions before they ship.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,4 +29,4 @@ jobs:
         run: python3 -m pip install --quiet --user pyyaml || true
 
       - name: Run skill test suite
-        run: bash header/test/run.sh
+        run: bash header/test/run.sh repo

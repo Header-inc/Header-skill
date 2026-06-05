@@ -102,10 +102,10 @@ assert_contains "$(EXP validate exp-1 2>&1)" "2 arm(s), 1 task(s)" \
   "validate reports arm + task counts"
 
 # bad replicates value → reject
-sed -i 's/^replicates: 2/replicates: zero/' "$(exp_dir_for exp-1)/spec"
+sed_sub 's/^replicates: 2/replicates: zero/' "$(exp_dir_for exp-1)/spec"
 EXP validate exp-1 >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "validate rejects non-integer replicates"
-sed -i 's/^replicates: zero/replicates: 2/' "$(exp_dir_for exp-1)/spec"
+sed_sub 's/^replicates: zero/replicates: 2/' "$(exp_dir_for exp-1)/spec"
 
 # one arm only → reject
 EXP define exp-1arm --arm "A=opus" >/dev/null
@@ -121,7 +121,7 @@ mkdir -p "$git_repo" && (cd "$git_repo" && git init -q && \
   git config user.email t@t && git config user.name t && \
   echo hi > a.txt && git add a.txt && git commit -qm init)
 # update spec to use the git repo + a NO-OP verifier (true).
-sed -i "s|^repo: .|repo: $git_repo|" "$(exp_dir_for exp-1)/spec"
+sed_sub "s|^repo: .|repo: $git_repo|" "$(exp_dir_for exp-1)/spec"
 
 EXP run exp-1 --yes --adapter "$sb/adapter.sh" >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "run exits 0 with stub adapter"
@@ -198,7 +198,7 @@ assert_contains "$gate_out" "k 1" \
 # success holds across the board. Verdict should be "B wins".
 EXP define exp-stat --arm "A=opus" --arm "B=sonnet" --replicates 3 >/dev/null
 write_task_prompt exp-stat example
-sed -i "s|^repo: .|repo: $git_repo|" "$(exp_dir_for exp-stat)/spec"
+sed_sub "s|^repo: .|repo: $git_repo|" "$(exp_dir_for exp-stat)/spec"
 five_tasks_runs() {
   local tid c_a c_b s_a s_b
   for tid in t1 t2 t3 t4 t5; do
@@ -331,7 +331,7 @@ exit 0
 EOF
 chmod +x "$sb/fail-adapter.sh"
 # Use a verify cmd that fails ("false") to drive success=false.
-sed -i 's/^verify: true$/verify: false/' "$(exp_dir_for exp-1)/spec"
+sed_sub 's/^verify: true$/verify: false/' "$(exp_dir_for exp-1)/spec"
 EXP run exp-1 --yes --adapter "$sb/fail-adapter.sh" --k 1 >/dev/null 2>&1
 assert_contains "$(cat "$(exp_dir_for exp-1)/runs.jsonl")" '"success":false' \
   "verify exit != 0 → success=false in runs.jsonl"
@@ -707,8 +707,8 @@ echo 'fake' > "$wi_repo/venv/bin/pytest"
 echo "DATABASE_URL=fake" > "$wi_repo/.env"
 
 EXP new wi-exp --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$wi_repo" >/dev/null
-# Set worktree_include via sed (the wizard leaves it commented)
-sed -i '/^# worktree_include:/i worktree_include: venv, .env' "$(exp_dir_for wi-exp)/spec"
+# Set worktree_include (the wizard leaves it commented)
+printf 'worktree_include: venv, .env\n' | file_insert_before '# worktree_include:*' "$(exp_dir_for wi-exp)/spec"
 
 # Stub adapter that asserts the symlinks are visible inside the worktree
 cat > "$sb/wi-adapter.sh" <<'STUB'
@@ -724,7 +724,7 @@ log_a="$(exp_dir_for wi-exp)/logs/t1-A-0.json"
 assert_contains "$(cat "$log_a")" 'v=ok' "worktree_include symlinks venv/ into the worktree"
 assert_contains "$(cat "$log_a")" 'e=ok' "worktree_include symlinks .env into the worktree"
 # Missing path → skipped with a warning, doesn't fail the run
-sed -i 's/^worktree_include: venv, .env$/worktree_include: venv, .env, does-not-exist/' "$(exp_dir_for wi-exp)/spec"
+sed_sub 's/^worktree_include: venv, .env$/worktree_include: venv, .env, does-not-exist/' "$(exp_dir_for wi-exp)/spec"
 wi_missing_out="$(EXP run wi-exp --yes --adapter "$sb/wi-adapter.sh" --k 1 2>&1)"
 assert_contains "$wi_missing_out" "'does-not-exist' not found in repo" \
   "worktree_include: missing paths are skipped with a warning, not fatal"
@@ -888,7 +888,7 @@ mkdir -p "$gate_repo" && (cd "$gate_repo" && git init -q && \
   echo hi > a.txt && git add a.txt && git commit -qm init)
 EXP define gate-1 --arm "A=" --arm "B=" --replicates 2 >/dev/null
 write_task_prompt gate-1 example
-sed -i "s#^repo: .*#repo: $gate_repo#" "$(exp_dir_for gate-1)/spec"
+sed_sub "s#^repo: .*#repo: $gate_repo#" "$(exp_dir_for gate-1)/spec"
 
 # #1 — validate WARNS (does not fail) that a 1-task A/B yields a degenerate CI.
 EXP validate gate-1 >/dev/null 2>&1; deg_rc=$?
@@ -977,8 +977,10 @@ EXP new life-exp --arm "A:" --arm "B:" \
   --replicates 1 --repo "$life_repo" >/dev/null 2>&1
 life_mark="$sb/life-exp.marker"
 # keys go in the TOP block (above [arm:…]) — that's where spec_get_scalar reads.
-sed -i "/^commit: HEAD/a setup: echo EXP_DB=branch-xyz; touch $life_mark\nteardown: rm -f $life_mark\nsetup_scope: experiment" \
-  "$(exp_dir_for life-exp)/spec"
+printf '%s\n' \
+  "setup: echo EXP_DB=branch-xyz; touch $life_mark" \
+  "teardown: rm -f $life_mark" \
+  "setup_scope: experiment" | file_append_after 'commit: HEAD*' "$(exp_dir_for life-exp)/spec"
 EXP run life-exp --yes --adapter "$sb/life-adapter.sh" >/dev/null 2>&1
 assert_contains "$(cat "$(exp_dir_for life-exp)/runs.jsonl")" '"success":true' \
   "#1 setup-injected env (EXP_DB) reaches the verifier → success=true"
@@ -992,8 +994,10 @@ EXP new life-run --arm "A:" --arm "B:" \
   --task "tiny" --verify true \
   --replicates 2 --repo "$life_repo" >/dev/null 2>&1
 life_count="$sb/life-run.count"; : > "$life_count"
-sed -i "/^commit: HEAD/a setup: echo prov >> $life_count; echo EXP_DB=x\nteardown: true\nsetup_scope: run" \
-  "$(exp_dir_for life-run)/spec"
+printf '%s\n' \
+  "setup: echo prov >> $life_count; echo EXP_DB=x" \
+  "teardown: true" \
+  "setup_scope: run" | file_append_after 'commit: HEAD*' "$(exp_dir_for life-run)/spec"
 EXP run life-run --yes --adapter "$sb/life-adapter.sh" >/dev/null 2>&1
 assert_eq "4" "$(wc -l < "$life_count" | tr -d ' ')" \
   "#1 run-scope provisions once per (task,arm,rep) = 1×2×2 = 4"
@@ -1001,7 +1005,7 @@ assert_eq "4" "$(wc -l < "$life_count" | tr -d ' ')" \
 # ── validate rejects a bad setup_scope ──
 EXP new life-bad --arm "A:" --arm "B:" --task "tiny" --verify true \
   --replicates 1 --repo "$life_repo" >/dev/null 2>&1
-sed -i "/^commit: HEAD/a setup_scope: bogus" "$(exp_dir_for life-bad)/spec"
+printf 'setup_scope: bogus\n' | file_append_after 'commit: HEAD*' "$(exp_dir_for life-bad)/spec"
 EXP validate life-bad >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "#1 validate rejects setup_scope other than experiment|run"
 
@@ -1232,10 +1236,10 @@ assert_contains "$cap_content" "arm=A model=claude-opus-4-7 effort=xhigh" "arm A
 assert_contains "$cap_content" "arm=B model=claude-opus-4-8 effort=high"  "arm B's model+effort reach the agent invocation"
 
 # ── validate guards the effort level (typos would silently degrade) ──
-sed -i 's/^effort: high/effort: bogus/' "$(exp_dir_for eff-1)/spec"
+sed_sub 's/^effort: high/effort: bogus/' "$(exp_dir_for eff-1)/spec"
 EXP validate eff-1 >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "validate rejects an unknown effort level"
-sed -i 's/^effort: bogus/effort: high/' "$(exp_dir_for eff-1)/spec"
+sed_sub 's/^effort: bogus/effort: high/' "$(exp_dir_for eff-1)/spec"
 EXP validate eff-1 >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "validate accepts a valid effort level"
 
