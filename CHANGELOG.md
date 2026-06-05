@@ -3,6 +3,69 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.21.0 — Determinism rails: guardrails for non-deterministic agents
+
+The audit gains a **constructive** axis. Until now it was reductive — it removed
+prompt-config debt. This release adds the other half: it detects *missing
+guardrails* that make an AI-written codebase reliable, and offers to install
+them. The thesis: a non-deterministic agent forgets to run things, so a
+`CLAUDE.md` "always run the tests before committing" line is a *bet that the
+model complies* — and you pay for it in tokens every turn whether or not it
+works. **Promoting that rule to a guardrail is strictly better on both axes
+Header cares about: cheaper (it leaves the prompt) and more reliable (enforced,
+can't be skipped).** Delete *or promote*. This is the one part of the audit
+that's openly opinionated — conviction, not an A/B (you can't cheaply measure
+the tail-risk a ratchet *prevents*) — so it's surfaced as `[Apply with review]
+(opinionated)`, not a proven finding.
+
+**New scan — `header-audit rails`.** Comprehensive, conservative detection of
+three rails, plus the environment the delivery chooser needs:
+- `RAIL <name> present|absent|n/a <evidence>` for `precommit-gate`,
+  `test-ratchet`, `compound-memory`.
+- `RAIL-ENV <key> <value>` — `ecosystem` / `ecosystem-all` / `git-remote` /
+  `hooks-path` / `claude` / `tests`. A false *present* (re-nagging a repo that
+  already has a gate) is treated as worse than a false *absent*.
+
+**New scaffold printer — `header-audit rail <name>`** (the `gate` analogue). Prints
+a ready-to-install, **stack-adapted** artifact from `header/scaffold/` templates:
+- `precommit-gate` — a format + lint + test gate (staged-files-only,
+  agent-actionable BLOCKED messages), bundling the test ratchet by default.
+  Checks adapt to the detected stack (python / npm / go / cargo / bundler; an
+  unknown stack still prints a usable gate with a `TODO` block).
+- `test-ratchet` — blocks greening the suite by deleting / skipping the failing
+  test (the agent's #1 reward-hack), multi-language, with a `RATCHET_OVERRIDE=1`
+  escape.
+- `compound-memory` — the `/compound` skill + a seed committed `.claude/memory/`
+  index, so session learnings stop recurring.
+
+**Delivery: both, your choice.** One shared `scripts/pre-commit-gate.sh`, two
+trigger surfaces — and the audit explains the tradeoff so the user picks:
+git-native hooks (gate humans + every harness, but each clone enables once) vs
+Claude Code `PreToolUse` (auto-propagates to every teammate on clone, but the
+agent only). `rail <name> --delivery git|pretooluse|both`.
+
+**Honest about the hook-is-a-risk tension.** A rail is committed, reviewable,
+from a documented template, and agent-actionable — the opposite of the opaque
+hooks the `harness` scan flags. Once installed it shows up as a `HOOK` on the
+next scan; the skill recognizes its own provenance and doesn't re-flag it.
+
+Ships `header/scaffold/` (gate + per-ecosystem checks + ratchet + both wirings +
+the `/compound` skill) and `test/rails.test.sh` (43 assertions). SKILL.md gains a
+"Determinism rails (guardrails)" section with the prose-vs-guardrail pitch.
+(HEA-436.)
+
+## 0.20.0 — Repo-scoped, harness-aware cost audit
+
+`header-audit cost` is now scoped to **this repo** by default — it reads only the
+current repo's transcript dir (`~/.claude/projects/<repo-key>`) instead of
+silently aggregating every project, which had produced a misleading cross-repo
+recommendation. A missing dir is a `NOTE`, never a silent machine-wide total;
+`--all-projects` is the explicit opt-in (clearly labeled `global`). The scan also
+labels the active harness (`COST-HARNESS`) and flags a Codex-over-Claude-data
+mismatch (`COST-NOTE harness-mismatch`) so the presentation downgrades the
+routing recommendation instead of pricing Codex usage off historical Claude
+transcripts. (HEA-435.)
+
 ## 0.19.0 — Codex / macOS support: install, validate, and run cleanly
 
 Dogfooding the skill in **Codex on macOS** surfaced install and validation rough

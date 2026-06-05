@@ -110,6 +110,32 @@ line (opportunity, distinct from `MODEL-STALE` debt). **Client-only — no backe
 endpoint already treats new `kind` values as labels). Fast-follows: an `ultracode` arm, a live
 adoption briefing, and a dashboard effort column.
 
+### Determinism rails (guardrails) — the audit's constructive axis
+
+The reductive audit removes prompt-config debt; this adds guardrails that make
+AI-written code reliable. Thesis: a non-deterministic agent forgets to run
+things, so a `CLAUDE.md` "always run X" line is a *bet* paid for in tokens every
+turn — promoting it to a guardrail is cheaper *and* more reliable (delete *or
+promote*). Openly opinionated (conviction, not an A/B), surfaced as `[Apply with
+review] (opinionated)`.
+
+- **Detection + scaffolds** (0.21.0) — `header-audit rails` detects three rails
+  (`precommit-gate`, `test-ratchet`, `compound-memory`) + the delivery context;
+  `header-audit rail <name>` prints the stack-adapted artifact from
+  `header/scaffold/`. Dual delivery (git-native + Claude Code `PreToolUse`) from
+  one shared gate script, with the propagation tradeoff explained at install.
+
+**Next on this track (not yet built):**
+
+- **Confidence self-assessment gate** — a per-commit 1–100 self-score (warn, not
+  block) that forces the agent to surface uncertainty instead of burying it.
+- **Push / protected-branch guard** — hook-layer enforcement (auto-mode can
+  bypass `permissions.ask`), the active complement to the `SECURITY bash` posture
+  the audit already reads.
+- **Agent-actionable hook-message lint** — score *existing* hooks on whether
+  their failure output is agent remediation vs. a human diagnostic.
+- **Ratchet coverage** beyond python / npm / go (rust, ruby test-fn patterns).
+
 ## Deferred
 
 ### Claude Code `/plugin` marketplace distribution

@@ -1,8 +1,8 @@
 ---
 name: header
-version: 0.20.0
+version: 0.21.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
-when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
+when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
 allowed-tools: Bash, AskUserQuestion
 ---
@@ -302,6 +302,7 @@ Local, read-only — nothing leaves the machine. Run **all three** scans. `<AUDI
 <AUDIT> harness          # CLAUDE.md / AGENTS.md (+ @imports) / settings / hooks / skills / commands / subagents / MCP / Bash posture / model staleness / stale refs
 <AUDIT> deps             # ecosystems / tool versions / install-cooldown gate
 <AUDIT> cost             # spend-by-model from your real transcripts → top model-routing candidate
+<AUDIT> rails            # determinism guardrails present|absent (pre-commit gate / test ratchet / compounding memory) — opinionated, additive
 ```
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in `key_developments`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. Keep regexes conservative (`grep -iE`); malformed lines (not exactly three tab fields) are skipped. This is how the distribution wedge feeds new hypotheses into the deterministic scanner.
@@ -327,6 +328,7 @@ Build the unified list by combining:
 - **Audit findings** — every `HIT` (prompt-debt pattern, built-in *or* briefing-supplied), `FILE` size signal (heavy always-loaded `CLAUDE.md`/`AGENTS.md` — **sum `FILE` + `IMPORT`ed files**, since @imports are loaded every turn too; `NESTED` files are on-demand, count them apart), `MODEL` mismatch / `MODEL-STALE` (pinned to a superseded tier → model-migration `[Experiment]`), `MODEL-UPGRADE` (a newer same-family model shipped, e.g. Opus 4.8 → offer the **engine-adoption card** (`/header opus-4.8`) and `header-experiment mine --adopt` to prove it — opportunity, not debt), `SECURITY` posture, `HOOK` (arbitrary shell on agent events — the biggest unguarded execution + supply-chain surface; treat an unexpected/opaque hook command as a security finding), `SKILL` (installed skills are a supply-chain surface — note any carrying `has-bin yes`, à la `/cso`), `STALE-REF` (a referenced path/script or @import that no longer exists), and `GATE absent` from `header-audit`.
 - **Consistency findings** — `STALE-REF` lines are the deterministic half: surface each as `[Apply with review]` (fix the reference or delete the dead instruction). The other half is yours to judge — while reading `CLAUDE.md`/`AGENTS.md`, flag **mutually contradictory instructions** the greps can't catch (e.g. "use tabs" *and* "use spaces" for the same files; "always delegate to a subagent" *and* "never spawn subagents"; a rule that names a flag/command the tool no longer has). High-signal, low-risk — usually `[Apply now]` / `[Apply with review]`.
 - **Briefing-derived recommendations** — items in the briefing's `key_developments` or `summary` that touch the project's stack/tooling (read package manifests, lockfiles, language version files, build/test/CI configs, container/infra definitions, agent/skill definitions, `CLAUDE.md`, README), or that name a pattern the project doesn't yet use (or uses a now-legacy version of). The bias is toward **deletion** and toward changes the briefing endorses on the model currently configured. For a `MODEL-STALE` hit, cross-reference the briefing for the *current* recommended tier — the bin flags that it's stale; the briefing names what to move to.
+- **Determinism-rail findings** — each `RAIL absent` from `<AUDIT> rails` is an *opportunity to add a guardrail* (a pre-commit quality gate, a test ratchet, a compounding-memory discipline). These are the audit's **constructive** axis — see "Determinism rails (guardrails)". Surface each as **`[Apply with review]` tagged `(opinionated — Header house guardrail, not measured on your repo)`**: the new hook/skill file *is* the diff-faithful change, but the justification is conviction, not an A/B. Honor the ledger (keys `rail-precommit-gate` / `rail-test-ratchet` / `rail-compound-memory`); **skip `n/a` rows** (e.g. a test ratchet on a repo with no tests). This does **not** contradict the `HOOK`-as-risk framing: a rail is committed, reviewable, from Header's documented template, and agent-actionable — the opposite of an opaque hook. (Once installed it will appear as a `HOOK` on the next `harness` scan — recognize it as the rail you just added, don't re-flag it.)
 - **Known issues** — themes from learnings/post-mortems/runbooks/architecture-decision-records/incident reports + a quick `TODO`/`FIXME`/`HACK` density scan. A recommendation that addresses a known issue jumps the queue.
 
 When a `MODEL` is known, cross-reference its model card / release notes before declaring a prompt-debt `HIT` actionable — confirm the pattern is *still* debt on that model. Prefer briefing sources for the cross-reference; fall back to the web.
@@ -622,6 +624,28 @@ Makes the audit **cost-aware** — it opens with where the tokens actually go. D
 
 **Run the scope + harness sanity check before presenting any spend (Step 4).** Only when `COST-SCOPE` is `repo` and `COST-HARNESS` is `claude` should spend lead the scorecard and `ROUTE-CANDIDATE` become a ranked model-routing `[Experiment]`. A `global` scope or a Codex harness-mismatch is **background only**. When it does lead: surface the breakdown first (with `header-cost`'s price-source/freshness + billing-mode notes — see "Cost analytics"), then convert `ROUTE-CANDIDATE` into the model-routing `[Experiment]`. It's a **candidate to prove, never a projected saving**: re-rating the same tokens on a cheaper model is a guess; the honest number comes from `header-experiment` (model-swap). This is the audit's most on-thesis upgrade — it grounds the model-migration hypothesis (the moat's first learning) in the user's real money.
 
+### header-audit rails
+
+The **constructive** scan: where `harness`/`deps`/`cost` find debt to remove, `rails` finds guardrails to *add*. It detects whether the repo has the determinism rails that make AI-written code reliable, and reports the environment the delivery chooser needs. Read the line types here; the full pitch + install flow is in "Determinism rails (guardrails)". Output lines (tab-separated):
+
+- `RAIL-ENV <key> <value>` — context for adapting + delivering the scaffold:
+  - `ecosystem <python|npm|go|cargo|bundler|unknown>` — primary stack (precedence order), used to adapt the gate's checks. `ecosystem-all` lists every detected stack.
+  - `git-remote <yes|no>` — a configured remote means a shared repo, so team propagation matters (favor the PreToolUse delivery, or both).
+  - `hooks-path <value|unset>` — `core.hooksPath`.
+  - `claude <yes|no>` — a `.claude/` dir; the PreToolUse delivery is only available when `yes`.
+  - `tests <path|none>` — a detected test suite; `none` makes the ratchet `n/a`.
+- `RAIL <name> <present|absent|n/a> <evidence>` — one per rail (`precommit-gate`, `test-ratchet`, `compound-memory`). Detection is deliberately conservative — a false *present* (re-nagging a repo that already has a gate) is worse than a false *absent*. `n/a` means the rail doesn't apply (e.g. a test ratchet with no test suite) — skip it, don't surface it.
+
+**Scaffold printer (the `gate` analogue):**
+
+```bash
+<AUDIT> rail precommit-gate --ecosystem <eco> --delivery <git|pretooluse|both> [--ratchet on|off]
+<AUDIT> rail test-ratchet                 # the standalone ratchet block, to insert into an existing gate
+<AUDIT> rail compound-memory              # the /compound skill + a seed .claude/memory/MEMORY.md
+```
+
+Like `gate npm 7` prints the `.npmrc`, `rail <name>` prints the ready artifact — stack-adapted from the `header/scaffold/` templates, with the chosen delivery wiring appended. `precommit-gate` bundles the test ratchet by default (`--ratchet off` to omit); the correctness-critical bits (the `git commit` detector, the corrected skip/xfail regex) travel verbatim in the template. An unknown ecosystem still prints a usable gate with a `TODO` checks block. The SKILL.md flow writes the files; the bin only prints.
+
 ### Record findings
 
 Each finding becomes a ledger entry, as documented in the recommendation ledger above. Telemetry aggregates demand consent-gated — **never** sends code, paths, or line content; only counts and kinds.
@@ -657,6 +681,61 @@ find ~/.claude/projects -name '*.jsonl' -exec cat {} + | "<COST>" report --since
 **No projections — name the lever, don't guess the saving.** A price re-rating of the same tokens is a guess. `"<COST>" savings` exists only to point at the experiment loop — the user can drive it locally with `header-experiment` (see the next section), and `savings` prints the four-command recipe.
 
 Other subcommands: `"<COST>" refresh [--url U]`, `"<COST>" prices`, `"<COST>" cost <model> <in> <out> [cache_read] [cache_write_5m] [cache_write_1h]`. Add `--json` for machine output.
+
+## Determinism rails (guardrails) — beta
+
+The rest of the audit is **reductive** — it removes prompt-config debt. This is the **constructive** half: it adds *guardrails* that make an AI-written codebase reliable. Driven by `<AUDIT> rails`; surfaced in Step 4 as `[Apply with review] (opinionated)`. Unlike everything else in the skill, these are **conviction, not measurement** — you can't cheaply A/B "should you have a test ratchet" (its value is tail-risk it *prevents*). So present them honestly as Header's house guardrails, not as a proven finding. This is the one part of the audit where we say: take our word for it — it's how we build Header itself.
+
+### Why guardrails (the pitch — lead with this)
+
+A non-deterministic agent **forgets to run things**. Every "always run the tests before committing" line in `CLAUDE.md` is not a rule — it's a *bet that the model complies this turn*, and the odds decay exactly when you need them most (deep in a long session, attention on the bug). No amount of `**IMPORTANT: ALWAYS**` moves that probability to 1; it just costs more tokens to assert harder.
+
+> **A CLAUDE.md instruction lives in the model's *attention* — stochastic, decaying with context. A guardrail lives in the harness's *control flow* — deterministic, constant. Prose asks; a guardrail enforces.**
+
+Promoting a rule from prose to a guardrail is the **one move that's strictly better on both axes Header cares about**: **cheaper** (it leaves the prompt — stops being paid for every turn) *and* **more reliable** (enforced, can't be skipped). So the Header story is **delete *or promote***: dead cargo-cult prose → delete it; prose that encodes a real procedural requirement → promote it to a rail.
+
+**The example to show the user** (prose → guardrail):
+
+```markdown
+## Before committing            ← CLAUDE.md: loaded every turn, obeyed *probably*
+- Always run black and flake8; fix what they flag.
+- Always run the full suite and make sure it passes.
+- Never commit with failing or skipped tests.
+```
+
+On turn 47 the agent commits without running `black` (the rule is buried), and "make sure it passes" gets satisfied by *deleting the failing test* — prose can't defend against its own misreading. The same rules as `scripts/pre-commit-gate.sh` run deterministically every commit, **block** on failure (the agent is stopped, not reminded), the **ratchet** catches the delete-the-test hack, and the block message says exactly what to run next so the agent self-corrects in-loop. The CLAUDE.md section collapses to one line.
+
+### The three rails (v1)
+
+| Rail | Enforces | When `absent` |
+|---|---|---|
+| `precommit-gate` | format + lint + test pass before every commit | recommend installing it (bundles the ratchet by default) |
+| `test-ratchet` | the agent can't green the suite by deleting / skipping the failing test | if a gate exists but has no ratchet, recommend inserting the block; a fresh `precommit-gate` already includes it |
+| `compound-memory` | session learnings get captured (committed `.claude/memory/`) so they stop recurring | recommend the `/compound` skill + seed index — the compounding flywheel; adjacent to Header's own recommendation ledger |
+
+### Delivery: let the user choose (explain the tradeoff)
+
+Both wirings exec the **same** `scripts/pre-commit-gate.sh`, so "both" is one implementation behind two triggers — not double work. They propagate in *opposite* directions, so explain it and let the user pick:
+
+| | Auto-propagates to team on clone | Gates humans + all harnesses | Gates the agent in-loop |
+|---|:---:|:---:|:---:|
+| **git-native** (`.githooks/` + `git config core.hooksPath .githooks`) | ✗ — each dev runs the `git config` once (a committed `.git/hooks/` is *not* cloned-and-activated) | ✓ | partial |
+| **Claude Code PreToolUse** (committed `.claude/settings.json`) | ✓ — every teammate's agent picks it up on clone (modulo Claude Code's hook-trust prompt) | ✗ — Claude Code only | ✓ |
+| **both** | ✓ | ✓ | ✓ |
+
+Rule of thumb: solo repo or all-Claude-Code team → PreToolUse alone. Mixed human/agent commits, or multiple harnesses (Codex etc.) → both. Pass the choice to `rail <name> --delivery <git|pretooluse|both>`.
+
+### Not the security risk the audit warns about
+
+The audit flags opaque hooks as the biggest unguarded execution surface (`HOOK` lines). A rail is the **opposite**: committed and reviewable, from this documented template, calling one in-repo script the user can read, with agent-actionable messages. Say this when you recommend it. And note: after the rail is installed, the next `<AUDIT> harness` will list it as a `HOOK` — that's the rail you just added, **not** a new finding; don't re-flag it.
+
+### Install flow
+
+1. Run `<AUDIT> rails`. For each `RAIL absent` (skip `n/a`), check the ledger (`rail-precommit-gate` / `rail-test-ratchet` / `rail-compound-memory`) and drop anything `dismissed`.
+2. Present the surviving rails as `[Apply with review] (opinionated)` with the pitch above — comprehensive: offer the full set of missing rails, not just one.
+3. On a yes, present the **delivery chooser** (git-native / PreToolUse / both) for gate-based rails, using the `RAIL-ENV git-remote` / `claude` context to recommend a default.
+4. Print the artifact: `<AUDIT> rail <name> --ecosystem <RAIL-ENV ecosystem> --delivery <choice>`. **Write the files** it describes (the gate script `chmod +x`, the wiring, the `/compound` skill + seed). Stack-adaptation is automatic from `--ecosystem`; if it's `unknown`, fill in the `TODO` checks block from the detected tooling before writing.
+5. Record dispositions in the ledger (`applied` / `dismissed` / `snoozed`). On a commit, append the `Header-Audit-Finding: <key>` trailer.
 
 ## Engine-adoption card (`/header opus-4.8`)
 
