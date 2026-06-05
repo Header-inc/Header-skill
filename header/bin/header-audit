@@ -53,7 +53,20 @@
 #   header-audit gate <npm|pip> [days]
 #                                  print the recommended supply-chain snippet
 #
-# Reads only (harness/deps/cost never write). Nothing leaves the machine.
+#   header-audit rails [--repo DIR]
+#       Determinism rails (guardrails). Detects whether the repo has the
+#       guardrails that make AI-written code reliable: a pre-commit quality gate,
+#       a test ratchet (can't green the suite by deleting/skipping the failing
+#       test), and a compounding-memory discipline. Absence is an OPPORTUNITY the
+#       audit surfaces as [Apply with review] (opinionated). Output lines:
+#         RAIL-ENV <key>  <value>   (ecosystem/ecosystem-all/git-remote/hooks-path/claude/tests)
+#         RAIL     <name>  <present|absent|n/a>  <evidence>
+#   header-audit rail <precommit-gate|test-ratchet|compound-memory> [--ecosystem E]
+#                     [--delivery git|pretooluse|both] [--ratchet on|off]
+#       Print the scaffold to install for a rail (stack-adapted), the analogue of
+#       `gate` for supply-chain. Reads header/scaffold/ templates.
+#
+# Reads only (harness/deps/cost/rails never write). Nothing leaves the machine.
 # Env: HEADER_HOME (state dir, default $HOME/.header — used for the optional
 # briefing-supplied patterns file), HEADER_PATTERNS_FILE (override its path),
 # HOME (for user-global config). Token estimate is bytes/4 — a rough proxy.
@@ -362,6 +375,93 @@ _bash_security() {
   ' "$1"
 }
 
+# ── determinism rails (guardrails) ────────────────────────────
+# Detect whether the repo has the guardrails that make AI-written code reliable.
+# Conservative by design: a false "present" (re-nagging a repo that already has a
+# gate) is worse than a false "absent". The `rail` printer emits the scaffold.
+_rail_ecosystems() {
+  _re=""
+  [ -f "$REPO/package.json" ] && _re="$_re npm"
+  for p in requirements.txt pyproject.toml setup.cfg setup.py Pipfile; do
+    [ -f "$REPO/$p" ] && { _re="$_re python"; break; }
+  done
+  [ -f "$REPO/go.mod" ]     && _re="$_re go"
+  [ -f "$REPO/Cargo.toml" ] && _re="$_re cargo"
+  [ -f "$REPO/Gemfile" ]    && _re="$_re bundler"
+  printf '%s' "${_re# }"
+}
+_rail_primary_ecosystem() {
+  # One stack to adapt the gate to, by precedence (most mature check/ratchet set).
+  _all=" $(_rail_ecosystems) "
+  for e in python npm go cargo bundler; do
+    case "$_all" in *" $e "*) printf '%s' "$e"; return ;; esac
+  done
+  printf 'unknown'
+}
+_rail_testpath() {
+  # A representative test location, or "none" (drives the ratchet n/a case).
+  for d in tests test spec __tests__; do
+    [ -d "$REPO/$d" ] && { printf '%s/' "$d"; return; }
+  done
+  for g in '*_test.go' 'test_*.py' '*_spec.rb'; do
+    find "$REPO" -maxdepth 3 \
+      \( -name node_modules -o -name .git -o -name vendor -o -name dist -o -name target \) -prune -o \
+      -name "$g" -type f -print 2>/dev/null | grep -q . && { printf '%s' "$g"; return; }
+  done
+  find "$REPO" -maxdepth 4 \( -name node_modules -o -name .git \) -prune -o \
+    \( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.js' -o -name '*.spec.ts' \) \
+    -type f -print 2>/dev/null | grep -q . && { printf '*.test.*'; return; }
+  printf 'none'
+}
+_rail_hookspath() { git -C "$REPO" config --get core.hooksPath 2>/dev/null || true; }
+_rail_settings_gate_hook() {
+  # yes if a PreToolUse hook command looks like a commit quality gate.
+  for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json"; do
+    [ -f "$s" ] || continue
+    _hooks "$s" | awk -F"$TAB" '$1=="PreToolUse"{print $2}' \
+      | grep -qiE 'pre-commit|pre_commit|pytest|black|flake8|npm run (lint|test)|go test|cargo test|rspec|rubocop|pre-commit-gate' \
+      && { printf 'yes'; return; }
+  done
+}
+_rail_gate_scripts() {
+  # Shell pre-commit gate scripts present (for ratchet-signature detection).
+  _gs=""; _hp="$(_rail_hookspath)"
+  for c in "$REPO/.githooks/pre-commit" "$REPO/.git/hooks/pre-commit" \
+           ${_hp:+"$REPO/$_hp/pre-commit"} "$REPO/scripts/pre-commit-gate.sh"; do
+    [ -f "$c" ] && _gs="$_gs $c"
+  done
+  for c in "$REPO"/scripts/*pre-commit*; do [ -f "$c" ] && _gs="$_gs $c"; done
+  printf '%s' "${_gs# }"
+}
+_rail_precommit_status() {
+  _hp="$(_rail_hookspath)"
+  [ -f "$REPO/.githooks/pre-commit" ]    && { printf 'present\t.githooks/pre-commit'; return; }
+  [ -n "$_hp" ] && [ -f "$REPO/$_hp/pre-commit" ] && { printf 'present\tcore.hooksPath %s/pre-commit' "$_hp"; return; }
+  [ -f "$REPO/.git/hooks/pre-commit" ]   && { printf 'present\t.git/hooks/pre-commit (local, not committed)'; return; }
+  [ -f "$REPO/.husky/pre-commit" ]       && { printf 'present\t.husky/pre-commit'; return; }
+  [ -f "$REPO/.pre-commit-config.yaml" ] && { printf 'present\t.pre-commit-config.yaml'; return; }
+  { [ -f "$REPO/lefthook.yml" ] || [ -f "$REPO/.lefthook.yml" ]; } && { printf 'present\tlefthook'; return; }
+  [ "$(_rail_settings_gate_hook)" = yes ] && { printf 'present\tPreToolUse gate hook'; return; }
+  printf 'absent\tno pre-commit quality gate (git hook / husky / pre-commit / lefthook / PreToolUse) found'
+}
+_rail_ratchet_status() {
+  _tp="$1"
+  [ "$_tp" = none ] && { printf 'n/a\tno test suite detected'; return; }
+  for g in $(_rail_gate_scripts); do
+    grep -qiE 'ratchet|net_removed|new_skips|RATCHET_OVERRIDE|xfail' "$g" 2>/dev/null \
+      && { printf 'present\t%s' "$g"; return; }
+  done
+  printf 'absent\ttests present but nothing blocks deleting/skipping a failing test'
+}
+_rail_compound_status() {
+  if [ -d "$REPO/.claude/memory" ] && ls "$REPO"/.claude/memory/*.md >/dev/null 2>&1; then
+    printf 'present\t.claude/memory/'; return
+  fi
+  [ -f "$REPO/MEMORY.md" ]                && { printf 'present\tMEMORY.md'; return; }
+  [ -d "$REPO/.claude/skills/compound" ] && { printf 'present\t.claude/skills/compound'; return; }
+  printf 'absent\tno compounding-memory discipline (.claude/memory/ + a capture step) found'
+}
+
 case "$sub" in
   patterns)
     _patterns | while IFS="$TAB" read -r id rx why; do
@@ -599,12 +699,122 @@ EOF
     esac
     ;;
 
+  rails)
+    # Determinism guardrails present/absent + the environment the delivery chooser
+    # needs. Comprehensive: every rail every run (the SKILL.md presentation honors
+    # the ledger and skips n/a). Conservative detection — see helpers above.
+    eco="$(_rail_primary_ecosystem)"
+    all="$(_rail_ecosystems)"; [ -n "$all" ] || all="-"
+    tp="$(_rail_testpath)"
+    hp="$(_rail_hookspath)"; [ -n "$hp" ] || hp="unset"
+    rem="no"; [ -n "$(git -C "$REPO" remote 2>/dev/null)" ] && rem="yes"
+    cl="no"; [ -d "$REPO/.claude" ] && cl="yes"
+    printf 'RAIL-ENV\tecosystem\t%s\n' "$eco"
+    printf 'RAIL-ENV\tecosystem-all\t%s\n' "$all"
+    printf 'RAIL-ENV\tgit-remote\t%s\n' "$rem"
+    printf 'RAIL-ENV\thooks-path\t%s\n' "$hp"
+    printf 'RAIL-ENV\tclaude\t%s\n' "$cl"
+    printf 'RAIL-ENV\ttests\t%s\n' "$tp"
+    printf 'RAIL\tprecommit-gate\t%s\n' "$(_rail_precommit_status)"
+    printf 'RAIL\ttest-ratchet\t%s\n'   "$(_rail_ratchet_status "$tp")"
+    printf 'RAIL\tcompound-memory\t%s\n' "$(_rail_compound_status)"
+    ;;
+
+  rail)
+    # Scaffold printer — the analogue of `gate` for determinism rails. Reads the
+    # shipped header/scaffold/ templates, adapts the stack-specific checks, and
+    # prints a ready-to-install artifact (the SKILL.md flow writes the files).
+    set -- $args_rest
+    RNAME=""; ECO=""; DELIVERY="both"; RAT="on"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --ecosystem) ECO="${2:-}"; shift 2 ;;
+        --delivery)  DELIVERY="${2:-}"; shift 2 ;;
+        --ratchet)   RAT="${2:-}"; shift 2 ;;
+        --*)         shift ;;
+        *)           [ -z "$RNAME" ] && RNAME="$1"; shift ;;
+      esac
+    done
+    SCAFFOLD="$(CDPATH= cd "$(dirname "$0")/../scaffold" 2>/dev/null && pwd || true)"
+    [ -n "$SCAFFOLD" ] && [ -d "$SCAFFOLD" ] || { echo "header-audit: scaffold templates not found alongside the bin" >&2; exit 1; }
+    [ -n "$ECO" ] || ECO="$(_rail_primary_ecosystem)"
+
+    _assemble_gate() {
+      _chk="$SCAFFOLD/checks/$ECO.sh"; [ -f "$_chk" ] || _chk="$SCAFFOLD/checks/unknown.sh"
+      awk -v chk="$_chk" -v rat="$SCAFFOLD/ratchet.sh" -v raton="$RAT" '
+        /^#==CHECKS==$/   { while ((getline l < chk) > 0) print l; close(chk); next }
+        /^#==RATCHET==$/  {
+            if (raton == "on") { while ((getline l < rat) > 0) print l; close(rat) }
+            else print "# (test ratchet not included — add later: header-audit rail test-ratchet)"
+            next }
+        /^#==COMPOUND==$/ {
+            print "# ── (optional) /compound gate — require a session-learning review per commit ──"
+            print "# Off by default. To enforce: uncomment, and have /compound run `touch .claude/.compound_ran`"
+            print "# (cleared in a post-commit hook). See Header scaffold/compound/SKILL.md."
+            print "# if [ ! -f .claude/.compound_ran ]; then"
+            print "#   fail \"/compound not run for this commit — invoke /compound, then retry\"; exit 2"
+            print "# fi"
+            next }
+        { print }
+      ' "$SCAFFOLD/pre-commit-gate.sh"
+    }
+    _print_wiring() {
+      case "$1" in
+        git|both)
+          printf '\n# ===== WIRING (git-native: gates humans + every harness; each clone enables once) =====\n'
+          echo "# 1. Save the script above to scripts/pre-commit-gate.sh, then: chmod +x scripts/pre-commit-gate.sh"
+          echo "# 2. Save the file below to .githooks/pre-commit, then: chmod +x .githooks/pre-commit"
+          echo "# ----- FILE: .githooks/pre-commit -----"
+          cat "$SCAFFOLD/githook-pre-commit"
+          echo "# 3. Enable once per clone: git config core.hooksPath .githooks"
+          ;;
+      esac
+      case "$1" in
+        pretooluse|both)
+          printf '\n# ===== WIRING (Claude Code PreToolUse: gates the agent in-loop; auto-propagates to teammates) =====\n'
+          echo "# Save the script above to scripts/pre-commit-gate.sh (chmod +x), then merge this into .claude/settings.json:"
+          echo "# ----- FILE: .claude/settings.json (merge the 'hooks' key) -----"
+          cat "$SCAFFOLD/pretooluse.json"
+          ;;
+      esac
+      [ "$1" = both ] && printf '\n# Both wirings exec the SAME scripts/pre-commit-gate.sh — one script, two triggers.\n'
+    }
+
+    case "$RNAME" in
+      precommit-gate)
+        echo "# ===== FILE: scripts/pre-commit-gate.sh (chmod +x) — ecosystem: $ECO, ratchet: $RAT ====="
+        _assemble_gate
+        _print_wiring "$DELIVERY"
+        ;;
+      test-ratchet)
+        echo "# ===== test ratchet — insert into scripts/pre-commit-gate.sh, right after the fail() helper ====="
+        echo "# (No gate yet? Run: header-audit rail precommit-gate — it bundles this in.)"
+        cat "$SCAFFOLD/ratchet.sh"
+        ;;
+      compound-memory)
+        echo "# ===== compounding memory — install the /compound skill + a seed memory index ====="
+        echo "# 1. Create the skill file:"
+        echo "# ----- FILE: .claude/skills/compound/SKILL.md -----"
+        cat "$SCAFFOLD/compound/SKILL.md"
+        printf '\n# 2. Seed the committed memory index (skip if .claude/memory/MEMORY.md already exists):\n'
+        echo "# ----- FILE: .claude/memory/MEMORY.md -----"
+        cat "$SCAFFOLD/compound/MEMORY.md"
+        printf '\n# 3. Run /compound at session end (and after notable events). Optional: enable the\n'
+        echo "#    /compound commit gate in scripts/pre-commit-gate.sh to require it per commit."
+        ;;
+      *)
+        echo "header-audit: rail <precommit-gate|test-ratchet|compound-memory> [--ecosystem E] [--delivery git|pretooluse|both] [--ratchet on|off]" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|rails|rail|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|rails|rail|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac
