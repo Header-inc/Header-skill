@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.19.0
+version: 0.20.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -306,7 +306,7 @@ Local, read-only — nothing leaves the machine. Run **all three** scans. `<AUDI
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in `key_developments`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. Keep regexes conservative (`grep -iE`); malformed lines (not exactly three tab fields) are skipped. This is how the distribution wedge feeds new hypotheses into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `SPEND`, `ROUTE-CANDIDATE`); you'll join them with the briefing in the next step.
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`); you'll join them with the briefing in the next step.
 
 ### Step 4 — Cross-reference and present
 
@@ -314,7 +314,13 @@ The audit's findings + the briefing's items become **one ranked recommendation l
 
 **Recent activity (diff-aware):** glance at recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`). Weight recommendations toward areas with recent activity — a briefing item or audit hit that touches code the user changed this week is more actionable than one about a dormant corner. Name the connection when you surface it.
 
-**Open with the money.** When `<AUDIT> cost` returned `SPEND` rows, *lead* the scorecard with where the tokens actually go — "this period you spent ~$X; N% of it on `<top model>`" — using the `SPEND-TOTAL` / `SPEND` lines (always surface `header-cost`'s price-source + freshness line and the billing-mode note; see "Cost analytics"). Then turn the `ROUTE-CANDIDATE` (the costliest model) into the headline **model-routing `[Experiment]`**: "route the low-stakes share of this spend to a cheaper tier — prove it before trusting the saving." This is the on-thesis hypothesis (model migration is the moat's first learning); it's a *candidate to prove*, never a projected saving — drive it with `header-experiment new --kind model-swap` (see "Experiments"). If `cost` returned only a `NOTE` (no usage history yet), skip the spend lead and say so in one line.
+**Open with the money — but only spend that matches this repo and harness.** Before leading with any `SPEND` row, run the **scope + harness sanity check**: *does this spend source match the current repo and the current agent harness?* Read it off the markers `<AUDIT> cost` emits:
+
+- **`COST-SCOPE repo`** + `COST-INPUT` → the spend is this repo's own transcripts. Safe to lead with and to turn into a ranked recommendation. (The default; nothing else aggregates silently.)
+- **`COST-SCOPE global`** (only ever from an explicit `--all-projects`) → machine-wide spend across *all* projects. Present it as **background context only** — "across all your projects you've spent ~$X" — **never** as a ranked recommendation for *this* repo. Don't promote its `ROUTE-CANDIDATE` to an `[Experiment]`.
+- **`COST-HARNESS codex …`** with a **`COST-NOTE harness-mismatch`** → the priced transcripts are *historical Claude Code* usage; the active harness is Codex, so this spend does **not** measure your current engine. Do **not** surface `ROUTE-CANDIDATE` as a model-routing `[Experiment]`. Say instead: *"No Codex cost data available; run a Codex 5.x paired experiment if you want to test model choice."* If you do mention the figures, label them explicitly as historical Claude Code usage only.
+
+When the source *does* match (repo-scoped, harness `claude`), *lead* the scorecard with where the tokens actually go — "this period you spent ~$X; N% of it on `<top model>`" — using the `SPEND-TOTAL` / `SPEND` lines (always surface `header-cost`'s price-source + freshness line and the billing-mode note; see "Cost analytics"). Then turn the `ROUTE-CANDIDATE` (the costliest model) into the headline **model-routing `[Experiment]`**: "route the low-stakes share of this spend to a cheaper tier — prove it before trusting the saving." This is the on-thesis hypothesis (model migration is the moat's first learning); it's a *candidate to prove*, never a projected saving — drive it with `header-experiment new --kind model-swap` (see "Experiments"). If `cost` returned only a `NOTE` (no usage history for this repo yet), skip the spend lead and say so in one line — mention `--all-projects` is available for machine-wide spend.
 
 Build the unified list by combining:
 
@@ -599,14 +605,22 @@ Surface:
 
 ### `header-audit cost`
 
-Makes the audit **cost-aware** — it opens with where the tokens actually go. Defers all pricing to the sibling `header-cost` (single source of truth for the price table, cache-write split, and legacy-Opus handling); this scan just locates usage and reshapes `header-cost report --json` into audit rows. By default it reads `$HOME/.claude/projects/*.jsonl` (your real Claude Code transcripts); `--input F` points at a usage JSONL instead, `--since T` scopes the window. Output lines:
+Makes the audit **cost-aware** — it opens with where the tokens actually go. Defers all pricing to the sibling `header-cost` (single source of truth for the price table, cache-write split, and legacy-Opus handling); this scan just locates usage and reshapes `header-cost report --json` into audit rows.
 
+**Scoped to the current repo by default.** It reads only *this* repo's transcript dir — `$HOME/.claude/projects/<repo-key>`, where `<repo-key>` is the absolute git-root path with every non-alphanumeric char replaced by `-` (Claude Code's own convention; e.g. `/Users/me/forge` → `…/projects/-Users-me-forge`). If that dir doesn't exist it emits a `NOTE` and stops — it **never** silently aggregates every project (that over-attribution is exactly what produced a misleading cross-repo recommendation; HEA-435). `--all-projects` opts into the machine-wide aggregate (clearly labeled `global`); `--input F` prices an explicit usage JSONL; `--since T` scopes the window; `--harness NAME` overrides harness detection. Output lines:
+
+- `COST-SCOPE repo <repo>` — default: spend is this repo's transcripts only.
+- `COST-SCOPE global <dir> <n> project dirs` — `--all-projects`: machine-wide aggregate. Background context only, never a per-repo recommendation.
+- `COST-SCOPE input <path>` — `--input` was used.
+- `COST-INPUT <dir> <n> files` — the repo-scoped transcript dir actually priced.
+- `COST-HARNESS <harness> claude-transcripts` — whose usage this is. `header-cost` only parses Claude Code transcripts, so when `<harness>` is `codex` the spend is historical Claude usage, not the active engine.
+- `COST-NOTE harness-mismatch <why>` — active harness is Codex over Claude data; downgrade the recommendation (see Step 4).
 - `SPEND-TOTAL <usd> <calls> [<since>]` — total measured spend (API rates) over the window.
 - `SPEND <model> <calls> <usd> <share_pct>` — one per model, sorted by cost; `share_pct` is its slice of the total.
 - `ROUTE-CANDIDATE <model> <usd> <share_pct>` — the costliest model: the headline model-routing experiment candidate.
-- `NOTE cost <reason>` — no usage history yet, or `header-cost` not found. Degrade gracefully: skip the spend lead, mention it in one line.
+- `NOTE cost <reason>` — no usage history for this repo, or `header-cost` not found. Degrade gracefully: skip the spend lead, mention it in one line (and that `--all-projects` exists).
 
-Surface the spend breakdown first (with `header-cost`'s price-source/freshness + billing-mode notes — see "Cost analytics"), then convert `ROUTE-CANDIDATE` into the model-routing `[Experiment]`. It's a **candidate to prove, never a projected saving**: re-rating the same tokens on a cheaper model is a guess; the honest number comes from `header-experiment` (model-swap). This is the audit's most on-thesis upgrade — it grounds the model-migration hypothesis (the moat's first learning) in the user's real money.
+**Run the scope + harness sanity check before presenting any spend (Step 4).** Only when `COST-SCOPE` is `repo` and `COST-HARNESS` is `claude` should spend lead the scorecard and `ROUTE-CANDIDATE` become a ranked model-routing `[Experiment]`. A `global` scope or a Codex harness-mismatch is **background only**. When it does lead: surface the breakdown first (with `header-cost`'s price-source/freshness + billing-mode notes — see "Cost analytics"), then convert `ROUTE-CANDIDATE` into the model-routing `[Experiment]`. It's a **candidate to prove, never a projected saving**: re-rating the same tokens on a cheaper model is a guess; the honest number comes from `header-experiment` (model-swap). This is the audit's most on-thesis upgrade — it grounds the model-migration hypothesis (the moat's first learning) in the user's real money.
 
 ### Record findings
 

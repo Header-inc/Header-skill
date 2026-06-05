@@ -233,6 +233,7 @@ cat > "$sb_co/usage.jsonl" <<'JSONL'
 {"model":"claude-haiku-4-5","input_tokens":50000,"output_tokens":10000,"ts":"2026-05-22T10:00:00Z"}
 JSONL
 C="$(HOME="$sb_co" "$AU" cost --input "$sb_co/usage.jsonl")"
+assert_contains "$C" $'COST-SCOPE\tinput\t' "cost --input labels its scope as input"
 assert_contains "$C" $'SPEND-TOTAL\t' "cost emits a SPEND-TOTAL line"
 assert_contains "$C" $'SPEND\tclaude-opus-4-8\t' "cost breaks spend down by model"
 assert_contains "$C" $'ROUTE-CANDIDATE\tclaude-opus-4-8\t' \
@@ -243,6 +244,51 @@ assert_eq "claude-opus-4-8" "$rc_model" "ROUTE-CANDIDATE is the costliest model"
 # a missing input file degrades to a NOTE, never an error row
 assert_contains "$(HOME="$sb_co" "$AU" cost --input "$sb_co/nope.jsonl")" $'NOTE\tcost\t' \
   "cost with a missing input emits a NOTE, not a crash"
+
+# ── cost: repo-scoped by default, no cross-project leakage (HEA-435) ──
+# Two projects under ~/.claude/projects keyed by repo path (Claude Code's own
+# convention: abs path → non-alphanumerics replaced by '-'). repoA spends little
+# (haiku); repoB spends a lot (opus). A default audit of repoA must report ONLY
+# repoA's spend — the large global total must never leak in.
+sb_sc="$(make_sandbox)"; repoA="$sb_sc/repoA"; repoB="$sb_sc/repoB"
+mkdir -p "$repoA" "$repoB"
+keyA="$(printf '%s' "$repoA" | sed 's/[^A-Za-z0-9]/-/g')"
+keyB="$(printf '%s' "$repoB" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$sb_sc/.claude/projects/$keyA" "$sb_sc/.claude/projects/$keyB"
+printf '{"model":"claude-haiku-4-5","input_tokens":50000,"output_tokens":10000,"ts":"2026-05-22T10:00:00Z"}\n' \
+  > "$sb_sc/.claude/projects/$keyA/a.jsonl"
+printf '{"model":"claude-opus-4-8","input_tokens":2000000,"output_tokens":800000,"ts":"2026-05-21T10:00:00Z"}\n' \
+  > "$sb_sc/.claude/projects/$keyB/b.jsonl"
+
+SCA="$(HOME="$sb_sc" "$AU" cost --repo "$repoA")"
+assert_contains "$SCA" $'COST-SCOPE\trepo\t'"$repoA" "default cost is scoped to the current repo"
+assert_contains "$SCA" $'COST-INPUT\t'"$sb_sc/.claude/projects/$keyA"$'\t1\tfiles' \
+  "cost names the repo-scoped transcript dir it priced"
+assert_contains "$SCA" $'SPEND\tclaude-haiku-4-5\t' "repo-scoped cost prices this repo's models"
+assert_not_contains "$SCA" $'SPEND\tclaude-opus-4-8\t' \
+  "the other project's opus spend does NOT leak into this repo's report"
+assert_contains "$SCA" $'COST-HARNESS\tclaude\tclaude-transcripts' "cost labels the active harness"
+
+# A repo with no matching transcript dir → NOTE, and crucially NO SPEND (never a
+# silent machine-wide aggregate).
+SCN="$(HOME="$sb_sc" "$AU" cost --repo "$sb_sc/repoNone")"
+assert_contains "$SCN" $'NOTE\tcost\t' "a repo with no transcripts degrades to a NOTE"
+assert_not_contains "$SCN" $'SPEND-TOTAL\t' "no-data repo never falls back to a global aggregate"
+
+# --all-projects is the explicit machine-wide opt-in: labeled global, totals cover
+# both projects (so opus reappears).
+SCG="$(HOME="$sb_sc" "$AU" cost --all-projects)"
+assert_contains "$SCG" $'COST-SCOPE\tglobal\t' "--all-projects labels its scope as global"
+assert_contains "$SCG" $'SPEND\tclaude-opus-4-8\t' "--all-projects aggregates every project"
+
+# Codex harness over Claude transcripts is a cross-harness mismatch: label it and
+# flag it so the presentation downgrades the routing recommendation.
+SCX="$(HOME="$sb_sc" "$AU" cost --repo "$repoA" --harness codex)"
+assert_contains "$SCX" $'COST-HARNESS\tcodex\tclaude-transcripts' "Codex harness is labeled on the cost source"
+assert_contains "$SCX" $'COST-NOTE\tharness-mismatch\t' "Codex over Claude transcripts flags a harness mismatch"
+# the mismatch NOTE is suppressed under the explicit cross-harness opt-in
+assert_not_contains "$(HOME="$sb_sc" "$AU" cost --all-projects --harness codex)" \
+  $'COST-NOTE\tharness-mismatch\t' "--all-projects suppresses the harness-mismatch NOTE (explicit opt-in)"
 
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?

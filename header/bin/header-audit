@@ -29,11 +29,21 @@
 #         TOOL      <name>  <version|->  <ok|too-old|absent>
 #         GATE      <name>  <present|absent>  <path|->
 #
-#   header-audit cost [--input F] [--since T]
-#       Cost-awareness. Wraps `header-cost report --json` over the default Claude
-#       Code transcripts ($HOME/.claude/projects/*.jsonl) or an explicit --input
-#       usage file, and reformats spend-by-model so the audit can open with where
-#       tokens actually go and turn the top line into a model-routing experiment:
+#   header-audit cost [--repo DIR] [--all-projects] [--harness NAME] [--input F] [--since T]
+#       Cost-awareness. Wraps `header-cost report --json` over Claude Code
+#       transcripts and reformats spend-by-model so the audit can open with where
+#       tokens actually go and turn the top line into a model-routing experiment.
+#       Scope is THIS repo by default: it reads only the current repo's transcript
+#       dir ($HOME/.claude/projects/<repo-key>); a missing dir is a NOTE, never a
+#       silent machine-wide aggregate. --all-projects opts into the global total;
+#       --input F prices an explicit usage file. --harness overrides harness
+#       detection (codex|claude). Output lines:
+#         COST-SCOPE      repo  <repo>                    (default: this repo only)
+#         COST-SCOPE      global  <dir>  <n>  project dirs (--all-projects)
+#         COST-SCOPE      input  <path>                   (--input)
+#         COST-INPUT      <dir>  <n>  files               (repo-scoped transcript dir)
+#         COST-HARNESS    <harness>  claude-transcripts    (whose usage this is)
+#         COST-NOTE       harness-mismatch  <why>          (Codex over Claude data)
 #         SPEND-TOTAL     <usd>  <calls>  [<since>]
 #         SPEND           <model>  <calls>  <usd>  <share_pct>
 #         ROUTE-CANDIDATE <model>  <usd>  <share_pct>   (top spend line)
@@ -89,6 +99,18 @@ ver_ge() {
       if(x>y){print "ge"; exit} if(x<y){print "lt"; exit}}
     print "ge"
   }'
+}
+
+# ── detect_harness → "codex" | "claude" ───────────────────────
+# The active agent harness. Codex installs the skill under a `.codex/` tree and
+# exports CODEX_HOME; everything else is treated as Claude Code. Used by `cost`
+# to label whose usage the priced transcripts actually represent (header-cost
+# only parses Claude Code transcripts, so a Codex session over them is a
+# cross-harness mismatch). Overridable via `--harness` for SKILL.md and tests.
+detect_harness() {
+  case "$(dirname "$0")" in *.codex*|*/codex/*) echo codex; return ;; esac
+  [ -n "${CODEX_HOME:-}" ] && { echo codex; return; }
+  echo claude
 }
 
 # parse optional --repo
@@ -474,25 +496,55 @@ SIG
     # Args arrive via args_rest (the top-level parser consumes $@); re-split like
     # `gate` does — paths with spaces aren't supported (--input is for testing).
     set -- $args_rest
-    SRC=""; SINCE=""
+    SRC=""; SINCE=""; ALL_PROJECTS=""; HARNESS=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --input) SRC="${2:-}"; shift 2 ;;
         --since) SINCE="${2:-}"; shift 2 ;;
+        --all-projects) ALL_PROJECTS=1; shift ;;
+        --harness) HARNESS="${2:-}"; shift 2 ;;
         *) shift ;;
       esac
     done
+    [ -n "$HARNESS" ] || HARNESS="$(detect_harness)"
     COST="$(dirname "$0")/header-cost"
     [ -x "$COST" ] || COST="$(command -v header-cost 2>/dev/null || true)"
     [ -n "$COST" ] || { printf 'NOTE\tcost\theader-cost not found alongside the audit — skipping spend analysis\n'; exit 0; }
     if [ -n "$SRC" ]; then
+      # Explicit usage file (testing / ad-hoc). Scope is whatever the caller passed.
       [ -f "$SRC" ] || { printf 'NOTE\tcost\tinput file not found: %s\n' "$SRC"; exit 0; }
+      printf 'COST-SCOPE\tinput\t%s\n' "$SRC"
       usage_json="$("$COST" report --input "$SRC" ${SINCE:+--since "$SINCE"} --json 2>/dev/null || true)"
-    else
+    elif [ -n "$ALL_PROJECTS" ]; then
+      # Explicit machine-wide aggregate — every project under ~/.claude/projects.
+      # Clearly labeled global so the presentation never mistakes it for this repo.
       tdir="$HOME/.claude/projects"
       [ -d "$tdir" ] || { printf 'NOTE\tcost\tno usage history at %s — run some sessions first\n' "$tdir"; exit 0; }
+      ndirs="$(find "$tdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+      printf 'COST-SCOPE\tglobal\t%s\t%s\tproject dirs\n' "$tdir" "$ndirs"
+      usage_json="$(find "$tdir" -name '*.jsonl' -exec cat {} + 2>/dev/null | "$COST" report ${SINCE:+--since "$SINCE"} --json 2>/dev/null || true)"
+    else
+      # Default: scope to THIS repo's transcript dir. Claude Code keys each repo's
+      # transcripts under ~/.claude/projects/<key>, where <key> is the absolute repo
+      # path with every non-alphanumeric char replaced by '-'. No silent fallback to
+      # all projects — a missing dir is a NOTE, so a global aggregate never sneaks in
+      # as a this-repo recommendation (HEA-435).
+      key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
+      tdir="$HOME/.claude/projects/$key"
+      [ -d "$tdir" ] || { printf 'NOTE\tcost\tno transcripts for this repo at %s — run `header-audit cost --all-projects` for machine-wide spend\n' "$tdir"; exit 0; }
+      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      printf 'COST-SCOPE\trepo\t%s\n' "$REPO"
+      printf 'COST-INPUT\t%s\t%s\tfiles\n' "$tdir" "$nfiles"
       usage_json="$(find "$tdir" -name '*.jsonl' -exec cat {} + 2>/dev/null | "$COST" report ${SINCE:+--since "$SINCE"} --json 2>/dev/null || true)"
     fi
+    # Label whose usage this is. header-cost only parses Claude Code transcripts, so
+    # when the active harness is Codex the priced spend is historical Claude usage —
+    # a cross-harness mismatch the presentation must downgrade (never route Codex on
+    # it). --all-projects is an explicit cross-harness/cross-repo opt-in, so suppress
+    # the mismatch NOTE there.
+    printf 'COST-HARNESS\t%s\tclaude-transcripts\n' "$HARNESS"
+    [ "$HARNESS" = codex ] && [ -z "$ALL_PROJECTS" ] && \
+      printf 'COST-NOTE\tharness-mismatch\tClaude Code transcripts only; no Codex 5.x usage measured\n'
     [ -n "$usage_json" ] || { printf 'NOTE\tcost\tno priced usage found\n'; exit 0; }
     printf '%s' "$usage_json" | awk -v since="$SINCE" '
       {
