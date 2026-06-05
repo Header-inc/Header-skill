@@ -57,8 +57,23 @@ Most hosts are covered by **Option A** — `npx skills add Header-inc/Header-ski
 
 - **Cursor**: add `header/SKILL.md` as a project rule.
 - **Aider**: `aider --read header/SKILL.md` (or add to `CONVENTIONS.md`).
-- **OpenAI Codex CLI**: `install.sh` installs into `~/.codex/skills/` automatically when `codex` is detected.
+- **OpenAI Codex CLI**: see the dedicated notes just below.
 - **Goose / Cline / other**: reference the `SKILL.md` contents in your agent's instructions.
+
+#### OpenAI Codex CLI
+
+The installable skill is the **`header/` subfolder**, not the repository root — there is no `SKILL.md` at the root, so a root-level install fails with `SKILL.md not found`. Point Codex at the subfolder:
+
+- **Repo:** `Header-inc/Header-skill`  ·  **Skill path:** `header`  ·  **Installed location:** `$CODEX_HOME/skills/header` (default `~/.codex/skills/header`).
+- `npx skills add Header-inc/Header-skill -a codex` (Option A) or `install.sh` (Option B, which installs into `~/.codex/skills/` automatically when `codex` is on `PATH`) both target the `header/` folder for you.
+- **Restart Codex after installing or updating.** Codex loads skills at session startup, so a freshly installed `/header` won't appear until you start a new session.
+
+Two Codex-specific rough edges the skill now handles itself:
+
+- **Executable bits.** Some download paths copy `bin/*` without the executable bit, which would make the preamble report `HEADER_INSTALL: missing`. The preamble self-heals (`chmod +x` best-effort) and echoes `HEADER_SELFHEAL:` when it does. If the skill directory is read-only, repair it manually: `chmod +x ~/.codex/skills/header/bin/* ~/.codex/skills/header/test/run.sh`.
+- **Filesystem sandbox.** Under `workspace-write`, Codex usually excludes `~/.header`, so the recommendation ledger, config, and run markers can't persist. The audit still runs; the preamble flags this with `HEADER_STATE: readonly`. To keep state, add `~/.header` to the sandbox's writable roots, or set `HEADER_HOME` to a writable path (e.g. `export HEADER_HOME="$PWD/.header"`).
+
+Validate an installed copy without a full checkout: `~/.codex/skills/header/test/run.sh installed`.
 
 The frontmatter (`name`, `version`, `description`, `when_to_use`, `argument-hint`, `allowed-tools`) is Claude-Code-specific and is safely ignored by other harnesses. Body sections use a `**Claude Code only:**` callout for behaviors that depend on Claude Code features; other harnesses can read past those callouts safely.
 
