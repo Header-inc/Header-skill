@@ -111,11 +111,17 @@ assert_contains "$(HEADER_HOME="$HH3" "$LG" list --action applied --repo "$sb3/w
   "list also matches legacy-keyed records"
 
 # A repo with no remote falls back to its toplevel path (still collision-free).
+# Don't string-compare the full path: git canonicalizes it (macOS returns the
+# /private/var physical path for a /var TMPDIR sandbox, and strips TMPDIR's
+# trailing-slash doubling) — assert the SHAPE instead: a path ending in the
+# repo dir, not the bare basename.
 mkdir -p "$sb3/local/api"
 ( cd "$sb3/local/api" && git init -q )
 HEADER_HOME="$HH3" "$LG" record snoozed path-key --repo "$sb3/local/api"
-assert_contains "$(cat "$HH3/ledger.jsonl")" "\"repo\":\"$sb3/local/api\"" \
-  "no remote → the toplevel path is the stable key"
+pk_repo="$(grep '"key":"path-key"' "$HH3/ledger.jsonl" | sed -n 's/.*"repo":"\([^"]*\)".*/\1/p')"
+case "$pk_repo" in */local/api) pk_ok=yes ;; *) pk_ok=no ;; esac
+assert_eq "yes" "$pk_ok" \
+  "no remote → the stable key is the toplevel PATH (…/local/api), not the basename"
 assert_eq "snoozed" "$(HEADER_HOME="$HH3" "$LG" status path-key --repo "$sb3/local/api")" \
   "path-keyed records round-trip"
 assert_eq "none" "$(HEADER_HOME="$HH3" "$LG" status path-key --repo "$sb3/work/api")" \

@@ -3,6 +3,17 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.24.4 — fix: 0.24.3's path-fallback test was unportable to macOS
+
+Test-only. The new ledger test asserted the no-remote fallback key by
+string-comparing the sandbox path, but `git rev-parse --show-toplevel`
+canonicalizes: on macOS it returns the `/private/var/...` physical path for a
+`/var` TMPDIR sandbox (and normalizes TMPDIR's trailing-slash doubling), so
+the literal compare failed there. The bin's behavior is correct — writes and
+reads both go through the same git canonicalization — the assertion now
+checks the key's *shape* (a path ending in the repo dir, not the bare
+basename). VERSION → 0.24.4.
+
 ## 0.24.3 — fix: ledger records no longer collide across same-named repos
 
 `header-ledger` keyed every record by `basename <git toplevel>` — so two repos
