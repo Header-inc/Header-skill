@@ -84,4 +84,48 @@ HEADER_HOME="$sb2/.header" "$LG" record applied off-key --repo r5
 assert_eq "none" "$(HEADER_HOME="$sb2/.header" "$LG" status off-key --repo r5)" \
   "ledger:false → record is a no-op"
 
+# ── repo identity: stable key + basename-collision fix (0.24.3) ──
+# Two repos sharing the folder name "api" but with different remotes must NOT
+# read each other's dispositions (the pre-0.24.3 basename key let a dismissal
+# in one silently suppress the finding in the other).
+sb3="$(make_sandbox)"
+HH3="$sb3/.header"
+mkdir -p "$sb3/work/api" "$sb3/oss/api"
+( cd "$sb3/work/api" && git init -q && git remote add origin git@github.com:acme/api.git )
+( cd "$sb3/oss/api"  && git init -q && git remote add origin https://github.com/oss/api.git )
+HEADER_HOME="$HH3" "$LG" record dismissed gate-npm --repo "$sb3/work/api" --title "Gate"
+assert_eq "dismissed" "$(HEADER_HOME="$HH3" "$LG" status gate-npm --repo "$sb3/work/api")" \
+  "a directory --repo resolves to the same identity on write and read"
+assert_eq "none" "$(HEADER_HOME="$HH3" "$LG" status gate-npm --repo "$sb3/oss/api")" \
+  "REGRESSION: a same-named repo with a different remote no longer sees the dismissal"
+assert_contains "$(cat "$HH3/ledger.jsonl")" '"repo":"github.com/acme/api"' \
+  "new records are keyed by the normalized git remote (header-repo's convention)"
+
+# Legacy back-compat: a pre-0.24.3 record keyed by the bare basename must still
+# match when queried from the remote-keyed repo (existing ledgers aren't orphaned).
+printf '{"ts":"t","epoch":%s,"repo":"api","action":"applied","key":"old-finding","title":"Old"}\n' \
+  "$(date +%s)" >> "$HH3/ledger.jsonl"
+assert_eq "applied" "$(HEADER_HOME="$HH3" "$LG" status old-finding --repo "$sb3/work/api")" \
+  "legacy basename-keyed records still match (back-compat read)"
+assert_contains "$(HEADER_HOME="$HH3" "$LG" list --action applied --repo "$sb3/work/api")" "old-finding" \
+  "list also matches legacy-keyed records"
+
+# A repo with no remote falls back to its toplevel path (still collision-free).
+mkdir -p "$sb3/local/api"
+( cd "$sb3/local/api" && git init -q )
+HEADER_HOME="$HH3" "$LG" record snoozed path-key --repo "$sb3/local/api"
+assert_contains "$(cat "$HH3/ledger.jsonl")" "\"repo\":\"$sb3/local/api\"" \
+  "no remote → the toplevel path is the stable key"
+assert_eq "snoozed" "$(HEADER_HOME="$HH3" "$LG" status path-key --repo "$sb3/local/api")" \
+  "path-keyed records round-trip"
+assert_eq "none" "$(HEADER_HOME="$HH3" "$LG" status path-key --repo "$sb3/work/api")" \
+  "path-keyed records don't leak into the remote-keyed same-name repo"
+
+# A non-directory --repo stays LITERAL, exactly as before (r1…r6 above rely on it).
+HEADER_HOME="$HH3" "$LG" record applied lit-key --repo custom-name
+assert_eq "applied" "$(HEADER_HOME="$HH3" "$LG" status lit-key --repo custom-name)" \
+  "a non-directory --repo is matched literally (unchanged semantics)"
+assert_contains "$(cat "$HH3/ledger.jsonl")" '"repo":"custom-name"' \
+  "a non-directory --repo is written literally"
+
 t_done

@@ -3,6 +3,36 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.24.3 — fix: ledger records no longer collide across same-named repos
+
+`header-ledger` keyed every record by `basename <git toplevel>` — so two repos
+sharing a folder name (`api`, `app`, `web`…) read and wrote each other's
+dispositions. Concretely: dismissing `gate-npm` in `~/work/api` silently
+suppressed the same finding in `~/oss/api` (the audit drops `dismissed` keys),
+`applied` records triggered follow-up framing in repos where nothing was
+applied, experiment sync could recover the *wrong* finding provenance
+(title/topic/briefing/source) for its dashboard payload, and goal auto-tuning
+pooled signals across unrelated repos.
+
+Records are now keyed by the **stable identity `header-repo` already uses**
+for topic bindings: the normalized git remote (`github.com/org/repo`,
+clone-agnostic), falling back to the toplevel path, then the directory.
+Back-compat by construction:
+- **Reads also match the legacy basename key**, so existing ledgers aren't
+  orphaned. (Two same-named repos still share their *pre-upgrade* records —
+  the old writer never recorded which repo they came from — but every new
+  record is properly scoped.)
+- **`--repo` semantics:** a directory resolves to that repo's identity
+  (stable + legacy); any other value is matched/written literally, exactly as
+  before — existing callers and fixtures are untouched.
+- `header-experiment`'s provenance recovery now passes the repo *directory*
+  instead of its basename, closing the wrong-lineage path into the dashboard
+  sync.
+
++10 ledger tests (the cross-repo regression, remote-key writes, legacy-read
+back-compat, no-remote path fallback, literal `--repo` unchanged).
+VERSION → 0.24.3.
+
 ## 0.24.2 — fix: stop telling users the live sync endpoint isn't live
 
 `POST /api/v2/experiments` (the experiment-dashboard sync) **is live** —

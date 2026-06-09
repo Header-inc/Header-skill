@@ -3027,7 +3027,10 @@ build_payload() {
   local h_title h_src h_disp topic goal briefing rec sv
   topic=""; goal=""; briefing=""
   if [ -n "$lk" ]; then
-    rec="$("$LEDGER_BIN" get "$lk" --repo "$repo_name" 2>/dev/null)"
+    # Pass the repo DIRECTORY: header-ledger resolves it to the stable identity
+    # (normalized remote, legacy-basename fallback), so an experiment in
+    # ~/oss/api can't recover ~/work/api's finding provenance any more.
+    rec="$("$LEDGER_BIN" get "$lk" --repo "$repo_abs" 2>/dev/null)"
     [ -n "$rec" ] || rec="$("$LEDGER_BIN" get "$lk" 2>/dev/null)"
     h_title="$(printf '%s' "$rec"  | sed -n 's/.*"title":"\([^"]*\)".*/\1/p')"
     h_src="$(printf '%s' "$rec"    | sed -n 's/.*"source_url":"\([^"]*\)".*/\1/p')"

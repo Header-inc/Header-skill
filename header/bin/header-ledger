@@ -19,13 +19,77 @@
 #
 # Storage: ~/.header/ledger.jsonl (append-only, one JSON object per line).
 # Env: HEADER_HOME (default ~/.header)
+#
+# REPO IDENTITY — records are keyed by the same stable identity header-repo
+# uses for topic bindings: the normalized git remote (clone-agnostic, e.g.
+# github.com/org/repo), falling back to the repo's toplevel path, then the
+# directory itself. The pre-0.24.3 key was just `basename <toplevel>`, so two
+# repos sharing a folder name (api, app, web…) read and wrote each other's
+# dispositions — a dismissal in ~/work/api silently suppressed the same finding
+# in ~/oss/api, and experiment sync could recover the wrong provenance. Reads
+# still MATCH the legacy basename so existing ledgers aren't orphaned; writes
+# use the stable key. `--repo R` semantics: a directory resolves to that repo's
+# identity (stable + legacy); any other value is matched/written literally, as
+# before.
 set -uo pipefail
 
 STATE_DIR="${HEADER_HOME:-$HOME/.header}"
 LEDGER="$STATE_DIR/ledger.jsonl"
 
-repo_id() { basename "$(git rev-parse --show-toplevel 2>/dev/null || echo unknown)"; }
 json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# normalize_remote — header-repo's convention, duplicated here (the bins are
+# standalone): git@github.com:me/repo.git → github.com/me/repo.
+normalize_remote() {
+  printf '%s' "$1" | sed -E 's#\.git$##; s#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#^[^@/]*@##; s#:#/#'
+}
+
+# repo_keys <dir> — line 1: the stable identity (remote → toplevel → the dir);
+# line 2: the legacy basename key (matched on reads for back-compat).
+repo_keys() {
+  local d="$1" url top
+  url="$(git -C "$d" config --get remote.origin.url 2>/dev/null || true)"
+  top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
+  if   [ -n "$url" ]; then printf '%s\n' "$(normalize_remote "$url")"
+  elif [ -n "$top" ]; then printf '%s\n' "$top"
+  else                     printf '%s\n' "$d"; fi
+  basename "${top:-$d}"
+}
+
+# write_key <raw --repo value or empty> — the identity new records are written
+# under: literal when given a non-directory, resolved otherwise.
+write_key() {
+  local r="${1:-}"
+  if   [ -z "$r" ];  then repo_keys "$PWD" | sed -n 1p
+  elif [ -d "$r" ];  then repo_keys "$r"   | sed -n 1p
+  else                    printf '%s\n' "$r"; fi
+}
+
+# repo_grep <raw --repo value or empty> — ledger lines whose "repo" field
+# matches the resolved identity: the literal value, or (for a directory / the
+# cwd) the stable key OR the legacy basename, so pre-0.24.3 records keep
+# matching. Two same-named repos still share their pre-upgrade records — the
+# writer didn't record which one they came from — but every new record is
+# properly scoped.
+repo_grep() {
+  local r="${1:-}" keys k1 k2=""
+  [ -f "$LEDGER" ] || return 0
+  if [ -z "$r" ]; then
+    keys="$(repo_keys "$PWD")"
+  elif [ -d "$r" ]; then
+    keys="$(repo_keys "$r")"
+  else
+    keys="$r"
+  fi
+  k1="$(printf '%s\n' "$keys" | sed -n 1p)"
+  k2="$(printf '%s\n' "$keys" | sed -n 2p)"
+  if [ -n "$k2" ] && [ "$k2" != "$k1" ]; then
+    grep -F -e "\"repo\":\"$(json_escape "$k1")\"" -e "\"repo\":\"$(json_escape "$k2")\"" "$LEDGER" 2>/dev/null
+  else
+    grep -F -e "\"repo\":\"$(json_escape "$k1")\"" "$LEDGER" 2>/dev/null
+  fi
+  return 0
+}
 
 cmd="${1:-}"
 shift 2>/dev/null || true
@@ -52,7 +116,7 @@ case "$cmd" in
         *) shift ;;
       esac
     done
-    [ -n "$repo" ] || repo="$(repo_id)"
+    repo="$(write_key "$repo")"
     mkdir -p "$STATE_DIR"
     printf '{"ts":"%s","epoch":%s,"repo":"%s","action":"%s","key":"%s","title":"%s","briefing_id":"%s","topic_id":"%s","source_url":"%s"}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date +%s)" \
@@ -66,10 +130,9 @@ case "$cmd" in
     shift 2>/dev/null || true
     repo=""
     while [ $# -gt 0 ]; do case "$1" in --repo) repo="${2:-}"; shift 2 ;; *) shift ;; esac; done
-    [ -n "$repo" ] || repo="$(repo_id)"
     { [ -n "$key" ] && [ -f "$LEDGER" ]; } || { echo "none"; exit 0; }
     # Last matching line wins (file is append-only / chronological).
-    latest="$(grep -F "\"repo\":\"$(json_escape "$repo")\"" "$LEDGER" 2>/dev/null \
+    latest="$(repo_grep "$repo" \
       | grep -F "\"key\":\"$(json_escape "$key")\"" \
       | tail -1 | sed -n 's/.*"action":"\([^"]*\)".*/\1/p')"
     echo "${latest:-none}"
@@ -80,13 +143,12 @@ case "$cmd" in
     shift 2>/dev/null || true
     repo=""
     while [ $# -gt 0 ]; do case "$1" in --repo) repo="${2:-}"; shift 2 ;; *) shift ;; esac; done
-    [ -n "$repo" ] || repo="$(repo_id)"
     { [ -n "$key" ] && [ -f "$LEDGER" ]; } || exit 0
     # Latest full line matching repo + key (append-only ⇒ last wins). Prints the
     # raw JSON record so callers recover a finding's provenance (title, briefing,
     # topic, source) in one shot. A valid query with no match is success (empty
     # output, exit 0) — not an error — so capture, then print.
-    latest="$(grep -F "\"repo\":\"$(json_escape "$repo")\"" "$LEDGER" 2>/dev/null \
+    latest="$(repo_grep "$repo" \
       | grep -F "\"key\":\"$(json_escape "$key")\"" \
       | tail -1)"
     [ -n "$latest" ] && printf '%s\n' "$latest"
@@ -103,12 +165,11 @@ case "$cmd" in
         *) shift ;;
       esac
     done
-    [ -n "$repo" ] || repo="$(repo_id)"
     [ -f "$LEDGER" ] || exit 0
     cutoff=0
     case "$since_days" in ''|*[!0-9]*) ;; *) cutoff=$(( $(date +%s) - since_days * 86400 )) ;; esac
     # Collapse to the latest event per key, then filter by action + recency.
-    grep -F "\"repo\":\"$(json_escape "$repo")\"" "$LEDGER" 2>/dev/null | awk \
+    repo_grep "$repo" | awk \
       -v want="$action" -v cutoff="$cutoff" '
       {
         a=""; k=""; t=""; e=0
