@@ -823,9 +823,14 @@ SIG
     # id precedes its is_error; blocks pair positionally within a line). Escaped
     # JSON inside content strings cannot match these patterns (the inner quotes
     # are backslash-escaped), so plain matching is safe.
-    eval "$stream_cmd" | awk -v since="$SINCE" -v nfiles="$nfiles" \
-        -v mcp_configured="$mcp_configured" -v mcp_file="$MCP_FILE" \
-        -v repo_skills="$repo_skills" '
+    # The multi-line lists travel via ENVIRON, not -v: BSD awk (macOS) rejects a
+    # newline in a -v value ("newline in string") — the header-cost idiom.
+    eval "$stream_cmd" | HEADER_WASTE_MCP="$mcp_configured" HEADER_WASTE_SKILLS="$repo_skills" \
+      awk -v since="$SINCE" -v nfiles="$nfiles" -v mcp_file="$MCP_FILE" '
+      BEGIN {
+        mcp_configured = ENVIRON["HEADER_WASTE_MCP"]
+        repo_skills    = ENVIRON["HEADER_WASTE_SKILLS"]
+      }
       {
         if (since != "" && match($0, /"timestamp":"[^"]*"/)) {
           ts = substr($0, RSTART + 13, RLENGTH - 14)

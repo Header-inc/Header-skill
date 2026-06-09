@@ -3,6 +3,17 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.24.1 — fix: waste scan on macOS (BSD awk rejects multi-line -v)
+
+`header-audit waste` passed its two multi-line lists (configured MCP servers,
+repo-installed skills) to awk via `-v`, which macOS's BSD awk rejects with
+"newline in string" — the same portability class 0.19.0 fixed in
+`header-experiment` — so the macOS suite failed 10 of the waste assertions.
+The lists now travel via the environment and are read from `ENVIRON[]` in a
+`BEGIN` block, the proven idiom `header-cost` already uses on macOS CI. Linux
+(gawk/mawk/busybox) tolerated the old form, which is why the suite was green
+locally. VERSION → 0.24.1.
+
 ## 0.24.0 — Experiments: faster loop, fairer gate
 
 Wall-clock and statistical fairness fixes so the experiment loop actually gets
