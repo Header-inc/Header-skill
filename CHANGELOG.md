@@ -3,6 +3,44 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.22.0 — Transcript-mined waste: measured findings, not pattern matches
+
+New scan — **`header-audit waste`** — turns the transcripts `cost` already prices
+into the audit's highest-trust findings: what the harness **pays for vs what it
+uses**, measured from the user's own sessions. No A/B needed — removing dead
+weight is deterministic accounting, not behavior prediction. The biggest
+per-turn costs in a real harness are rarely the grep-able cargo-cult lines;
+they're the MCP servers and skills loaded into context every turn and never
+used. This scan finds them with evidence attached.
+
+Output rows (the SKILL.md flow curates them into findings):
+- `MCP-UNUSED <server> <.mcp.json>` — configured, **zero calls in the window**.
+  Its tool schemas are paid for on every turn; `[Apply with review]` removal
+  with the evidence window stated. `MCP-SERVER` carries per-server call/error
+  rollups for the used ones.
+- `SKILL-USE` / `SKILL-UNUSED` — Skill invocations seen vs repo-installed
+  skills never invoked here. User-scope skills are never flagged unused (they
+  serve other repos) but still report their context tax.
+- `SKILL-TAX <name> <scope> <bytes> <est_tokens>` + `CONTEXT-TAX skills …` —
+  every installed skill's frontmatter is loaded each session, used or not; the
+  total belongs on the scorecard next to the always-loaded file sum. (On the
+  dogfood machine: 49 installed skills ≈ 10k always-loaded tokens.)
+- `TOOL-USE <tool> <calls> <errors>` + `ERROR-RATE` (≥20% of ≥10 calls) —
+  per-tool reliability; error attribution joins `tool_use_id` → tool name
+  positionally, robust to both observed field orders in real transcripts.
+- `COMPACTIONS <n> <files>` — context-pressure signal; paired with a heavy
+  always-loaded sum it's the strongest practical case for trimming.
+
+Scope discipline mirrors `cost` (HEA-435): this repo's transcript dir by
+default, a missing dir is a `NOTE` (never a silent machine-wide aggregate),
+`--all-projects` is the labeled global opt-in, `--since` windows it, `--input`
+is the testing seam. Read-only; nothing leaves the machine.
+
+Ships `test/waste.test.sh` (26 assertions, fixtures in the real nested
+transcript layout with both tool_result field orders). SKILL.md Step 3 runs the
+scan; Step 4 gains the waste-findings bullet; ledger keys `waste-mcp-<server>`
+/ `waste-skill-<name>`. VERSION → 0.22.0.
+
 ## 0.21.1 — fix: transcript-based model detection never fired (nested layout)
 
 `_recent_transcript_model()` — the fallback that reads the model the user

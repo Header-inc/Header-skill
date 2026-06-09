@@ -49,6 +49,30 @@
 #         ROUTE-CANDIDATE <model>  <usd>  <share_pct>   (top spend line)
 #         NOTE  cost  <reason>                          (no usage / tool missing)
 #
+#   header-audit waste [--repo DIR] [--all-projects] [--input F] [--since T]
+#       Transcript-mined waste: what the harness PAYS FOR vs what it USES, read
+#       from the same Claude Code transcripts `cost` prices. Deterministic
+#       accounting, not behavior prediction — every row is evidence from the
+#       user's own sessions. Scope discipline mirrors `cost` (HEA-435): THIS
+#       repo's transcript dir by default; a missing dir is a NOTE, never a
+#       silent machine-wide aggregate; --all-projects opts into global.
+#       Output lines (tab-separated):
+#         WASTE-SCOPE   repo <repo> | global <dir> <n> project dirs | input <path>
+#         WASTE-INPUT   <dir> <n> files                (repo-scoped transcript dir)
+#         TOOL-USE      <tool> <calls> <errors>        (per tool seen, calls desc)
+#         MCP-SERVER    <server> <calls> <errors>      (per MCP server seen in use)
+#         MCP-UNUSED    <server> <config-file>         (configured in .mcp.json, 0 calls
+#                                                       — its tool schemas are loaded
+#                                                       every turn for nothing)
+#         SKILL-USE     <name> <invocations>           (Skill-tool invocations seen)
+#         SKILL-UNUSED  <name> <path>                  (repo-installed skill, 0 uses here)
+#         ERROR-RATE    <tool> <errors> <calls> <pct>  (>=10 calls and >=20% errors)
+#         COMPACTIONS   <count> <files>                (context-pressure signal)
+#         SKILL-TAX     <name> <scope> <bytes> <est_tokens>   (frontmatter loaded
+#                                                       every session, repo + user scope)
+#         CONTEXT-TAX   skills <count> <bytes> <est_tokens>   (the SKILL-TAX sum)
+#         NOTE          waste <reason>                 (no transcripts / no input)
+#
 #   header-audit patterns          list the built-in (+ briefing-supplied) patterns
 #   header-audit gate <npm|pip> [days]
 #                                  print the recommended supply-chain snippet
@@ -66,7 +90,7 @@
 #       Print the scaffold to install for a rail (stack-adapted), the analogue of
 #       `gate` for supply-chain. Reads header/scaffold/ templates.
 #
-# Reads only (harness/deps/cost/rails never write). Nothing leaves the machine.
+# Reads only (harness/deps/cost/waste/rails never write). Nothing leaves the machine.
 # Env: HEADER_HOME (state dir, default $HOME/.header — used for the optional
 # briefing-supplied patterns file), HEADER_PATTERNS_FILE (override its path),
 # HOME (for user-global config). Token estimate is bytes/4 — a rough proxy.
@@ -671,6 +695,201 @@ SIG
     '
     ;;
 
+  waste)
+    # Transcript-mined waste: what the harness pays for vs what it uses. Same
+    # input as `cost` (Claude Code transcripts), same repo-scope discipline
+    # (HEA-435) — but instead of pricing tokens it counts tool_use / tool_result
+    # records: per-tool call+error counts, MCP servers configured-but-unused,
+    # skill invocations vs installed skills, compaction events, and the
+    # always-loaded frontmatter tax of installed skills. Deterministic, read-only,
+    # nothing leaves the machine. The SKILL.md flow curates rows into findings.
+    set -- $args_rest
+    SRC=""; SINCE=""; ALL_PROJECTS=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --input) SRC="${2:-}"; shift 2 ;;
+        --since) SINCE="${2:-}"; shift 2 ;;
+        --all-projects) ALL_PROJECTS=1; shift ;;
+        *) shift ;;
+      esac
+    done
+    stream_cmd=""
+    if [ -n "$SRC" ]; then
+      [ -f "$SRC" ] || { printf 'NOTE\twaste\tinput file not found: %s\n' "$SRC"; exit 0; }
+      printf 'WASTE-SCOPE\tinput\t%s\n' "$SRC"
+      nfiles=1
+      stream_cmd="cat \"$SRC\""
+    elif [ -n "$ALL_PROJECTS" ]; then
+      tdir="$HOME/.claude/projects"
+      [ -d "$tdir" ] || { printf 'NOTE\twaste\tno usage history at %s — run some sessions first\n' "$tdir"; exit 0; }
+      ndirs="$(find "$tdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      printf 'WASTE-SCOPE\tglobal\t%s\t%s\tproject dirs\n' "$tdir" "$ndirs"
+      stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
+    else
+      # Default: THIS repo's transcript dir only (same key convention as `cost`).
+      key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
+      tdir="$HOME/.claude/projects/$key"
+      [ -d "$tdir" ] || { printf 'NOTE\twaste\tno transcripts for this repo at %s — run `header-audit waste --all-projects` for machine-wide usage\n' "$tdir"; exit 0; }
+      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      printf 'WASTE-SCOPE\trepo\t%s\n' "$REPO"
+      printf 'WASTE-INPUT\t%s\t%s\tfiles\n' "$tdir" "$nfiles"
+      stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
+    fi
+
+    # Configured MCP servers: top-level keys of "mcpServers" in the repo's
+    # .mcp.json. Best-effort awk (atomize braces, track depth) — same approach
+    # as _bash_security; no JSON parser.
+    MCP_FILE="$REPO/.mcp.json"
+    mcp_configured=""
+    if [ -f "$MCP_FILE" ]; then
+      mcp_configured="$(awk '
+        { all = all $0 "\n" }
+        END {
+          if (all !~ /"mcpServers"[[:space:]]*:/) exit
+          gsub(/\{/, "\n{\n", all); gsub(/\}/, "\n}\n", all); gsub(/,/, ",\n", all)
+          n = split(all, L, "\n"); depth = 0; pending = 0; sdepth = -1
+          for (i = 1; i <= n; i++) {
+            line = L[i]
+            if (line ~ /^[[:space:]]*\{/)  { depth++; if (pending) { sdepth = depth; pending = 0 }; continue }
+            if (line ~ /^[[:space:]]*\}/)  { depth--; if (sdepth > 0 && depth < sdepth) exit; continue }
+            if (line ~ /"mcpServers"[[:space:]]*:/) { pending = 1; continue }
+            if (sdepth > 0 && depth == sdepth && match(line, /"[^"]+"[[:space:]]*:/)) {
+              k = substr(line, RSTART, RLENGTH)
+              sub(/^"/, "", k); sub(/"[[:space:]]*:$/, "", k)
+              print k
+            }
+          }
+        }' "$MCP_FILE")"
+    fi
+
+    # Repo-installed skills (candidates for SKILL-UNUSED — user-scope skills
+    # serve other projects, so absence of use HERE is not evidence of waste).
+    repo_skills=""
+    for sk in "$REPO"/.claude/skills/*/; do
+      [ -d "$sk" ] || continue
+      repo_skills="${repo_skills}$(basename "$sk")	${sk%/}
+"
+    done
+
+    # One pass over the transcript stream. Field shapes verified against real
+    # transcripts: tool_use blocks serialize as "type":"tool_use","id":"…","name":"…";
+    # tool_result as "tool_use_id":"…","type":"tool_result",…,"is_error":bool (the
+    # id precedes its is_error; blocks pair positionally within a line). Escaped
+    # JSON inside content strings cannot match these patterns (the inner quotes
+    # are backslash-escaped), so plain matching is safe.
+    eval "$stream_cmd" | awk -v since="$SINCE" -v nfiles="$nfiles" \
+        -v mcp_configured="$mcp_configured" -v mcp_file="$MCP_FILE" \
+        -v repo_skills="$repo_skills" '
+      {
+        if (since != "" && match($0, /"timestamp":"[^"]*"/)) {
+          ts = substr($0, RSTART + 13, RLENGTH - 14)
+          if (ts < since) next
+        }
+        # tool_use blocks → per-tool call counts + id→name map (for error joins).
+        line = $0
+        while (match(line, /"type":"tool_use","id":"[^"]*","name":"[^"]*"/)) {
+          blk = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
+          id = blk; sub(/.*"id":"/, "", id); sub(/".*/, "", id)
+          nm = blk; sub(/.*"name":"/, "", nm); sub(/"$/, "", nm)
+          Name[id] = nm
+          if (!(nm in Calls)) ToolKeys[++ntk] = nm
+          Calls[nm]++
+          if (nm == "Skill") {
+            seg = substr($0, index($0, blk) + length(blk), 220)
+            if (match(seg, /"skill":"[^"]*"/)) {
+              sk = substr(seg, RSTART + 9, RLENGTH - 10)
+              if (!(sk in SkillUse)) SkillKeys[++nsk] = sk
+              SkillUse[sk]++
+            }
+          }
+        }
+        # tool_result blocks → error attribution. Intra-block field order varies
+        # between writer versions (tool_use_id before OR after is_error), so pair
+        # POSITIONALLY: the k-th tool_use_id and the k-th is_error in a line
+        # belong to the k-th tool_result block — each block carries exactly one
+        # of each, and neither key appears outside tool_result blocks.
+        nid = 0; ner = 0
+        line = $0
+        while (match(line, /"tool_use_id":"[^"]*"/)) {
+          Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16)
+          line = substr(line, RSTART + RLENGTH)
+        }
+        line = $0
+        while (match(line, /"is_error":(true|false)/)) {
+          ErrFlag[++ner] = (substr(line, RSTART, RLENGTH) ~ /true/) ? 1 : 0
+          line = substr(line, RSTART + RLENGTH)
+        }
+        for (k = 1; k <= nid && k <= ner; k++)
+          if (ErrFlag[k] && (Ids[k] in Name)) Err[Name[Ids[k]]]++
+        # Compaction markers: a compaction writes BOTH a summary message and a
+        # boundary record — count each, report the max (not the sum).
+        if ($0 ~ /"isCompactSummary":true/)        c_sum++
+        if ($0 ~ /"subtype":"compact_boundary"/)   c_bnd++
+      }
+      END {
+        # TOOL-USE, sorted by calls desc (selection sort; tool count is small).
+        for (a = 1; a <= ntk; a++) for (b = a + 1; b <= ntk; b++)
+          if (Calls[ToolKeys[b]] > Calls[ToolKeys[a]]) { t = ToolKeys[a]; ToolKeys[a] = ToolKeys[b]; ToolKeys[b] = t }
+        for (a = 1; a <= ntk; a++) {
+          nm = ToolKeys[a]
+          printf "TOOL-USE\t%s\t%d\t%d\n", nm, Calls[nm], Err[nm] + 0
+          if (nm ~ /^mcp__/) {
+            srv = nm; sub(/^mcp__/, "", srv); sub(/__.*/, "", srv)
+            if (!(srv in McpCalls)) McpKeys[++nmk] = srv
+            McpCalls[srv] += Calls[nm]; McpErr[srv] += Err[nm] + 0
+          }
+        }
+        for (a = 1; a <= nmk; a++) {
+          srv = McpKeys[a]
+          printf "MCP-SERVER\t%s\t%d\t%d\n", srv, McpCalls[srv], McpErr[srv]
+        }
+        # Configured-but-unused MCP servers: their tool schemas are loaded every
+        # turn; zero calls in the window means that context is paid for nothing.
+        nconf = split(mcp_configured, MC, "\n")
+        for (a = 1; a <= nconf; a++) {
+          srv = MC[a]; if (srv == "") continue
+          if (!(srv in McpCalls)) printf "MCP-UNUSED\t%s\t%s\n", srv, mcp_file
+        }
+        for (a = 1; a <= nsk; a++)
+          printf "SKILL-USE\t%s\t%d\n", SkillKeys[a], SkillUse[SkillKeys[a]]
+        # Repo-installed skills never invoked here.
+        nrs = split(repo_skills, RS_, "\n")
+        for (a = 1; a <= nrs; a++) {
+          if (RS_[a] == "") continue
+          split(RS_[a], F, "\t")
+          if (!(F[1] in SkillUse)) printf "SKILL-UNUSED\t%s\t%s\n", F[1], F[2]
+        }
+        # High error-rate tools (enough volume to mean something).
+        for (a = 1; a <= ntk; a++) {
+          nm = ToolKeys[a]; c = Calls[nm]; e = Err[nm] + 0
+          if (c >= 10 && e * 5 >= c)
+            printf "ERROR-RATE\t%s\t%d\t%d\t%.0f\n", nm, e, c, e * 100 / c
+        }
+        cmp = (c_sum > c_bnd) ? c_sum : c_bnd
+        if (cmp > 0) printf "COMPACTIONS\t%d\t%d\n", cmp, nfiles
+      }
+    '
+
+    # Always-loaded skill tax: every installed skill ships its frontmatter
+    # (name + description) into context each session, used or not. Reported for
+    # BOTH scopes — a user-scope skill is not flagged unused here, but its
+    # context cost in this repo is real. bytes/4, same proxy as FILE rows.
+    tax_total=0; tax_count=0
+    for scope_dir in "$REPO/.claude/skills:repo" "$HOME/.claude/skills:user"; do
+      d="${scope_dir%:*}"; scope="${scope_dir##*:}"
+      [ -d "$d" ] || continue
+      for sk in "$d"/*/; do
+        [ -f "${sk}SKILL.md" ] || continue
+        fmb="$(awk '/^---$/{c++; next} c==1{n += length($0) + 1} c>=2{exit} END{print n+0}' "${sk}SKILL.md")"
+        [ "${fmb:-0}" -gt 0 ] || continue
+        printf 'SKILL-TAX\t%s\t%s\t%s\t%s\n' "$(basename "$sk")" "$scope" "$fmb" "$(( fmb / 4 ))"
+        tax_total=$(( tax_total + fmb )); tax_count=$(( tax_count + 1 ))
+      done
+    done
+    [ "$tax_count" -gt 0 ] && printf 'CONTEXT-TAX\tskills\t%s\t%s\t%s\n' "$tax_count" "$tax_total" "$(( tax_total / 4 ))"
+    ;;
+
   gate)
     eco="$(printf '%s' "$args_rest" | awk '{print $1}')"
     days="$(printf '%s' "$args_rest" | awk '{print $2}')"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
@@ -813,11 +1032,11 @@ EOF
     ;;
 
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|rails|rail|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|waste|rails|rail|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|rails|rail|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|waste|rails|rail|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac
