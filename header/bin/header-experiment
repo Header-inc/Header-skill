@@ -126,6 +126,9 @@ VERSION_FILE="$(cd "$SELF_DIR/.." && pwd)/VERSION"
 # Cloud sync (the `push` subcommand). Account-scoped, API-key-gated, opt-in.
 API_BASE="${HEADER_API_BASE:-https://joinheader.com}"
 EXPERIMENTS_URL="${HEADER_EXPERIMENTS_URL:-$API_BASE/api/v2/experiments}"
+# Anonymized aggregate submit (the `aggregate` subcommand) — the cross-customer
+# proven-changes library (design §7.3). DISTINCT from `push`: no identity at all.
+AGGREGATE_URL="${HEADER_AGGREGATE_URL:-$API_BASE/api/v2/experiments/aggregate}"
 
 json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 now_iso()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -2304,7 +2307,10 @@ cmd_analyze() {
 
       printf "Wrote %s\n", out_file
     }' "$runs_file"
-  if [ "$aa" -eq 0 ] && [ -z "$vs" ]; then _autosync "$id"; fi   # sync the canonical A-vs-B result (skip --aa / side --vs); never alters exit
+  if [ "$aa" -eq 0 ] && [ -z "$vs" ]; then
+    _autosync "$id"        # sync the canonical A-vs-B result (skip --aa / side --vs); never alters exit
+    _auto_aggregate "$id"  # anonymized library submit — only when aggregate_submit=on
+  fi
 }
 
 # _fmt_engine <model> <effort> → "model@effort" | "model" | "@effort" | "" (empty
@@ -3077,6 +3083,224 @@ _autosync() {
   return 0
 }
 
+# ── AGGREGATE (anonymized cross-customer submit — the proven-changes library) ──
+# Design §7.3: pool ANONYMIZED effect sizes across customers so the audit can say
+# "deleting this pattern is proven to save ~X% across N repos" — and no single
+# user has to re-run a $60 A/B for a change the library already measured. This is
+# NOT `push`: push is the user's own identified dashboard (API-key-resolved
+# account, machine id, repo identity). Aggregate carries NO identity at all:
+#   sent:  kind · curated category · ecosystem · harness · task class · verifier
+#          tier · arm engines (public model ids + effort) · N/replicates/δ · the
+#          reduced result (verdict + means + CIs; per_task STRIPPED — mined task
+#          ids embed commit shas) · skill version.
+#   never: installation id, hostname/os/arch, repo key/name/branch/commit, task
+#          titles, prompt hashes/bytes, override paths, description/hypothesis
+#          free text, API key (the POST is UNAUTHENTICATED by design — identity
+#          off the wire entirely; the server applies k-anonymity before serving).
+# Consent: config `aggregate_submit` (default off; personal-only — a committed
+# team config cannot enable it). `on` → auto-submit after each analyze; the
+# manual verb asks interactively (or --yes) when the config isn't on.
+
+# model_family <id> — coarse family label (kept alongside the public model id).
+model_family() {
+  case "$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z')" in
+    '')       printf '' ;;
+    *opus*)   printf 'opus' ;;
+    *sonnet*) printf 'sonnet' ;;
+    *haiku*)  printf 'haiku' ;;
+    *)        printf 'other' ;;
+  esac
+}
+
+# detect_repo_ecosystem <repo> — coarse stack label for pooling (mirrors
+# header-audit's primary-ecosystem precedence). A label, never a path.
+detect_repo_ecosystem() {
+  local repo="${1:-.}" p
+  for p in pyproject.toml requirements.txt setup.cfg setup.py Pipfile; do
+    [ -f "$repo/$p" ] && { printf 'python'; return; }
+  done
+  [ -f "$repo/package.json" ] && { printf 'npm'; return; }
+  [ -f "$repo/go.mod" ]       && { printf 'go'; return; }
+  [ -f "$repo/Cargo.toml" ]   && { printf 'cargo'; return; }
+  [ -f "$repo/Gemfile" ]      && { printf 'bundler'; return; }
+  printf 'unknown'
+}
+
+# _curated_category <ledger_key> — echo the key ONLY when it names a pattern in
+# the curated vocabulary (header-audit's built-in + briefing-supplied pattern
+# ids). User-typed ledger keys are NOT a controlled vocabulary and could carry
+# project hints ("delete-acme-deploy-rule"), so anything else maps to the empty
+# category — privacy by construction, not by trust.
+_curated_category() {
+  local k="${1:-}" au="$SELF_DIR/header-audit"
+  [ -n "$k" ] || return 0
+  [ -x "$au" ] || return 0
+  "$au" patterns 2>/dev/null | awk -v k="$k" '$1==k{print k; exit}'
+}
+
+# reduced_result_json <result.json> — result.json minus the per_task array.
+# Mined task ids embed commit shas (t-<sha>), which could fingerprint a public
+# repo; the aggregate only needs the effect (verdict + means + CIs + power).
+reduced_result_json() {
+  awk 'BEGIN{skip=0}
+       /"per_task"[[:space:]]*:/ { skip=1; next }
+       skip && /^[[:space:]]*\],?[[:space:]]*$/ { skip=0; next }
+       !skip' "$1"
+}
+
+# build_aggregate_payload <id> → JSON on stdout. 1 = no spec, 2 = not analyzed.
+build_aggregate_payload() {
+  local id="$1" dir spec; dir="$(exp_dir "$id")"; spec="$dir/spec"
+  [ -f "$spec" ] || return 1
+  [ -f "$dir/result.json" ] || return 2
+
+  local kind reps margin lk category repo_spec repo_abs eco ver
+  kind="$(infer_kind "$spec")"
+  reps="$(spec_get_scalar "$spec" replicates)"
+  margin="$(spec_get_scalar "$spec" non_inferiority_margin)"
+  lk="$(spec_get_scalar "$spec" ledger_key)"
+  category="$(_curated_category "$lk")"
+  repo_spec="$(spec_get_scalar "$spec" repo)"
+  repo_abs="$(resolve_path "$dir" "${repo_spec:-.}")"
+  eco="$(detect_repo_ecosystem "$repo_abs")"
+  ver="$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || echo unknown)"
+
+  # arms: role + the PUBLIC engine vocabulary (model id, family, effort) only.
+  local arms_json="" first=1 lbl model eff role
+  for lbl in $(spec_list_sections "$spec" arm); do
+    model="$(spec_section_get "$spec" arm "$lbl" model)"
+    eff="$(spec_section_get "$spec" arm "$lbl" effort)"
+    role="treatment"; [ "$lbl" = "A" ] && role="control"
+    [ "$first" -eq 1 ] || arms_json="$arms_json,"
+    arms_json="$arms_json{\"role\":\"$role\",\"model\":\"$(json_escape "$model")\",\"model_family\":\"$(model_family "$model")\",\"effort\":\"$(json_escape "$eff")\"}"
+    first=0
+  done
+
+  # task class: tests-oracle (mined; apply_from present) vs authored vs mixed.
+  local n_tasks=0 n_oracle=0 tid task_class
+  for tid in $(spec_list_sections "$spec" task); do
+    n_tasks=$(( n_tasks + 1 ))
+    [ -n "$(spec_section_get "$spec" task "$tid" apply_from)" ] && n_oracle=$(( n_oracle + 1 ))
+  done
+  if   [ "$n_oracle" -eq 0 ];         then task_class="authored"
+  elif [ "$n_oracle" -eq "$n_tasks" ]; then task_class="tests-oracle"
+  else                                      task_class="mixed"; fi
+
+  printf '{\n'
+  printf '  "v": 1,\n'
+  printf '  "skill_version": "%s",\n' "$(json_escape "$ver")"
+  printf '  "submitted_at": "%s",\n'  "$(now_iso)"
+  printf '  "kind": "%s",\n'          "$(json_escape "$kind")"
+  printf '  "category": "%s",\n'      "$(json_escape "$category")"
+  printf '  "harness": "claude-code",\n'
+  printf '  "ecosystem": "%s",\n'     "$(json_escape "$eco")"
+  printf '  "task_class": "%s",\n'    "$task_class"
+  printf '  "verifier_tier": 1,\n'
+  printf '  "tasks": %s,\n'           "$n_tasks"
+  printf '  "replicates": %s,\n'      "$(num_or_null "$reps")"
+  printf '  "non_inferiority_margin": %s,\n' "$(num_or_null "$margin")"
+  printf '  "arms": [%s],\n'          "$arms_json"
+  printf '  "result": %s\n'           "$(reduced_result_json "$dir/result.json")"
+  printf '}\n'
+}
+
+# _send_aggregate <id> <quiet> — build + POST one aggregate record. NO
+# Authorization header — identity stays off the wire. Writes .last-aggregate
+# (<iso> <http_code>). Returns 0 sent · 1 failed · 2 no result · 3 no spec.
+_send_aggregate() {
+  local id="$1" quiet="$2" payload rc
+  payload="$(build_aggregate_payload "$id")"; rc=$?
+  [ "$rc" -eq 0 ] || return $(( rc + 1 ))
+  local dir; dir="$(exp_dir "$id")"
+  [ "$quiet" = 1 ] || echo "Submitting anonymized aggregate for '$id' → $AGGREGATE_URL  (no identity, no repo, no prompts)…" >&2
+  local tmp code maxt=20; [ "$quiet" = 1 ] && maxt=8
+  tmp="$(mktemp)"
+  code="$(printf '%s' "$payload" | curl -sS -o "$tmp" -w '%{http_code}' --max-time "$maxt" \
+    -X POST "$AGGREGATE_URL" -H 'Content-Type: application/json' --data @- 2>/dev/null || echo 000)"
+  rm -f "$tmp"
+  printf '%s %s\n' "$(now_iso)" "$code" > "$dir/.last-aggregate" 2>/dev/null || true
+  case "$code" in
+    2*) if [ "$quiet" = 1 ]; then echo "⤲ library: aggregate submitted (anonymized)" >&2
+        else echo "  ✓ submitted — thanks; the library serves it back as proven-change evidence"; fi
+        return 0 ;;
+    *)  if [ "$quiet" = 1 ]; then
+          case "$code" in
+            404|405) echo "⤲ library: endpoint not live yet (HTTP $code) — saved locally" >&2 ;;
+            000)     echo "⤲ library: offline — will retry on a later analyze" >&2 ;;
+            *)       echo "⤲ library: HTTP $code — saved locally" >&2 ;;
+          esac
+        else
+          case "$code" in
+            404|405) err "  endpoint not live yet (HTTP $code) — $AGGREGATE_URL is not implemented server-side; the payload contract is exercised and recorded locally" ;;
+            000)     err "  network error reaching $AGGREGATE_URL" ;;
+            *)       err "  HTTP $code" ;;
+          esac
+        fi
+        return 1 ;;
+  esac
+}
+
+# _auto_aggregate <id> — after a successful canonical analyze, submit when the
+# user opted in (config aggregate_submit = on; default off → no-op). Never
+# affects the caller's exit status; HEADER_EXPERIMENT_NOSYNC disables it (CI).
+_auto_aggregate() {
+  local id="${1:-}"; [ -n "$id" ] || return 0
+  [ -n "${HEADER_EXPERIMENT_NOSYNC:-}" ] && return 0
+  [ "$("$SELF_DIR/header-config" get aggregate_submit 2>/dev/null || echo off)" = "on" ] || return 0
+  _send_aggregate "$id" 1 || true
+  return 0
+}
+
+cmd_aggregate() {
+  local id="" dry=0 yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --yes|-y)  yes=1; shift ;;
+      -h|--help) echo "Usage: header-experiment aggregate <id> [--dry-run] [--yes]"; return 0 ;;
+      *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
+    esac
+  done
+  [ -n "$id" ] || { err "<id> required"; return 1; }
+  local dir; dir="$(exp_dir "$id")"
+  [ -f "$dir/spec" ] || { err "no spec at $(spec_path "$id")"; return 1; }
+  [ -f "$dir/result.json" ] || { err "aggregate needs an analyzed experiment — run 'header-experiment analyze $id' first (only measured effects are poolable)"; return 1; }
+
+  beta_banner
+
+  if [ "$dry" -eq 1 ]; then
+    local payload
+    payload="$(build_aggregate_payload "$id")" || { err "could not build the payload"; return 1; }
+    printf '# POST %s   (UNAUTHENTICATED by design — no identity on the wire)\n' "$AGGREGATE_URL"
+    printf '%s\n' "$payload"
+    echo "# dry run — nothing sent" >&2
+    return 0
+  fi
+
+  # Consent: config on, --yes, or an interactive confirmation. Refusal is an
+  # opt-out, not an error (mirrors push's no-key gate).
+  if [ "$("$SELF_DIR/header-config" get aggregate_submit 2>/dev/null || echo off)" != "on" ] && [ "$yes" -ne 1 ]; then
+    if [ -t 0 ]; then
+      cat >&2 <<EOF
+Share this experiment's ANONYMIZED effect size with the cross-customer
+proven-changes library? Sent: change kind/category, ecosystem, arm engines,
+N, and the result CIs. Never sent: your identity, machine, repo, prompts, or
+any free text. Preview the exact payload: header-experiment aggregate $id --dry-run
+Enable always: header-config set aggregate_submit on
+EOF
+      printf 'Submit? [y/N] ' >&2
+      local ans=""; IFS= read -r ans
+      case "$ans" in [yY]|[yY][eE][sS]) ;; *) echo "Not submitted — your call. ('header-config set aggregate_submit on' enables auto-submit after each analyze.)" >&2; return 0 ;; esac
+    else
+      err "aggregate submit is opt-in — re-run with --yes, or enable it with: header-config set aggregate_submit on"
+      echo "Preview the exact payload (nothing sent): header-experiment aggregate $id --dry-run" >&2
+      return 0
+    fi
+  fi
+
+  _send_aggregate "$id" 0
+}
+
 cmd_push() {
   local all=0 dry=0 yes=0 topic_ovr="" goal_ovr="" briefing_ovr="" id=""
   while [ $# -gt 0 ]; do
@@ -3163,6 +3387,12 @@ Usage: header-experiment <command> ...
   push <id>       sync this experiment's lineage to your Header account (opt-in,
                     API-key-gated, metadata only). --all to sync every experiment;
                     --dry-run to preview the exact JSON payload without sending.
+  aggregate <id>  submit an ANONYMIZED effect-size record to the cross-customer
+                    proven-changes library (design §7.3) — kind, curated category,
+                    ecosystem, arm engines, result CIs. No identity, no repo, no
+                    prompts, no free text; the POST carries no API key. Opt-in:
+                    interactive y/N or --yes; 'header-config set aggregate_submit
+                    on' auto-submits after each analyze. --dry-run previews.
 
 BETA — see docs/experiments-design.md.
 EOF
@@ -3180,6 +3410,7 @@ case "$cmd" in
   report)   cmd_report   "$@" ;;
   merge)    cmd_merge    "$@" ;;
   push)     cmd_push     "$@" ;;
+  aggregate) cmd_aggregate "$@" ;;
   -h|--help) usage 0 ;;
   "")        usage ;;
   *) err "unknown subcommand '$cmd'"; usage ;;

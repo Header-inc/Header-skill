@@ -69,9 +69,14 @@ that closes the audit → experiment → applied-change loop in code, not just i
 - **σ-based power analysis** — A/A surfaces the per-metric noise floor; use it to
   size N (replicates × tasks) for a chosen MDE. Today the `<5 paired tasks →
   underpowered` cutoff is a hand-picked heuristic, not power-driven.
-- **Cross-customer proven-changes library** — consent-gated aggregate submit of
-  effect size + change category (no code, no paths); pulled back into the audit as
-  "deleting this pattern is proven to save ~X% across N repos." This is the moat.
+- **Cross-customer proven-changes library** — **client side shipped (0.23.0)**:
+  `header-experiment aggregate` submits the anonymized effect record (consent-gated,
+  unauthenticated by design — no identity/repo/prompts/free text on the wire;
+  `aggregate_submit` config, personal-only), and 6-field `patterns.tsv` rows flow
+  back as `PROVEN` audit lines ("deleting this pattern is proven to save ~X%
+  across N repos"). **Server side pending**: the `POST /api/v2/experiments/aggregate`
+  endpoint, k-anonymity cohort protection, and publishing pooled results into
+  briefing-supplied proven rows. This is the moat.
 - **LLM-judge verifier** (Tier 3 of §11) — for tasks the repo's tests don't cover.
   Reference-based, blind-pairwise, judge-validation required.
 - **`header-experiment run` schedule integration** — close the loop with the

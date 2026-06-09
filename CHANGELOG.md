@@ -3,6 +3,50 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.23.0 — Proven-changes library: the client side of the moat
+
+The cross-customer proven-changes library (design §7.3, "the moat") gets its
+full client half: experiments contribute **anonymized effect sizes**, and pooled
+evidence flows back into the audit as **proven patterns** — so a change one user
+proved becomes "[proven across N repos]" in everyone's audit, and nobody re-runs
+a $60 A/B for a change the pool already measured.
+
+**Outbound — `header-experiment aggregate <id>` (+ auto-submit).** Submits an
+analyzed experiment's anonymized effect record. Sent: change kind, the
+**curated** category (a ledger key passes only when it names a known pattern id
+— user-typed keys could carry project hints and never leave), ecosystem label,
+harness, task class (tests-oracle/authored), verifier tier, arm engines (public
+model ids + family + effort), N/replicates/δ, and the result's verdict + means +
+CIs with **`per_task` stripped** (mined task ids embed commit shas). Never sent:
+installation id, hostname, repo identity, prompts or hashes of them, override
+paths, or any free text (`description`/`hypothesis` stay local). The POST is
+**unauthenticated by design** — identity stays off the wire entirely; this is
+explicitly NOT `push` (the user's own identified dashboard sync). Consent:
+config `aggregate_submit` (default **off**, personal-only — refused from a
+committed team config like every egress key) enables auto-submit after each
+canonical `analyze`; the manual verb asks y/N (or `--yes`); `--dry-run` previews
+the exact payload; `HEADER_EXPERIMENT_NOSYNC=1` disables it for CI. The
+endpoint (`POST /api/v2/experiments/aggregate`) is landing server-side; until
+then the call exercises the contract and records the attempt in
+`.last-aggregate`.
+
+**Inbound — proven `patterns.tsv` rows → `PROVEN` audit lines.** The
+briefing-supplied patterns file now accepts a 6-field row —
+`id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` — carrying the library's
+measured evidence. `header-audit harness` re-emits each as
+`PROVEN <id> <effect> <n_repos> <ci>`; `patterns` annotates proven ids; and the
+SKILL.md flow cites the evidence next to a `HIT` ("proven: median −X% across N
+repos") and treats the deletion as `[Apply with review]` — no local experiment
+needed to trust a pooled result. A proven row may reuse a built-in id to attach
+evidence to it: pattern ids are now de-duplicated (first wins), which also fixes
+the pre-existing double-HIT when a file row shadowed a built-in id. Malformed
+rows (4/5 fields, non-integer n) are skipped, never mis-parsed.
+
+Ships `test/aggregate.test.sh` (40 assertions: payload shape, the privacy
+contract field-by-field, curated-category gating, consent gates, auto-submit
+wiring, config domain + team-config refusal, PROVEN emission + de-dup).
+VERSION → 0.23.0.
+
 ## 0.22.0 — Transcript-mined waste: measured findings, not pattern matches
 
 New scan — **`header-audit waste`** — turns the transcripts `cost` already prices

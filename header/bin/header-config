@@ -41,9 +41,10 @@ CONFIG_FILE="$STATE_DIR/config"
 TEAM_ALLOWED="default_topic staleness_days schedule_frequency_days language"
 # Keys NEVER honored from a committed file — consent + code execution + egress.
 # If one appears there it is ignored on read and `team-show` flags it.
-# `experiment_sync` controls identified egress to the account, so a committed
-# file must not be able to flip it on for every teammate.
-TEAM_SENSITIVE="telemetry auto_update auto_tune update_check experiment_sync"
+# `experiment_sync` controls identified egress to the account, and
+# `aggregate_submit` controls anonymized egress to the cross-customer library —
+# a committed file must not be able to flip either on for every teammate.
+TEAM_SENSITIVE="telemetry auto_update auto_tune update_check experiment_sync aggregate_submit"
 
 # Terse header, written once when a file is first created. Defaults are NOT
 # documented here on purpose — lookup_default() is the single source of truth.
@@ -76,12 +77,13 @@ lookup_default() {
     auto_tune)               echo "false" ;;
     repo_memory)             echo "true" ;;     # remember a repo's bound topic across sessions
     experiment_sync)         echo "auto" ;;     # auto: when an API key is present, sync each experiment edit to the account. off: never.
+    aggregate_submit)        echo "off" ;;      # on: after each analyze, submit the ANONYMIZED effect size to the cross-customer library. off (default): never.
     *)                       echo "" ;;
   esac
 }
 
 # Keys recognized by `list` and `defaults` (the personal config surface).
-KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory experiment_sync"
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory experiment_sync aggregate_submit"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 # A topic id is a UUID or bare slug — hyphens allowed (config keys are not).
@@ -142,6 +144,9 @@ case "${1:-}" in
     fi
     if [ "$KEY" = "experiment_sync" ]; then
       case "$VALUE" in auto|off) ;; *) echo "header-config: experiment_sync must be auto|off; using auto" >&2; VALUE="auto" ;; esac
+    fi
+    if [ "$KEY" = "aggregate_submit" ]; then
+      case "$VALUE" in on|off) ;; *) echo "header-config: aggregate_submit must be on|off; using off" >&2; VALUE="off" ;; esac
     fi
     upsert "$CONFIG_FILE" "$CONFIG_HEADER" "$KEY" "$VALUE"
     ;;

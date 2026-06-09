@@ -223,13 +223,13 @@ Configuration comes from four places, highest priority first: **environment vari
 ~/.claude/skills/header/bin/header-config list
 ```
 
-Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`, `repo_memory`, `experiment_sync`. Run the helper with `defaults` to see every key and its default value.
+Recognized keys: `default_topic`, `language`, `staleness_days`, `auto_update`, `update_check`, `ledger`, `telemetry`, `auto_tune`, `repo_memory`, `experiment_sync`, `aggregate_submit`. Run the helper with `defaults` to see every key and its default value.
 
 ### Team config (`.header/config`)
 
 To share a topic (and a couple of settings) with a whole team, **commit a `.header/config` at the repo root**. Every teammate's skill reads it automatically on clone — no per-person setup — and it sits above each developer's personal `~/.header/config` but below their own env vars and explicit per-repo bindings. The skill offers to create and commit it for you right after you make a topic in a shared repo; it's recommended for shared repos and optional when you're solo.
 
-Keep it to **team-relevant settings only**. Only an allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Consent, update, and egress keys (`telemetry`, `auto_update`, `auto_tune`, `update_check`, `experiment_sync`) are **ignored** from a committed file by design — they stay personal, so a pushed change can never flip a teammate's privacy, trigger code, or enable account sync. The file is read as data only, never sourced.
+Keep it to **team-relevant settings only**. Only an allow-list is honored: `default_topic`, `staleness_days`, `schedule_frequency_days`, `language`. Consent, update, and egress keys (`telemetry`, `auto_update`, `auto_tune`, `update_check`, `experiment_sync`, `aggregate_submit`) are **ignored** from a committed file by design — they stay personal, so a pushed change can never flip a teammate's privacy, trigger code, or enable account sync. The file is read as data only, never sourced.
 
 ```bash
 ~/.claude/skills/header/bin/header-config team-init <topic-uuid>   # scaffold ./.header/config

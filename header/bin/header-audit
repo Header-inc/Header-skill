@@ -21,6 +21,9 @@
 #         HOOK       <event>  <command-excerpt>  <file> (shell run on an agent event)
 #         SKILL      <name>  <path>  <has-bin>  <scope> (installed skill: supply-chain surface)
 #         SECURITY / SECURITY-DETAIL                    (Bash-tool permission posture)
+#         PROVEN     <pattern_id>  <effect>  <n_repos>  <ci>   (cross-customer
+#                    library evidence for a pattern, from a 6-field patterns.tsv
+#                    row — cite it next to a HIT instead of running a local A/B)
 #
 #   header-audit deps [--repo DIR]
 #       Dependency / supply-chain posture. Detects ecosystems, tool versions, and
@@ -102,7 +105,7 @@ PATTERNS_FILE="${HEADER_PATTERNS_FILE:-$HEADER_HOME/patterns.tsv}"
 
 # ── built-in prompt-debt patterns ─────────────────────────────
 # id <TAB> extended-regex (grep -iE) <TAB> why-it's-debt
-_patterns() {
+_patterns_raw() {
   cat <<EOF
 step-by-step${TAB}think step.?by.?step|step.?by.?step|reason step by step${TAB}Modern models reason by default; explicit "step by step" is usually a no-op or bloats output.
 deep-breath${TAB}take a deep breath${TAB}Cargo-cult motivation prompt with no measured effect on current models.
@@ -116,16 +119,48 @@ think-first${TAB}before (you )?(answer|respond)[, ]+think|let.?s think${TAB}Redu
 EOF
   # Briefing-supplied patterns (optional). The audit flow writes new debt patterns
   # the briefing names to PATTERNS_FILE so the hypothesis set updates without a
-  # skill release. Same TSV shape: id<TAB>regex<TAB>why. Skip comments/blanks and
-  # any line that isn't exactly three tab fields (a stray tab in `why` is rejected
-  # rather than silently mis-parsed).
+  # skill release. Two row shapes, both tab-separated:
+  #   id<TAB>regex<TAB>why                                  (hypothesis row)
+  #   id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci    (PROVEN row — the
+  #     cross-customer library has measured this change: median effect, sample
+  #     size, CI; re-emitted as a PROVEN line so a HIT can cite the evidence)
+  # Skip comments/blanks and anything that isn't exactly 3 or 6 fields (a stray
+  # tab in `why` is rejected rather than silently mis-parsed). n_repos must be
+  # an integer for a proven row to count.
   if [ -f "$PATTERNS_FILE" ]; then
-    while IFS="$TAB" read -r id rx why extra; do
+    while IFS="$TAB" read -r id rx why eff n ci extra; do
       case "${id:-}" in ''|'#'*) continue ;; esac
-      [ -n "${rx:-}" ] && [ -n "${why:-}" ] && [ -z "${extra:-}" ] || continue
+      [ -n "${rx:-}" ] && [ -n "${why:-}" ] || continue
+      if [ -n "${eff:-}" ]; then
+        { [ -n "${n:-}" ] && [ -n "${ci:-}" ] && [ -z "${extra:-}" ]; } || continue
+        case "$n" in ''|*[!0-9]*) continue ;; esac
+      else
+        { [ -z "${n:-}" ] && [ -z "${ci:-}" ] && [ -z "${extra:-}" ]; } || continue
+      fi
       printf '%s\t%s\t%s\n' "$id" "$rx" "$why"
     done < "$PATTERNS_FILE"
   fi
+}
+
+# _patterns — _patterns_raw de-duplicated by id (first occurrence wins, so a
+# built-in keeps its regex). A briefing-supplied row may reuse a built-in id on
+# purpose — the 6-field form attaches PROVEN evidence to an existing pattern —
+# and must not make the scan double-report every HIT for it.
+_patterns() { _patterns_raw | awk -F'\t' '!seen[$1]++'; }
+
+# _proven_patterns — id<TAB>effect<TAB>n_repos<TAB>ci for the 6-field (proven)
+# rows of PATTERNS_FILE: changes the cross-customer library has measured. The
+# `harness` scan re-emits them as PROVEN lines so the presentation can cite the
+# evidence next to a HIT instead of scaffolding a local experiment for a change
+# the library has already proven at scale.
+_proven_patterns() {
+  [ -f "$PATTERNS_FILE" ] || return 0
+  while IFS="$TAB" read -r id rx why eff n ci extra; do
+    case "${id:-}" in ''|'#'*) continue ;; esac
+    [ -n "${rx:-}" ] && [ -n "${why:-}" ] && [ -n "${eff:-}" ] && [ -n "${n:-}" ] && [ -n "${ci:-}" ] && [ -z "${extra:-}" ] || continue
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    printf '%s\t%s\t%s\t%s\n' "$id" "$eff" "$n" "$ci"
+  done < "$PATTERNS_FILE"
 }
 
 # ── version compare: ver_ge HAVE WANT → "ge" | "lt" ───────────
@@ -491,9 +526,12 @@ _rail_compound_status() {
 
 case "$sub" in
   patterns)
+    _pv="$(_proven_patterns)"
     _patterns | while IFS="$TAB" read -r id rx why; do
       [ -n "${id:-}" ] || continue
-      printf '%-18s %s\n' "$id" "$why"
+      ann=""
+      [ -n "$_pv" ] && ann="$(printf '%s\n' "$_pv" | awk -F"$TAB" -v k="$id" '$1==k{printf "  [proven: %s across %s repos, CI %s]", $2, $3, $4; exit}')"
+      printf '%-18s %s%s\n' "$id" "$why" "$ann"
     done
     [ -f "$PATTERNS_FILE" ] && printf '# (includes briefing-supplied patterns from %s)\n' "$PATTERNS_FILE"
     ;;
@@ -568,6 +606,13 @@ SIG
     _skills "$HOME/.claude/skills" user
     # Nested CLAUDE.md / AGENTS.md (on-demand, not every turn) — reported apart.
     _nested
+    # Proven patterns (6-field patterns.tsv rows): re-emit the cross-customer
+    # library's evidence so the presentation can cite it next to a HIT — a
+    # change proven across N repos doesn't need a local A/B to be trusted.
+    _proven_patterns | while IFS="$TAB" read -r pid eff n ci; do
+      [ -n "${pid:-}" ] || continue
+      printf 'PROVEN\t%s\t%s\t%s\t%s\n' "$pid" "$eff" "$n" "$ci"
+    done
     ;;
 
   deps)
