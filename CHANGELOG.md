@@ -3,6 +3,25 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.24.2 — fix: stop telling users the live sync endpoint isn't live
+
+`POST /api/v2/experiments` (the experiment-dashboard sync) **is live** —
+verified 2026-06-09: unauthenticated and bad-key POSTs return structured
+`401`s ("Invalid API key"), not 404/405 — but SKILL.md, README, llms.txt, and
+the design doc still said "not live yet (405)", and the runtime 404/405
+status lines diagnosed "endpoint not live yet". The skill was underselling a
+shipped feature: users with a key were told their dashboard didn't work.
+`docs/experiments-sync-api.md` (which said live all along) is the contract of
+record.
+
+Docs now state the endpoint is live, and the sync 404/405 runtime messages
+diagnose the real causes (stale deployment, a proxy in the way, or a
+`HEADER_API_BASE`/`HEADER_EXPERIMENTS_URL` override) instead of a missing
+handler. The **aggregate** endpoint (`/api/v2/experiments/aggregate`) was
+probed too and genuinely still returns 405 — its "not live yet" messaging is
+unchanged and accurate. Historical CHANGELOG entries are left as written.
+VERSION → 0.24.2.
+
 ## 0.24.1 — fix: waste scan on macOS (BSD awk rejects multi-line -v)
 
 `header-audit waste` passed its two multi-line lists (configured MCP servers,

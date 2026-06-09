@@ -3153,7 +3153,7 @@ _sync_one() {
         return 0 ;;
     *)  if [ "$quiet" = 1 ]; then
           case "$code" in
-            404|405) echo "⤴ dashboard: endpoint not live yet (HTTP $code) — saved locally, will retry on next edit" >&2 ;;
+            404|405) echo "⤴ dashboard: HTTP $code from the sync endpoint (it's live in production — stale deployment or proxy?) — saved locally, will retry on next edit" >&2 ;;
             000)     echo "⤴ dashboard: offline — saved locally, will retry on next edit" >&2 ;;
             401)     echo "⤴ dashboard: API key rejected (401) — fix the key or set 'header-config set experiment_sync off'" >&2 ;;
             *)       echo "⤴ dashboard: HTTP $code — saved locally" >&2 ;;
@@ -3162,7 +3162,7 @@ _sync_one() {
           case "$code" in
             401) err "  key rejected (401) — check HEADER_API_KEY / credentials" ;;
             403) err "  forbidden (403)${body:+ — $(printf '%s' "$body" | head -c 200)}" ;;
-            404|405) err "  endpoint not live yet (HTTP $code) — $EXPERIMENTS_URL is not implemented server-side" ;;
+            404|405) err "  HTTP $code from $EXPERIMENTS_URL — the endpoint is live in production, so this usually means a stale deployment, a proxy in the way, or a HEADER_API_BASE/HEADER_EXPERIMENTS_URL override pointing elsewhere" ;;
             000) err "  network error reaching $EXPERIMENTS_URL" ;;
             *)   err "  HTTP $code${body:+ — $(printf '%s' "$body" | head -c 200)}" ;;
           esac

@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.24.1
+version: 0.24.2
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -899,7 +899,7 @@ header-experiment push <id> --dry-run    # print the exact JSON payload (no key 
 header-experiment push --all             # sync every local experiment now
 ```
 
-**Errors (auto-sync is always best-effort).** No key → recommend + skip (never an error). `404`/`405` → endpoint not live for this account yet; the status line says so, the experiment is safe locally, and it retries on the next edit. A `*_FREE` code → dashboard sync is Pro; run the trial/upgrade flow (see "Tier limits"). Sync never blocks or fails the experiment loop.
+**Errors (auto-sync is always best-effort).** No key → recommend + skip (never an error). `404`/`405` → unexpected now that the endpoint is live — usually a stale deployment or a proxy in the way (or a `HEADER_API_BASE` override); the status line says so, the experiment is safe locally, and it retries on the next edit. A `*_FREE` code → dashboard sync is Pro; run the trial/upgrade flow (see "Tier limits"). Sync never blocks or fails the experiment loop.
 
 ### Aggregate submit — the proven-changes library (beta, opt-in, anonymized)
 
@@ -1342,4 +1342,4 @@ Don't auto-retry blindly; inform the user before retrying.
 | `url` | string | Web UI link to the synced experiment — surface this to the user |
 | `status` | string | `stored` (created or updated) |
 
-The request body is the `header-experiment push` payload documented under "Sync an experiment (`POST /api/v2/experiments`)". The receiving endpoint is **not yet live** — `push` makes the call today so the contract is exercised; the backend implements the handler against this shape.
+The request body is the `header-experiment push` payload documented under "Sync an experiment (`POST /api/v2/experiments`)". The receiving endpoint is **live** (it upserts on `client_key` and returns the web-UI `url` — surface it). A `404`/`405` from it now indicates a stale deployment or a proxy in the way, not a missing handler; the client's retry-on-next-edit behavior still applies.

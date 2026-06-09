@@ -688,11 +688,13 @@ Capabilities added during dogfooding that §§1–13 didn't cover. The §12 CLI 
   briefing) · repo (normalized git remote + commit) · machine (install id + host/os/arch) · result
   (verbatim). Idempotent upsert on `client_key = <installation_id>:<experiment_id>`. **This is the
   user's own identified dashboard — explicitly NOT the §7.3 anonymized cross-customer aggregate
-  submit, which stays future work.** Privacy: metadata only — prompt bodies / override contents /
-  logs never leave; prompts are identified by sha256 + bytes, and each task gets a descriptive title
-  (authored `title:` → derived-from-first-heading → task id). **Backend `POST /api/v2/experiments` is
-  not live yet** (returns `405` today); the client makes the call so the contract is exercised, saves
-  a local `.last-sync` marker, and retries on the next edit until the handler ships.
+  submit** (whose client side shipped in 0.23.0 as `header-experiment aggregate`; its server side is
+  still pending). Privacy: metadata only — prompt bodies / override contents / logs never leave;
+  prompts are identified by sha256 + bytes, and each task gets a descriptive title (authored
+  `title:` → derived-from-first-heading → task id). **Backend `POST /api/v2/experiments` is live**
+  (verified 2026-06-09: unauthenticated/bad-key POSTs return structured `401`s, not 404/405) — see
+  `docs/experiments-sync-api.md` for the receiving contract; the client writes a `.last-sync`
+  marker per attempt and retries on the next edit after any transient failure.
 
 - **Three-disposition gating** (0.12.0, see §6.8) — the audit classifies each finding `[Apply now]` / `[Apply with review]` / `[Experiment]` by the experiment-cost-vs-proven-payoff *ratio*, not raw magnitude.
 - **Discrimination guard — success axis** (0.12.3) — a prompt-debt deletion only measures something if the verify task *exercises* the deleted instruction. `validate`/`run` detect prompt-prefix (`CLAUDE.md`/`AGENTS.md`) deletions — including hand-rolled specs, by diffing arm overrides against the repo — and warn, escalating when the deleted text carries emphatic mandates (`MUST`/`NEVER`/`ALWAYS`, case-sensitive so sentence-case cargo-cult doesn't false-positive).
