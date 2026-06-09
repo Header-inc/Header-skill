@@ -261,6 +261,33 @@ _looks_like_test() {
   return 1
 }
 
+# _targeted_verify_cmd <verify> <paths_csv> → a narrowed command that runs ONLY
+# the given test paths, when <verify> is an auto-detected runner we know how to
+# scope (pytest, go test). Empty output = no safe narrowing (user-supplied /
+# unknown runner) → the caller keeps the full suite. Used by mine's validation:
+# the FAIL_TO_PASS question is about exactly these re-applied tests, so the
+# targeted run is both much faster on a big suite (the full suite ran once per
+# CANDIDATE) and more precise — an unrelated broken test can't masquerade as a
+# real fix.
+_targeted_verify_cmd() {
+  local verify="$1" paths="$2" p files="" dirs="" d oifs="$IFS"
+  IFS=','
+  for p in $paths; do
+    p="$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$p" ] || continue
+    case "$p" in *' '*) IFS="$oifs"; return 0 ;; esac   # space in a path → don't risk word-splitting
+    files="$files $p"
+    case "$p" in */*) d="./${p%/*}" ;; *) d="." ;; esac
+    case " $dirs " in *" $d "*) ;; *) dirs="$dirs $d" ;; esac
+  done
+  IFS="$oifs"
+  [ -n "$files" ] || return 0
+  case "$verify" in
+    'pytest -q')     printf 'pytest -q%s' "$files" ;;
+    'go test ./...') printf 'go test%s' "$dirs" ;;
+  esac
+}
+
 # _oracle_checkout <worktree> <ref> <comma-sep-paths> — check out <ref>'s version
 # of the given paths into the worktree (working tree + index). The tests-oracle
 # task type (from `mine`) calls it twice: BEFORE the agent to apply a fixing
@@ -1005,15 +1032,23 @@ EOF
 # experiment — by default a model-swap A/B (the #1 named use, "is the cheaper
 # model good enough on my real tasks?").
 
-# _mine_validate <repo> <parent> <child> <verify> <timeout_s> <paths_csv> <include_csv>
+# _mine_validate <repo> <parent> <child> <verify> <timeout_s> <paths_csv> <include_csv> [<fullval>]
 # Echoes a one-word status: `valid` (the re-applied tests FAIL at the parent → a
 # real fix exists), `nofail` (they pass → nothing to fix → skip), or `error`
 # (couldn't build the worktree / apply the tests → skip). Runs the suite once in a
 # throwaway worktree at the parent, with the child's tests applied; symlinks the
 # dep/artifact dirs git worktrees don't carry so the suite can actually run.
+# When the verify command is a runner we can scope (pytest / go test), the run is
+# NARROWED to the re-applied test paths — the FAIL_TO_PASS question is about
+# those tests, so this is faster AND more precise. <fullval>=1 forces the full
+# suite (the --full-validate flag).
 _mine_validate() {
-  local repo="$1" parent="$2" child="$3" verify="$4" tmo="$5" paths="$6" include="$7"
+  local repo="$1" parent="$2" child="$3" verify="$4" tmo="$5" paths="$6" include="$7" fullval="${8:-0}"
   local wt rc=0 p arr=() oifs="$IFS"
+  if [ "$fullval" -ne 1 ]; then
+    local tcmd; tcmd="$(_targeted_verify_cmd "$verify" "$paths")"
+    [ -n "$tcmd" ] && verify="$tcmd"
+  fi
   wt="$(mktemp -d "${TMPDIR:-/tmp}/header-mine.XXXXXX")" && rm -rf "$wt"
   ( cd "$repo" && git worktree add --detach -q "$wt" "$parent" 2>/dev/null ) || { echo error; return 0; }
   # Symlink dep/artifact dirs (node_modules, venv, …) so imports resolve.
@@ -1041,10 +1076,11 @@ _mine_validate() {
 cmd_mine() {
   local id="" repo="" limit=150 max_files=5 max_tasks=8 verify_override=""
   local from="" to="" arm_in=() reps=3 margin=0.02 since="" vtimeout=600
-  local list_only=0 yes=0 desc="" hypothesis="" kind=""
+  local list_only=0 yes=0 desc="" hypothesis="" kind="" fullval=0
   local adopt=0 effort="" from_effort="" sweep=0 sweep_explicit=0
   while [ $# -gt 0 ]; do
     case "$1" in
+      --full-validate) fullval=1; shift ;;
       --repo)        repo="${2:-}"; shift 2 ;;
       --limit)       limit="${2:-150}"; shift 2 ;;
       --max-files)   max_files="${2:-5}"; shift 2 ;;
@@ -1087,6 +1123,11 @@ by the repo's own suite. No task prompts or verify commands to hand-author.
   --replicates N    replicates per (task,arm) (default 3)
   --since REF       only mine commits in REF..HEAD
   --timeout S       per-candidate suite timeout during validation (default 600)
+  --full-validate   run the WHOLE suite per candidate during validation. The
+                    default narrows auto-detected runners (pytest / go test) to
+                    the candidate's re-applied test paths — much faster on a
+                    big suite, and more precise (an unrelated broken test can't
+                    masquerade as a real fix).
   --list            discover candidates and print them; no suite runs, no write
   --yes             skip the validation confirmation prompt
 
@@ -1227,7 +1268,7 @@ EOF
 Found $n_cand candidate commit(s). To keep only REAL tasks, mine runs your test
 suite once per candidate at the parent commit, keeping those where the re-applied
 tests FAIL (a fix genuinely exists). Local only — no tokens, no network.
-  verify:  $verify
+  verify:  $verify$([ "$fullval" -ne 1 ] && printf '  (narrowed per candidate to its re-applied test paths when the runner supports it; --full-validate forces the whole suite)')
   stops after $max_tasks valid task(s); $([ -n "$include_list" ] && echo "symlinking: $include_list" || echo "no dep dirs to symlink")
 This can take a while on a large suite.
 EOF
@@ -1246,7 +1287,7 @@ EOF
     IFS='|' read -r child parent nsrc paths <<<"$c"
     examined=$(( examined + 1 ))
     printf '  [validate %d/%d] %s … ' "$examined" "$n_cand" "$child" >&2
-    status="$(_mine_validate "$repo" "$parent" "$child" "$verify" "$vtimeout" "$paths" "$include_list")"
+    status="$(_mine_validate "$repo" "$parent" "$child" "$verify" "$vtimeout" "$paths" "$include_list" "$fullval")"
     case "$status" in
       valid)  printf 'tests fail at parent → TASK\n' >&2; valid+=("$child|$parent|$paths") ;;
       nofail) printf 'tests already pass → skip\n' >&2; n_nofail=$(( n_nofail + 1 )) ;;
@@ -1806,19 +1847,75 @@ _run_teardown() {
   rm -f "$_envf"
 }
 
+# run_block — one (task, replicate) block: resolves the per-task config once,
+# then runs every arm SEQUENTIALLY, so the A/B of a pair stays temporally
+# adjacent (§6.2's interleaving survives parallelism across blocks). Reads
+# cmd_run's locals via bash dynamic scope; appends one JSON line per arm to $3.
+#   args: <task> <rep> <out_file> <base_step> <total_runs>
+run_block() {
+  local task="$1" r="$2" out="$3" base="$4" total="$5"
+  local prompt verify timeout_s prompt_abs task_commit task_commit_resolved
+  prompt="$(spec_section_get "$spec" task "$task" prompt)"
+  verify="$(spec_section_get "$spec" task "$task" verify)"
+  timeout_s="$(spec_section_get "$spec" task "$task" timeout_s)"
+  [ -n "$timeout_s" ] || timeout_s="1200"
+  prompt_abs="$(resolve_task_path "$repo" "$dir" "$prompt")"
+  # Per-task base commit: git-history-mined tasks each pin their fix's PARENT
+  # (falls back to the experiment-level commit). Resolve to a short sha.
+  task_commit="$(spec_section_get "$spec" task "$task" commit)"
+  [ -n "$task_commit" ] || task_commit="$commit"
+  task_commit_resolved="$task_commit"
+  if (cd "$repo" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1); then
+    task_commit_resolved="$(cd "$repo" && git rev-parse --short "$task_commit" 2>/dev/null || echo "$task_commit")"
+  fi
+  # Tests-oracle keys (apply the fixing commit's tests, lock them at grade
+  # time). run_one picks them up via dynamic scope.
+  local ORACLE_APPLY_FROM ORACLE_APPLY_PATHS ORACLE_LOCK_PATHS
+  ORACLE_APPLY_FROM="$(spec_section_get "$spec" task "$task" apply_from)"
+  ORACLE_APPLY_PATHS="$(spec_section_get "$spec" task "$task" apply_paths)"
+  ORACLE_LOCK_PATHS="$(spec_section_get "$spec" task "$task" lock_paths)"
+  local a_idx arm arm_for_config model effort overrides overrides_abs
+  for (( a_idx=0; a_idx<${#arms[@]}; a_idx++ )); do
+    arm="${arms[$a_idx]}"
+    # Resolve the arm's config. In A/A both slots use first_arm's config.
+    arm_for_config="$arm"
+    [ "$aa" -eq 1 ] && arm_for_config="$first_arm"
+    model="$(spec_section_get "$spec" arm "$arm_for_config" model)"
+    effort="$(spec_section_get "$spec" arm "$arm_for_config" effort)"
+    overrides="$(spec_section_get "$spec" arm "$arm_for_config" overrides_dir)"
+    overrides_abs=""; [ -n "$overrides" ] && overrides_abs="$(resolve_path "$dir" "$overrides")"
+    printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$(( base + a_idx + 1 ))" "$total" "$task" "$arm" "$r" >&2
+    # run scope: isolate infra per (task,arm,rep) for write-heavy tasks where
+    # one run's writes would contaminate the next. (--jobs is forced to 1 in
+    # this mode — the provisioned .run-env is shared state.)
+    if [ -n "$SETUP_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
+      _run_setup "$SETUP_CMD" "$dir" "$repo" || { err "setup failed for task=$task arm=$arm rep=$r — aborting"; return 1; }
+    fi
+    run_one "$dir" "$repo" "$task_commit_resolved" "$task" "$arm" "$r" \
+            "$model" "$overrides_abs" "$prompt_abs" "$verify" "$timeout_s" \
+            "$adapter" "$effort" >> "$out"
+    if [ -n "$TEARDOWN_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
+      _run_teardown
+    fi
+  done
+}
+
 cmd_run() {
-  local id="" aa=0 k_override="" yes=0 seed="" adapter="${HEADER_EXPERIMENT_ADAPTER:-}"
+  local id="" aa=0 k_override="" yes=0 seed="" adapter="${HEADER_EXPERIMENT_ADAPTER:-}" jobs=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --aa)      aa=1; shift ;;
       --k)       k_override="${2:-}"; shift 2 ;;
+      --jobs|-j) jobs="${2:-}"; shift 2 ;;
       --yes|-y)  yes=1; shift ;;
       --seed)    seed="${2:-}"; shift 2 ;;
       --adapter) adapter="${2:-}"; shift 2 ;;
-      -h|--help) echo "Usage: header-experiment run <id> [--aa] [--k N] [--yes] [--seed N] [--adapter CMD]"; return 0 ;;
+      -h|--help) echo "Usage: header-experiment run <id> [--aa] [--k N] [--jobs N] [--yes] [--seed N] [--adapter CMD]"; return 0 ;;
       *) [ -z "$id" ] && id="$1" || { err "unknown arg '$1'"; return 1; }; shift ;;
     esac
   done
+  case "$jobs" in ''|*[!0-9]*) err "--jobs must be a positive integer (got '$jobs')"; return 1 ;; esac
+  [ "$jobs" -ge 1 ] || jobs=1
   [ -n "$id" ] || { err "<id> required"; return 1; }
   local spec; spec="$(spec_path "$id")"
   [ -f "$spec" ] || { err "no spec at $spec — run 'define $id' first"; return 1; }
@@ -1842,6 +1939,12 @@ cmd_run() {
   TEARDOWN_CMD="$(spec_get_scalar "$spec" teardown)"
   SETUP_SCOPE="$(spec_get_scalar "$spec" setup_scope)"; [ -n "$SETUP_SCOPE" ] || SETUP_SCOPE="experiment"
   mkdir -p "$dir/logs"
+  # Per-run infra provisioning is shared state (.run-env + the provisioned
+  # service) — parallel blocks would race it. Serialize rather than corrupt.
+  if [ "$jobs" -gt 1 ] && [ -n "$SETUP_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
+    echo "run: setup_scope=run provisions infra per (task,arm,rep) — forcing --jobs 1 (parallel blocks would race the provisioned env)." >&2
+    jobs=1
+  fi
 
   # Resolve real commit hash for the run record. If repo isn't git, leave it.
   local commit_resolved="$commit"
@@ -1994,57 +2097,49 @@ EOF
   # Order: per task, interleave arms within a replicate (§6.2). Cache warmup
   # and time-of-day drift hit both arms symmetrically. We don't randomize task
   # order yet — keep it deterministic for now; users can shuffle the spec.
-  echo "Running $n_runs invocation(s) → $out_file" >&2
-  local step=0 r task arm a_idx
-  for (( r=0; r<reps; r++ )); do
-    for task in "${tasks[@]}"; do
-      for (( a_idx=0; a_idx<${#arms[@]}; a_idx++ )); do
-        arm="${arms[$a_idx]}"
-        # Resolve the arm's config. In A/A both slots use first_arm's config.
-        local arm_for_config="$arm"
-        [ "$aa" -eq 1 ] && arm_for_config="$first_arm"
-        local model overrides effort
-        model="$(spec_section_get "$spec" arm "$arm_for_config" model)"
-        effort="$(spec_section_get "$spec" arm "$arm_for_config" effort)"
-        overrides="$(spec_section_get "$spec" arm "$arm_for_config" overrides_dir)"
-        local overrides_abs=""; [ -n "$overrides" ] && overrides_abs="$(resolve_path "$dir" "$overrides")"
-        local prompt verify timeout_s
-        prompt="$(spec_section_get "$spec" task "$task" prompt)"
-        verify="$(spec_section_get "$spec" task "$task" verify)"
-        timeout_s="$(spec_section_get "$spec" task "$task" timeout_s)"
-        [ -n "$timeout_s" ] || timeout_s="1200"
-        local prompt_abs; prompt_abs="$(resolve_task_path "$repo" "$dir" "$prompt")"
-        # Per-task base commit: git-history-mined tasks each pin their fix's PARENT
-        # (falls back to the experiment-level commit). Resolve to a short sha.
-        local task_commit task_commit_resolved
-        task_commit="$(spec_section_get "$spec" task "$task" commit)"
-        [ -n "$task_commit" ] || task_commit="$commit"
-        task_commit_resolved="$task_commit"
-        if (cd "$repo" 2>/dev/null && git rev-parse --git-dir >/dev/null 2>&1); then
-          task_commit_resolved="$(cd "$repo" && git rev-parse --short "$task_commit" 2>/dev/null || echo "$task_commit")"
-        fi
-        # Tests-oracle keys (apply the fixing commit's tests, lock them at grade
-        # time). Read here per task; run_one picks them up via dynamic scope.
-        local ORACLE_APPLY_FROM ORACLE_APPLY_PATHS ORACLE_LOCK_PATHS
-        ORACLE_APPLY_FROM="$(spec_section_get "$spec" task "$task" apply_from)"
-        ORACLE_APPLY_PATHS="$(spec_section_get "$spec" task "$task" apply_paths)"
-        ORACLE_LOCK_PATHS="$(spec_section_get "$spec" task "$task" lock_paths)"
-        step=$(( step + 1 ))
-        printf '  [%d/%d] task=%s arm=%s rep=%d\n' "$step" "$n_runs" "$task" "$arm" "$r" >&2
-        # run scope: isolate infra per (task,arm,rep) for write-heavy tasks
-        # where one run's writes would contaminate the next.
-        if [ -n "$SETUP_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
-          _run_setup "$SETUP_CMD" "$dir" "$repo" || { err "setup failed for run $step — aborting"; return 1; }
-        fi
-        run_one "$dir" "$repo" "$task_commit_resolved" "$task" "$arm" "$r" \
-                "$model" "$overrides_abs" "$prompt_abs" "$verify" "$timeout_s" \
-                "$adapter" "$effort" >> "$out_file"
-        if [ -n "$TEARDOWN_CMD" ] && [ "$SETUP_SCOPE" = "run" ]; then
-          _run_teardown
+  # The parallel unit is a (task, replicate) BLOCK — arms stay sequential
+  # inside it, so each pair's A/B remains temporally adjacent under --jobs.
+  echo "Running $n_runs invocation(s) → $out_file$([ "$jobs" -gt 1 ] && printf ' (%s parallel blocks)' "$jobs")" >&2
+  local r task t_idx base
+  if [ "$jobs" -le 1 ]; then
+    for (( r=0; r<reps; r++ )); do
+      t_idx=0
+      for task in "${tasks[@]}"; do
+        base=$(( (r * ${#tasks[@]} + t_idx) * ${#arms[@]} ))
+        run_block "$task" "$r" "$out_file" "$base" "$n_runs" || return 1
+        t_idx=$(( t_idx + 1 ))
+      done
+    done
+  else
+    # Wave scheduling (Bash 3.2 portable — no `wait -n`): launch up to --jobs
+    # blocks, wait for the whole wave, repeat. Each block appends to its own
+    # part file, concatenated after the waves — two blocks can never interleave
+    # inside one JSON line, whatever the platform's append semantics.
+    local parts=() pids=() pid wave_n=0 rc_runs=0
+    for (( r=0; r<reps; r++ )); do
+      t_idx=0
+      for task in "${tasks[@]}"; do
+        base=$(( (r * ${#tasks[@]} + t_idx) * ${#arms[@]} ))
+        local part="$dir/.runs-part.$r.$t_idx"
+        : > "$part"; parts+=("$part")
+        run_block "$task" "$r" "$part" "$base" "$n_runs" &
+        pids+=($!)
+        wave_n=$(( wave_n + 1 ))
+        t_idx=$(( t_idx + 1 ))
+        if [ "$wave_n" -ge "$jobs" ]; then
+          for pid in "${pids[@]}"; do wait "$pid" || rc_runs=1; done
+          pids=(); wave_n=0
         fi
       done
     done
-  done
+    for pid in "${pids[@]:-}"; do [ -n "$pid" ] && { wait "$pid" || rc_runs=1; }; done
+    cat "${parts[@]}" >> "$out_file" 2>/dev/null
+    rm -f "${parts[@]}"
+    if [ "$rc_runs" -ne 0 ]; then
+      err "one or more parallel blocks failed — partial results kept in $out_file; inspect $dir/logs"
+      return 1
+    fi
+  fi
 
   # Final teardown (experiment scope) + disarm the trap so script EXIT doesn't
   # re-run it. Teardown is idempotent (removes .run-env), so this is safe.
@@ -2115,21 +2210,24 @@ cmd_analyze() {
     {
       task = jstr($0,"task"); arm = jstr($0,"arm")
       if (task=="" || arm=="") next
-      # Drop rows where the agent itself failed (timeout = 124, other nonzero
-      # exits). On a kill the JSON has no total_cost_usd → cost_usd parses as
-      # 0; averaging $0 rows into a real arm produces a misleading "B is
-      # cheaper" verdict. Filter here, report the count so the user knows.
       agent_exit = jnum($0,"agent_exit")
-      if (agent_exit != 0) { Excluded++; next }
       cost = jnum($0,"cost_usd"); succ = jbool($0,"success")
       key = task SUBSEP arm
-      Reps[key]++
-      # Store individual replicate values so we can do replicate-level
-      # analysis when paired-by-task is degenerate (low-N A/A fallback).
-      Rep_i = Reps[key]
-      C[key, Rep_i] = cost
-      S[key, Rep_i] = succ
-      SumC[key]+=cost; SumS[key]+=succ
+      # SUCCESS axis: EVERY run counts, with the verifier'\''s recorded verdict.
+      # Dropping agent-error rows here would bias the non-inferiority gate
+      # toward "B holds" exactly when B times out / crashes more often — the
+      # verifier (the Tier-1 oracle) is the ground truth either way.
+      RepsS[key]++; SumS[key]+=succ
+      # COST axis: clean runs only. A killed run'\''s JSON carries no
+      # total_cost_usd → cost parses as 0; averaging $0 rows into a real arm
+      # produces a misleading "B is cheaper". Excluded rows are counted and
+      # reported (they stay on the success axis above).
+      if (agent_exit == 0) {
+        RepsC[key]++
+        # Store replicate values for the replicate-level A/A fallback.
+        C[key, RepsC[key]] = cost
+        SumC[key]+=cost
+      } else Excluded++
       if (!(task in Tseen)) { Tseen[task]=1; Tasks[++nt]=task }
       if (!(arm  in Aseen)) { Aseen[arm]=1;  Arms[++na]=arm }
     }
@@ -2143,40 +2241,53 @@ cmd_analyze() {
       }
       if (target != "" && !(target in Aseen)) { printf "analyze: --vs arm \"%s\" not found in runs.jsonl\n", target > "/dev/stderr"; exit 1 }
       A = Arms[1]; B = (target != "" ? target : Arms[2])
-      # Per-task means per arm; per-task pair-diff (B − A).
-      n_paired = 0
+      # Pair per METRIC: cost pairs need CLEAN rows in both arms; success pairs
+      # need ANY rows in both arms. RepsS ⊇ RepsC, so npc ≤ nps always — with no
+      # agent errors the two pairings are identical and nothing changes.
+      npc = 0; nps = 0
       n_per_arm_A = 0; n_per_arm_B = 0
       for (i=1;i<=nt;i++) {
         t = Tasks[i]
         kA = t SUBSEP A; kB = t SUBSEP B
-        if (!(kA in Reps) || !(kB in Reps)) continue
-        ma = SumC[kA]/Reps[kA]; mb = SumC[kB]/Reps[kB]
-        sa = SumS[kA]/Reps[kA]; sb = SumS[kB]/Reps[kB]
-        n_paired++
-        DiffC[n_paired] = mb - ma
-        DiffS[n_paired] = sb - sa
-        MA[n_paired] = ma; MB[n_paired] = mb
-        SA[n_paired] = sa; SB[n_paired] = sb
-        TaskOrder[n_paired] = t
-        n_per_arm_A += Reps[kA]; n_per_arm_B += Reps[kB]
+        if ((kA in RepsS) && (kB in RepsS)) {
+          nps++
+          SA[nps] = SumS[kA]/RepsS[kA]; SB[nps] = SumS[kB]/RepsS[kB]
+          DiffS[nps] = SB[nps] - SA[nps]
+          n_per_arm_A += RepsS[kA]; n_per_arm_B += RepsS[kB]
+        }
+        if ((kA in RepsC) && (kB in RepsC)) {
+          npc++
+          MA[npc] = SumC[kA]/RepsC[kA]; MB[npc] = SumC[kB]/RepsC[kB]
+          DiffC[npc] = MB[npc] - MA[npc]
+          TaskOrder[npc] = t
+          PT_SA[npc] = SumS[kA]/RepsS[kA]; PT_SB[npc] = SumS[kB]/RepsS[kB]
+        }
       }
-      if (n_paired == 0) { print "analyze: no tasks have records from both arms" > "/dev/stderr"; exit 1 }
-      cost_mean_diff = mean(DiffC, n_paired)
-      succ_mean_diff = mean(DiffS, n_paired)
-      cost_A_mean = mean(MA, n_paired); cost_B_mean = mean(MB, n_paired)
-      succ_A_rate = mean(SA, n_paired); succ_B_rate = mean(SB, n_paired)
+      if (nps == 0) { print "analyze: no tasks have records from both arms" > "/dev/stderr"; exit 1 }
+      n_paired = npc          # the legacy power/tier unit: CLEAN cost pairs
+      cost_mean_diff = mean(DiffC, npc)
+      succ_mean_diff = mean(DiffS, nps)
+      cost_A_mean = mean(MA, npc); cost_B_mean = mean(MB, npc)
+      succ_A_rate = mean(SA, nps); succ_B_rate = mean(SB, nps)
 
-      # Bootstrap on per-task diffs (the analysis unit is the task — §4).
+      # Bootstrap on per-task diffs (the analysis unit is the task — §4), each
+      # metric over its own pairing.
       srand(seed)
       for (b=1;b<=boots;b++) {
-        sc = 0; ss = 0
-        for (j=1;j<=n_paired;j++) {
-          idx = int(rand() * n_paired) + 1
-          if (idx<1) idx=1; if (idx>n_paired) idx=n_paired
-          sc += DiffC[idx]; ss += DiffS[idx]
+        sc = 0
+        for (j=1;j<=npc;j++) {
+          idx = int(rand() * npc) + 1
+          if (idx<1) idx=1; if (idx>npc) idx=npc
+          sc += DiffC[idx]
         }
-        BC[b] = sc / n_paired
-        BS[b] = ss / n_paired
+        BC[b] = (npc > 0) ? sc / npc : 0
+        ss = 0
+        for (j=1;j<=nps;j++) {
+          idx = int(rand() * nps) + 1
+          if (idx<1) idx=1; if (idx>nps) idx=nps
+          ss += DiffS[idx]
+        }
+        BS[b] = ss / nps
       }
       cost_lo = pct(BC, boots, 0.025); cost_hi = pct(BC, boots, 0.975)
       succ_lo = pct(BS, boots, 0.025); succ_hi = pct(BS, boots, 0.975)
@@ -2198,7 +2309,7 @@ cmd_analyze() {
       reason = ""
       if (ci_degenerate && mode != "aa") {
         verdict = "data degenerate"
-        reason = sprintf("only %d task pair(s) — paired-by-task bootstrap CI is a single point; need ≥2 tasks", n_paired)
+        reason = sprintf("only %d clean task pair(s) for cost (agent-error rows are excluded from cost means) — paired-by-task bootstrap CI is a single point; need ≥2 tasks", n_paired)
       } else if (cost_favorable && succ_non_inferior) {
         verdict = "B wins (cost lower, success non-inferior)"
         if (low_power) reason = sprintf("WIDE CI / LIMITED POWER at N=%d paired task(s) — confirm with more tasks before merging", n_paired)
@@ -2223,8 +2334,8 @@ cmd_analyze() {
       if (mode == "aa") {
         if (n_paired == 1) {
           task1 = Tasks[1]
-          k_a_r = Reps[task1, A] + 0
-          k_b_r = Reps[task1, B] + 0
+          k_a_r = RepsC[task1, A] + 0
+          k_b_r = RepsC[task1, B] + 0
           if (k_a_r < 2 || k_b_r < 2) {
             verdict = "A/A data degenerate"
             reason = sprintf("only %d task × %d/%d replicates — need ≥2 replicates per arm for replicate-level analysis", n_paired, k_a_r, k_b_r)
@@ -2275,6 +2386,7 @@ cmd_analyze() {
       printf "  \"mode\": \"%s\",\n", mode >> out_file
       printf "  \"arms\": [\"%s\", \"%s\"],\n", A, B >> out_file
       printf "  \"tasks_paired\": %d,\n", n_paired >> out_file
+      printf "  \"tasks_paired_success\": %d,\n", nps >> out_file
       printf "  \"n_per_arm\": [%d, %d],\n", n_per_arm_A, n_per_arm_B >> out_file
       printf "  \"excluded_runs\": %d,\n", Excluded+0 >> out_file
       printf "  \"analysis_method\": \"%s\",\n", analysis_method >> out_file
@@ -2297,7 +2409,7 @@ cmd_analyze() {
       printf "  \"per_task\": [\n" >> out_file
       for (j=1;j<=n_paired;j++) {
         printf "    {\"task\":\"%s\",\"A_cost\":%.6f,\"B_cost\":%.6f,\"diff_cost\":%.6f,\"A_succ\":%.4f,\"B_succ\":%.4f}%s\n", \
-          TaskOrder[j], MA[j], MB[j], DiffC[j], SA[j], SB[j], (j<n_paired?",":"") >> out_file
+          TaskOrder[j], MA[j], MB[j], DiffC[j], PT_SA[j], PT_SB[j], (j<n_paired?",":"") >> out_file
       }
       printf "  ],\n" >> out_file
       printf "  \"verdict\": \"%s\"", verdict >> out_file
@@ -2441,6 +2553,7 @@ cmd_report() {
       arms_pair = jpair(blob,"arms"); split(arms_pair, AR, ","); A=AR[1]; B=AR[2]
       gsub(/^[[:space:]]+|[[:space:]]+$|"/,"",A); gsub(/^[[:space:]]+|[[:space:]]+$|"/,"",B)
       tasks = jnum(blob,"tasks_paired"); boots = jnum(blob,"bootstrap_iters")
+      tasks_s = jnum(blob,"tasks_paired_success")
       margin = jnum(blob,"non_inferiority_margin")
       excluded = jnum(blob,"excluded_runs")
       analysis_method = jstr(blob,"analysis_method")
@@ -2469,16 +2582,18 @@ cmd_report() {
       spair = jpair(sb_,"ci95"); split(spair, SI, ","); slo=SI[1]+0; shi=SI[2]+0
 
       printf "\nExperiment report — %s\n", (mode=="aa" ? "A/A (noise floor)" : "A vs B")
-      printf "  Arms: %s%s vs %s%s   ·   tasks paired: %d   ·   bootstrap: %d iters   ·   δ=%.3f\n", \
-        A, (eng_a!="" ? " [" eng_a "]" : ""), B, (eng_b!="" ? " [" eng_b "]" : ""), tasks, boots, margin
+      tp_str = sprintf("%d", tasks)
+      if (tasks_s > tasks) tp_str = sprintf("%d cost / %d success", tasks, tasks_s)
+      printf "  Arms: %s%s vs %s%s   ·   tasks paired: %s   ·   bootstrap: %d iters   ·   δ=%.3f\n", \
+        A, (eng_a!="" ? " [" eng_a "]" : ""), B, (eng_b!="" ? " [" eng_b "]" : ""), tp_str, boots, margin
       if (analysis_method == "replicate-level") {
         printf "  Analysis: replicate-level bootstrap (N=1 task; bootstrap on within-task replicates per arm)\n"
       } else if (low_power) {
         printf "  Analysis: paired-by-task, LIMITED POWER — N=%d paired task(s), CI is real but wide; confirm with more tasks if the verdict matters\n", tasks
       }
       if (excluded > 0) {
-        total_intended = n_a + n_b + excluded
-        printf "  Excluded %d of %d runs (agent_exit ≠ 0 — timeout or error). Cost/success means use clean runs only.\n", excluded, total_intended
+        printf "  Excluded %d run(s) from COST means (agent_exit ≠ 0 — timeout or error). They still count on the\n", excluded
+        printf "  success axis with the verifier'\''s verdict — a crashing arm cannot look non-inferior by crashing.\n"
       }
       printf "\n"
       diff_label = sprintf("%s − %s", B, A)
@@ -3380,7 +3495,9 @@ Usage: header-experiment <command> ...
                     or generic: --arm A:model --arm B:model --task P --verify CMD
   define <id>     low-level placeholder spec (template to edit by hand)
   validate <id>   lint the spec
-  run <id>        execute the matrix (--aa for noise-floor check, --yes to skip cost gate)
+  run <id>        execute the matrix (--aa for noise-floor check, --yes to skip
+                    cost gate, --jobs N to run (task,rep) blocks in parallel —
+                    arms stay sequential within a block so pairs interleave)
   analyze <id>    write result.json (paired bootstrap CI, §6 of design)
   report <id>     pretty scorecard
   merge <id>      apply arm B's override files to the repo (after a B-wins verdict)

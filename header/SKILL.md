@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.23.0
+version: 0.24.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -786,7 +786,7 @@ header-experiment mine <id>                              # validate + write a ru
 header-experiment mine <id> --from <model> --to <model>  # set the A/B arms (default: opus-4-8 vs sonnet-4-6)
 ```
 
-What it does: scans the last `--limit` commits for fixes touching source + tests (≤ `--max-files`), then **validates** each by checking out the parent, re-applying the fix's test files, and running the suite — keeping only those that **fail** (a real fix exists). It writes a complete experiment whose tasks each pin the fix's parent `commit` and carry `apply_from`/`apply_paths`/`lock_paths`; at run time the runner applies the tests before the agent and **re-locks them before grading**, so "make the test pass" can't be won by editing the test (the reward-hacking defense). The default arms are a **model swap** — this is the keystone for "model-routing experiments at scale," the moat's first named learning: *is the cheaper model good enough on this repo's own real fixes?*
+What it does: scans the last `--limit` commits for fixes touching source + tests (≤ `--max-files`), then **validates** each by checking out the parent, re-applying the fix's test files, and running the suite — keeping only those that **fail** (a real fix exists). Validation **narrows auto-detected runners** (`pytest -q`, `go test ./...`) to each candidate's re-applied test paths — much faster on a big suite, and more precise (an unrelated broken test can't masquerade as a real fix); `--full-validate` forces the whole suite, and the mined spec's *runtime* oracle is always the full suite either way. It writes a complete experiment whose tasks each pin the fix's parent `commit` and carry `apply_from`/`apply_paths`/`lock_paths`; at run time the runner applies the tests before the agent and **re-locks them before grading**, so "make the test pass" can't be won by editing the test (the reward-hacking defense). The default arms are a **model swap** — this is the keystone for "model-routing experiments at scale," the moat's first named learning: *is the cheaper model good enough on this repo's own real fixes?*
 
 **This is the recommended way to start a model-swap experiment** — far less friction than authoring tasks. Reach for `new --kind model-swap` only when you want to test on a *specific* task you have in mind rather than mined history.
 
@@ -860,15 +860,17 @@ After the scaffold prints, walk the user through the four-step loop:
 ```bash
 header-experiment validate <id>                      # lint
 header-experiment run <id> --aa                      # noise-floor check FIRST (§3) — must be clean
-header-experiment run <id>                           # the A/B
+header-experiment run <id>                           # the A/B (--jobs N parallelizes (task,rep) blocks;
+                                                     #  arms stay sequential per pair, so pairing holds)
 header-experiment analyze <id> && header-experiment report <id>
 ```
 
-Surface these four points when interpreting the report:
+Surface these points when interpreting the report:
 - The CI on **B − A cost** (per-task paired bootstrap, 95%) is the effect — the diff itself is meaningless without it.
 - **Decision rule** (§6.5): merge B iff the cost CI's upper bound is below 0 AND success-rate diff's lower CI bound is ≥ −δ. Anything else is **"no proven win"**, not "B wins."
 - **Conservative savings rate** (= `max(0, -upper_CI(diff_cost))`) is the figure that survives an audit — never quote the optimistic tail.
 - A **noisy A/A** (CI excludes 0) means the harness is biased — *fix the harness before trusting any A/B*. This is the most common silent failure mode.
+- **Agent-error rows (timeout / crash) are excluded from cost means but count on the success axis** with the verifier's verdict — a flaky arm can't look non-inferior by crashing its way out of the sample. The report shows both pairings ("N cost / M success") when they differ.
 
 The runner spends real tokens — the cost gate confirms before launching. Don't auto-`--yes` for the user. Even with `--yes`, the runner still prints the full cost/power disclosure (it skips the confirmation *prompt*, not the disclosure), and if a prior `--aa` result exists it surfaces the **measured noise floor** at the A/B gate — so an effect smaller than the harness's own run-to-run noise is visible *before* the spend, not discovered at `analyze`.
 

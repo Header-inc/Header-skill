@@ -3,6 +3,43 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.24.0 — Experiments: faster loop, fairer gate
+
+Wall-clock and statistical fairness fixes so the experiment loop actually gets
+run — and can be trusted when it is.
+
+**`run --jobs N` — wave-parallel blocks.** The parallel unit is a
+(task, replicate) **block**: arms stay sequential inside it, so each pair's A/B
+remains temporally adjacent (§6.2's interleaving survives parallelism). Blocks
+run in waves of N (Bash 3.2 portable — no `wait -n`), each appending to its own
+part file, concatenated at the end so concurrent writers can never interleave
+inside a JSON line. `setup_scope: run` forces `--jobs 1` (the provisioned
+`.run-env` is shared state). Default remains sequential — behavior unchanged
+unless you ask.
+
+**mine: targeted-first validation.** Validation previously ran the WHOLE suite
+once per candidate — the dominant cost of mining a big repo. When the verify
+command is an auto-detected runner we can scope (`pytest -q`, `go test ./...`),
+validation now runs **only the candidate's re-applied test paths**: ~10x faster
+on large suites and more precise — the FAIL_TO_PASS question is about exactly
+those tests, so an unrelated broken test can no longer masquerade as a real
+fix. `--full-validate` forces the old behavior; user-supplied verify commands
+are never narrowed; the mined spec's *runtime* oracle stays the full suite.
+
+**analyze: success-axis fairness (the gate-integrity fix).** Agent-error rows
+(timeout, crash) were dropped from the analysis entirely — which biased the
+non-inferiority gate toward "B holds" precisely when B was flaky: its crashes
+vanished from its success rate. Now each metric pairs over its own rows: **cost
+uses clean runs only** (a killed run's $0 would fake "cheaper") while **success
+counts every run** with the verifier's recorded verdict — a crashing arm can't
+look non-inferior by crashing its way out of the sample. `result.json` gains
+`tasks_paired_success` alongside the (clean-cost) `tasks_paired`; the report
+shows both pairings when they differ and re-words the exclusion note. With no
+agent errors the two pairings are identical and nothing changes.
+
++28 tests (fairness verdict flip, parallel completeness/cleanup/serialization,
+pytest-stub narrowing + `--full-validate`). VERSION → 0.24.0.
+
 ## 0.23.0 — Proven-changes library: the client side of the moat
 
 The cross-customer proven-changes library (design §7.3, "the moat") gets its

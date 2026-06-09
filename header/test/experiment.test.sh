@@ -578,12 +578,15 @@ assert_contains "$ex_result" '"A_mean": 5.250000' \
 assert_contains "$ex_result" '"B_mean": 4.250000' \
   "B_mean computed from clean rows only (excluded $0 error row)"
 
-# 11) Report banner surfaces the exclusions
+# 11) Report banner surfaces the exclusions (cost-only since 0.24.0 — the rows
+# stay on the success axis with the verifier's verdict)
 ex_report_out="$(EXP report ex-timeout 2>&1)"
-assert_contains "$ex_report_out" "Excluded 2 of 6 runs" \
-  "report banner names the excluded count"
+assert_contains "$ex_report_out" "Excluded 2 run(s) from COST means" \
+  "report banner names the cost-only exclusion count"
 assert_contains "$ex_report_out" "agent_exit ≠ 0" \
   "report banner names the cause (agent_exit ≠ 0)"
+assert_contains "$ex_report_out" "success axis" \
+  "report banner says excluded rows still count on the success axis"
 
 # 12) Report suppresses degenerate CI when N=1 paired task (paired-by-task)
 # Bootstrap on 1 task → CI collapses to a point. Don't print fake precision.
@@ -1373,5 +1376,151 @@ assert_exit 0 "$rc" "merge on an engine-swap with --yes exits 0"
 em_applied="$(cat "$sb/em-repo/.claude/settings.json")"
 assert_contains "$em_applied" '"model": "claude-opus-4-8"'  "merge --yes wrote the winning model into settings.json"
 assert_contains "$em_applied" '"effortLevel": "high"'        "merge --yes wrote the winning effortLevel into settings.json"
+
+# ════════════════════════════════════════════════════════════════════
+# 0.24.0 — experiments speed + fairness: success-axis inclusion of agent-error
+# rows, run --jobs (wave-parallel blocks), mine targeted-first validation.
+# ════════════════════════════════════════════════════════════════════
+
+# ── success-axis fairness: a crashing arm cannot look non-inferior ──
+# 3 tasks. t1/t2: clean, B cheaper, both succeed. t3: A clean+passes; B's only
+# run is an agent error (timeout) whose verifier failed. OLD behavior dropped
+# t3 entirely → "B wins". NEW: t3 counts on the success axis (B rate 2/3) →
+# success regresses beyond δ → "no proven win". Cost pairs stay clean-only.
+EXP new fair-1 --arm A: --arm B: --task "x" --verify true --replicates 1 --repo "$nw_repo" >/dev/null 2>&1
+cat > "$(exp_dir_for fair-1)/runs.jsonl" <<'EOF'
+{"task":"t1","arm":"A","rep":0,"cost_usd":0.50,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t1","arm":"B","rep":0,"cost_usd":0.30,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t2","arm":"A","rep":0,"cost_usd":0.60,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t2","arm":"B","rep":0,"cost_usd":0.40,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t3","arm":"A","rep":0,"cost_usd":0.55,"success":true,"agent_exit":0,"verify_exit":0}
+{"task":"t3","arm":"B","rep":0,"cost_usd":0,"success":false,"agent_exit":124,"verify_exit":1}
+EOF
+EXP analyze fair-1 --seed 7 --bootstrap 400 >/dev/null 2>&1
+fair_result="$(cat "$(exp_dir_for fair-1)/result.json")"
+assert_contains "$fair_result" '"tasks_paired": 2'          "cost pairing uses clean rows only (t3 dropped from cost)"
+assert_contains "$fair_result" '"tasks_paired_success": 3'  "success pairing includes the agent-error task"
+assert_contains "$fair_result" '"excluded_runs": 1'         "the error row is counted as excluded from cost"
+assert_contains "$fair_result" '"verdict": "no proven win"' "B's crash-failure blocks the win (was 'B wins' when dropped)"
+assert_contains "$fair_result" "success regressed"          "the reason names the success regression"
+fair_report="$(EXP report fair-1 2>&1)"
+assert_contains "$fair_report" "2 cost / 3 success"         "report shows both pairings when they differ"
+
+# ── run --jobs: wave-parallel blocks, complete results, clean parts ──
+mkdir -p "$(exp_dir_for par-1)/logs" "$(exp_dir_for par-1)/tasks"
+printf 'do it\n' > "$(exp_dir_for par-1)/tasks/t.md"
+cat > "$(exp_dir_for par-1)/spec" <<EOF
+id: par-1
+description: parallel blocks
+repo: $git_repo
+commit: HEAD
+replicates: 2
+non_inferiority_margin: 0.02
+
+[arm:A]
+model: ma
+overrides_dir:
+
+[arm:B]
+model: mb
+overrides_dir:
+
+[task:p1]
+prompt: tasks/t.md
+verify: true
+timeout_s: 60
+
+[task:p2]
+prompt: tasks/t.md
+verify: true
+timeout_s: 60
+EOF
+EXP run par-1 --yes --jobs 3 --adapter "$sb/adapter.sh" >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "run --jobs 3 exits 0"
+par_runs="$(exp_dir_for par-1)/runs.jsonl"
+assert_eq "8" "$(wc -l < "$par_runs" | tr -d ' ')" \
+  "--jobs produces the complete matrix (2 tasks × 2 arms × 2 reps = 8 rows)"
+assert_eq "0" "$(find "$(exp_dir_for par-1)" -name '.runs-part.*' | wc -l | tr -d ' ')" \
+  "part files are cleaned up after concatenation"
+# every (task,arm,rep) combination is present exactly once
+for t in p1 p2; do for a in A B; do for r in 0 1; do
+  assert_eq "1" "$(grep -c "\"task\":\"$t\",\"arm\":\"$a\",\"rep\":$r," "$par_runs")" \
+    "parallel run has exactly one row for ($t,$a,rep$r)"
+done; done; done
+EXP analyze par-1 --seed 7 --bootstrap 200 >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "analyze works on a parallel run's output"
+# invalid --jobs is rejected
+rc=0; EXP run par-1 --yes --jobs nope --adapter "$sb/adapter.sh" >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "run --jobs rejects a non-integer"
+
+# ── --jobs forced to 1 under setup_scope=run (shared provisioned env) ──
+mkdir -p "$(exp_dir_for par-ser)/logs" "$(exp_dir_for par-ser)/tasks"
+printf 'x\n' > "$(exp_dir_for par-ser)/tasks/t.md"
+cat > "$(exp_dir_for par-ser)/spec" <<EOF
+id: par-ser
+repo: $git_repo
+commit: HEAD
+replicates: 1
+non_inferiority_margin: 0.02
+setup: echo EXP_DB=x
+teardown: true
+setup_scope: run
+
+[arm:A]
+model: ma
+overrides_dir:
+
+[arm:B]
+model: mb
+overrides_dir:
+
+[task:t1]
+prompt: tasks/t.md
+verify: true
+timeout_s: 60
+EOF
+ser_out="$(EXP run par-ser --yes --jobs 4 --adapter "$sb/adapter.sh" 2>&1)"; rc=$?
+assert_exit 0 "$rc" "setup_scope=run + --jobs runs to completion"
+assert_contains "$ser_out" "forcing --jobs 1" \
+  "setup_scope=run forces serial execution (provisioned env is shared state)"
+
+# ── mine targeted-first validation (pytest narrowing via a stub) ──
+# A pytest-shaped repo whose history holds a FAIL_TO_PASS fix; the stub pytest
+# logs its argv so we can see WHICH scope the validation ran.
+pyt_repo="$sb/pyt-repo"; mkdir -p "$pyt_repo/tests" "$sb/stubbin"
+( cd "$pyt_repo" && git init -q && git config user.email t@t.t && git config user.name t
+  printf '[project]\nname="x"\n' > pyproject.toml
+  printf 'def add(a,b): return a+b\n' > impl.py
+  printf 'from impl import add\n' > tests/test_x.py
+  git add -A && git commit -qm init
+  printf 'def add(a,b): return a+b\ndef sub(a,b): return a-b\n' > impl.py
+  printf 'from impl import add, sub\n' > tests/test_x.py
+  git add -A && git commit -qm "feat: sub + test" )
+PYLOG="$sb/pytest-args.log"; : > "$PYLOG"
+cat > "$sb/stubbin/pytest" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$PYLOG"
+exit 1
+EOF
+chmod +x "$sb/stubbin/pytest"
+PATH="$sb/stubbin:$PATH" HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 \
+  "$HE" mine pyt-t --repo "$pyt_repo" --verify "pytest -q" --max-tasks 1 --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "mine with an auto-detectable runner validates successfully"
+assert_contains "$(cat "$PYLOG")" "tests/test_x.py" \
+  "validation narrowed pytest to the candidate's re-applied test paths"
+: > "$PYLOG"
+PATH="$sb/stubbin:$PATH" HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 \
+  "$HE" mine pyt-f --repo "$pyt_repo" --verify "pytest -q" --max-tasks 1 --full-validate --yes >/dev/null 2>&1
+assert_not_contains "$(cat "$PYLOG")" "tests/test_x.py" \
+  "--full-validate runs the whole suite (no per-candidate narrowing)"
+assert_contains "$(cat "$PYLOG")" "-q" \
+  "--full-validate still ran the (full) suite"
+# a custom verify command is never narrowed (we can't scope what we don't know)
+mine_custom_out="$(EXP mine pyt-c --repo "$mine_repo" --verify "$VC" --max-tasks 1 --yes 2>&1)"
+assert_contains "$mine_custom_out" "tests fail at parent" \
+  "a user-supplied verify still validates via the full command"
+# the spec's RUNTIME verify stays the FULL suite — narrowing is validation-only
+assert_contains "$(cat "$(exp_dir_for pyt-t)/spec")" "verify: pytest -q" \
+  "the mined spec's runtime oracle remains the full suite (narrowing is validation-only)"
 
 t_done
