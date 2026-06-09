@@ -3,6 +3,30 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.25.0 — deps scan scoped to detected ecosystems (no more phantom gates)
+
+`header-audit deps` emitted its `TOOL` and `GATE` rows **unconditionally**: a
+pure-Go (or Rust, or bash) repo still got `TOOL npm`, `TOOL pip`,
+`GATE npm absent`, and `GATE pip absent` every run — and SKILL.md's rule
+("`GATE … absent` → recommend a cooldown gate") had no ecosystem cross-check,
+so the audit was prompted to recommend an `.npmrc` supply-chain gate to repos
+that don't install through npm at all. Whether the model caught the mismatch
+was up to its judgment that run; the deterministic scanner exists precisely
+to not depend on that. (Dogfood case: this repo — plain bash — was advised to
+add npm/pip cooldowns by its own audit.)
+
+Now, the same contract the rails scan already uses:
+- `TOOL` rows are emitted **only for detected ecosystems**; `GATE` rows say
+  **`n/a`** for an ecosystem the repo doesn't have ("checked, doesn't apply"
+  — distinguishable from "didn't check"), and SKILL.md skips `n/a` rows.
+- npm detection also glances **one directory level deep**
+  (`frontend/package.json` etc.) — the gate check already honored a subdir
+  `.npmrc`, so detection must not be stricter than the gate, or a monorepo
+  would lose its legitimate `absent` finding.
+
++9 audit tests (go-only repo gets `n/a` and no TOOL rows; the monorepo keeps
+its real `absent` finding; npm/python repos unchanged). VERSION → 0.25.0.
+
 ## 0.24.4 — fix: 0.24.3's path-fallback test was unportable to macOS
 
 Test-only. The new ledger test asserted the no-remote fallback key by

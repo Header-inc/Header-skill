@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.24.4
+version: 0.25.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -592,13 +592,13 @@ Curate the hits — don't surface them blindly. When `MODEL` is known, cross-ref
 
 Output lines:
 
-- `ECOSYSTEM <name> <manifest>` — detected ecosystems.
-- `TOOL <name> <version|-> <ok|too-old|absent>` — package-manager version vs. the minimum that honors a cooldown gate (npm ≥ 11.10, pip ≥ 26.1).
-- `GATE <name> <present|absent> <path|->` — whether an install-cooldown / `min-release-age` configuration is in place.
+- `ECOSYSTEM <name> <manifest>` — detected ecosystems (npm is also detected one directory level deep, e.g. `frontend/package.json` in a monorepo).
+- `TOOL <name> <version|-> <ok|too-old|absent>` — package-manager version vs. the minimum that honors a cooldown gate (npm ≥ 11.10, pip ≥ 26.1). Emitted only for detected ecosystems.
+- `GATE <name> <present|absent|n/a> <path|->` — whether an install-cooldown / `min-release-age` configuration is in place. **`n/a` means the repo doesn't use that ecosystem — skip the row, exactly like the rails scan's `n/a`**; never recommend an npm/pip gate to a repo that installs through neither.
 
 Surface:
 
-- **Supply-chain cooldown.** `GATE npm absent` or `GATE pip absent` → recommend a `min-release-age` / `--uploaded-prior-to` gate so freshly-compromised releases (the chalk/debug, eslint-config-prettier class) are blocked until they're caught. This matters most where the install runs with secrets (CI runners). Get the exact snippet:
+- **Supply-chain cooldown.** `GATE npm absent` or `GATE pip absent` (never `n/a`) → recommend a `min-release-age` / `--uploaded-prior-to` gate so freshly-compromised releases (the chalk/debug, eslint-config-prettier class) are blocked until they're caught. This matters most where the install runs with secrets (CI runners). Get the exact snippet:
 
   ```bash
   <AUDIT> gate npm 7      # prints .npmrc content (min-release-age=7)

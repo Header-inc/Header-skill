@@ -27,10 +27,14 @@
 #
 #   header-audit deps [--repo DIR]
 #       Dependency / supply-chain posture. Detects ecosystems, tool versions, and
-#       whether an install-cooldown gate is in place. Output lines:
+#       whether an install-cooldown gate is in place. TOOL and GATE rows are
+#       scoped to ecosystems the repo actually has (npm also detected one dir
+#       level deep, for monorepos); an undetected ecosystem gets GATE … n/a —
+#       "checked, doesn't apply", same contract as the rails scan — instead of
+#       a spurious `absent` that prompts an irrelevant recommendation. Output:
 #         ECOSYSTEM <name>  <manifest>
-#         TOOL      <name>  <version|->  <ok|too-old|absent>
-#         GATE      <name>  <present|absent>  <path|->
+#         TOOL      <name>  <version|->  <ok|too-old|absent>   (detected only)
+#         GATE      <name>  <present|absent|n/a>  <path|->
 #
 #   header-audit cost [--repo DIR] [--all-projects] [--harness NAME] [--input F] [--since T]
 #       Cost-awareness. Wraps `header-cost report --json` over Claude Code
@@ -616,47 +620,76 @@ SIG
     ;;
 
   deps)
-    # Ecosystems.
-    [ -f "$REPO/package.json" ] && printf 'ECOSYSTEM\tnpm\t%s\n' "$REPO/package.json"
+    # Ecosystems. npm detection also glances one directory level deep
+    # (frontend/, web/, …) — the gate check below already honors a subdir
+    # .npmrc, so a monorepo whose package.json lives in a subdirectory must not
+    # lose its npm finding to the scoping below.
+    has_npm=""; has_python=""
+    if [ -f "$REPO/package.json" ]; then
+      has_npm="$REPO/package.json"
+    else
+      has_npm="$(find "$REPO" -mindepth 2 -maxdepth 2 -name package.json \
+        -not -path '*/node_modules/*' -print 2>/dev/null | head -1)"
+    fi
+    [ -n "$has_npm" ] && printf 'ECOSYSTEM\tnpm\t%s\n' "$has_npm"
     for p in requirements.txt pyproject.toml setup.cfg setup.py Pipfile; do
-      [ -f "$REPO/$p" ] && { printf 'ECOSYSTEM\tpython\t%s\n' "$REPO/$p"; break; }
+      [ -f "$REPO/$p" ] && { has_python="$REPO/$p"; printf 'ECOSYSTEM\tpython\t%s\n' "$REPO/$p"; break; }
     done
     [ -f "$REPO/go.mod" ]     && printf 'ECOSYSTEM\tgo\t%s\n' "$REPO/go.mod"
     [ -f "$REPO/Cargo.toml" ] && printf 'ECOSYSTEM\tcargo\t%s\n' "$REPO/Cargo.toml"
     [ -f "$REPO/Gemfile" ]    && printf 'ECOSYSTEM\tbundler\t%s\n' "$REPO/Gemfile"
 
-    # Tooling versions vs the minimum that honors a cooldown gate.
-    if command -v npm >/dev/null 2>&1; then
-      nv="$(npm --version 2>/dev/null)"
-      st="ok"; [ "$(ver_ge "$nv" 11.10)" = "ge" ] || st="too-old"
-      printf 'TOOL\tnpm\t%s\t%s\n' "${nv:--}" "$st"
-    else
-      printf 'TOOL\tnpm\t-\tabsent\n'
+    # Tooling versions + cooldown gates — only for ecosystems THIS repo has.
+    # A GATE/TOOL row for a package manager the project doesn't use is noise
+    # the presentation must curate away (and the model might not, every run):
+    # recommending an .npmrc cooldown to a pure-Go repo costs trust. Undetected
+    # ecosystems get an explicit `GATE <name> n/a` instead — same contract as
+    # the rails scan's n/a, "checked, doesn't apply" — which the SKILL.md flow
+    # skips. TOOL rows are simply omitted (the machine's npm version is
+    # irrelevant when nothing here installs through it).
+    if [ -n "$has_npm" ]; then
+      if command -v npm >/dev/null 2>&1; then
+        nv="$(npm --version 2>/dev/null)"
+        st="ok"; [ "$(ver_ge "$nv" 11.10)" = "ge" ] || st="too-old"
+        printf 'TOOL\tnpm\t%s\t%s\n' "${nv:--}" "$st"
+      else
+        printf 'TOOL\tnpm\t-\tabsent\n'
+      fi
     fi
-    pv=""
-    if command -v pip >/dev/null 2>&1; then pv="$(pip --version 2>/dev/null | awk '{print $2}')"
-    elif command -v pip3 >/dev/null 2>&1; then pv="$(pip3 --version 2>/dev/null | awk '{print $2}')"
-    elif command -v python3 >/dev/null 2>&1; then pv="$(python3 -m pip --version 2>/dev/null | awk '{print $2}')"; fi
-    if [ -n "$pv" ]; then
-      st="ok"; [ "$(ver_ge "$pv" 26.1)" = "ge" ] || st="too-old"
-      printf 'TOOL\tpip\t%s\t%s\n' "$pv" "$st"
-    else
-      printf 'TOOL\tpip\t-\tabsent\n'
+    if [ -n "$has_python" ]; then
+      pv=""
+      if command -v pip >/dev/null 2>&1; then pv="$(pip --version 2>/dev/null | awk '{print $2}')"
+      elif command -v pip3 >/dev/null 2>&1; then pv="$(pip3 --version 2>/dev/null | awk '{print $2}')"
+      elif command -v python3 >/dev/null 2>&1; then pv="$(python3 -m pip --version 2>/dev/null | awk '{print $2}')"; fi
+      if [ -n "$pv" ]; then
+        st="ok"; [ "$(ver_ge "$pv" 26.1)" = "ge" ] || st="too-old"
+        printf 'TOOL\tpip\t%s\t%s\n' "$pv" "$st"
+      else
+        printf 'TOOL\tpip\t-\tabsent\n'
+      fi
     fi
 
     # Cooldown gate present?
-    npmrc=""
-    for r in "$REPO/.npmrc" "$REPO/frontend/.npmrc" "$HOME/.npmrc"; do
-      [ -f "$r" ] && grep -qiE '^[[:space:]]*min-release-age[[:space:]]*=' "$r" 2>/dev/null && { npmrc="$r"; break; }
-    done
-    [ -n "$npmrc" ] && printf 'GATE\tnpm\tpresent\t%s\n' "$npmrc" || printf 'GATE\tnpm\tabsent\t-\n'
+    if [ -n "$has_npm" ]; then
+      npmrc=""
+      for r in "$REPO/.npmrc" "$REPO/frontend/.npmrc" "$HOME/.npmrc"; do
+        [ -f "$r" ] && grep -qiE '^[[:space:]]*min-release-age[[:space:]]*=' "$r" 2>/dev/null && { npmrc="$r"; break; }
+      done
+      [ -n "$npmrc" ] && printf 'GATE\tnpm\tpresent\t%s\n' "$npmrc" || printf 'GATE\tnpm\tabsent\t-\n'
+    else
+      printf 'GATE\tnpm\tn/a\t-\n'
+    fi
 
-    pipgate=""
-    for c in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml \
-             "$REPO/pip.conf" "$REPO/pip.ini" "$HOME/.config/pip/pip.conf"; do
-      [ -f "$c" ] && grep -qiE 'uploaded-prior-to' "$c" 2>/dev/null && { pipgate="$c"; break; }
-    done
-    [ -n "$pipgate" ] && printf 'GATE\tpip\tpresent\t%s\n' "$pipgate" || printf 'GATE\tpip\tabsent\t-\n'
+    if [ -n "$has_python" ]; then
+      pipgate=""
+      for c in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml \
+               "$REPO/pip.conf" "$REPO/pip.ini" "$HOME/.config/pip/pip.conf"; do
+        [ -f "$c" ] && grep -qiE 'uploaded-prior-to' "$c" 2>/dev/null && { pipgate="$c"; break; }
+      done
+      [ -n "$pipgate" ] && printf 'GATE\tpip\tpresent\t%s\n' "$pipgate" || printf 'GATE\tpip\tabsent\t-\n'
+    else
+      printf 'GATE\tpip\tn/a\t-\n'
+    fi
     ;;
 
   cost)

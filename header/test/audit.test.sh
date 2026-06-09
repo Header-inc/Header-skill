@@ -59,6 +59,30 @@ HOME="$sb" "$AU" gate npm 7 > "$repo/.npmrc"
 assert_contains "$(HOME="$sb" "$AU" deps --repo "$repo")" "GATE	npm	present" \
   "an .npmrc with min-release-age → gate present"
 
+# ── deps: TOOL/GATE rows are scoped to DETECTED ecosystems (0.25.0) ──
+# A go-only repo must not be prompted toward an npm/pip cooldown it can't use:
+# undetected ecosystems get an explicit n/a (skipped by the flow, like rails).
+goonly="$sb/goonly"; mkdir -p "$goonly"
+printf 'module x\n' > "$goonly/go.mod"
+DG="$(HOME="$sb" "$AU" deps --repo "$goonly")"
+assert_contains "$DG" "ECOSYSTEM	go	$goonly/go.mod" "go-only repo detects the go ecosystem"
+assert_contains "$DG" "GATE	npm	n/a" "go-only repo: npm gate is n/a, not a finding"
+assert_contains "$DG" "GATE	pip	n/a" "go-only repo: pip gate is n/a, not a finding"
+assert_not_contains "$DG" "GATE	npm	absent" "no npm gate-recommendation trigger in a go-only repo"
+assert_not_contains "$DG" "GATE	pip	absent" "no pip gate-recommendation trigger in a go-only repo"
+assert_not_contains "$DG" "TOOL	npm" "no npm TOOL row when the repo doesn't install through npm"
+assert_not_contains "$DG" "TOOL	pip" "no pip TOOL row when the repo doesn't install through pip"
+
+# monorepo: a subdir package.json still counts as npm (the gate check already
+# honors frontend/.npmrc — detection must not be stricter than the gate).
+mono="$sb/mono"; mkdir -p "$mono/frontend"
+printf '{"name":"f"}\n' > "$mono/frontend/package.json"
+DM="$(HOME="$sb" "$AU" deps --repo "$mono")"
+assert_contains "$DM" "ECOSYSTEM	npm	$mono/frontend/package.json" \
+  "a one-level-deep package.json is detected (monorepo)"
+assert_contains "$DM" "GATE	npm	absent" \
+  "the monorepo keeps its REAL absent finding (n/a only when npm is truly unused)"
+
 # ── gate snippets ─────────────────────────────────────────────
 gnpm="$(HOME="$sb" "$AU" gate npm 14)"
 assert_contains "$gnpm" "min-release-age=14" "gate npm parameterizes the day count"
