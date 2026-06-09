@@ -130,14 +130,23 @@ assert_not_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" "MODEL-
 
 # ── detection: no pinned model → fall back to the most recent transcript model ──
 # (so plain /header offers the upgrade even when the user rides the default alias)
-sb_tx="$(make_sandbox)"; rtx="$sb_tx/r"; mkdir -p "$rtx" "$sb_tx/.claude/projects"
+# Real Claude Code nests transcripts one level per project:
+# ~/.claude/projects/<project-key>/<session>.jsonl — the fixture MUST be nested,
+# or the test passes against a layout that doesn't exist (the 0.21.1 regression).
+sb_tx="$(make_sandbox)"; rtx="$sb_tx/r"; mkdir -p "$rtx" "$sb_tx/.claude/projects/-home-u-proj"
 printf '# x\n' > "$rtx/CLAUDE.md"   # NO .claude/settings.json → unpinned
-printf '{"type":"assistant","message":{"model":"claude-opus-4-7","usage":{}}}\n' > "$sb_tx/.claude/projects/s.jsonl"
+printf '{"type":"assistant","message":{"model":"claude-opus-4-7","usage":{}}}\n' > "$sb_tx/.claude/projects/-home-u-proj/s.jsonl"
 Htx="$(HOME="$sb_tx" "$AU" harness --repo "$rtx")"
 assert_contains "$Htx" $'MODEL\tclaude-opus-4-7' \
-  "MODEL is detected from the most recent transcript when settings pin nothing"
+  "MODEL is detected from the most recent NESTED transcript when settings pin nothing"
 assert_contains "$Htx" $'MODEL-UPGRADE\tclaude-opus-4-7\tclaude-opus-4-8' \
   "MODEL-UPGRADE fires off the transcript-detected model (plain /header offers it unpinned)"
+# Newest-wins across layouts: an older flat-layout file must not shadow the
+# newer nested one (and flat stays tolerated for back-compat).
+printf '{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{}}}\n' > "$sb_tx/.claude/projects/old-flat.jsonl"
+touch -t 202001010000 "$sb_tx/.claude/projects/old-flat.jsonl"
+assert_contains "$(HOME="$sb_tx" "$AU" harness --repo "$rtx")" $'MODEL\tclaude-opus-4-7' \
+  "the newest transcript wins across nested + flat layouts"
 
 # ── @import following + stale references ──────────────────────
 sb_imp="$(make_sandbox)"; rimp="$sb_imp/r"; mkdir -p "$rimp/docs" "$rimp/scripts"

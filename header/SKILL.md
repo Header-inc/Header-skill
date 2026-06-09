@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.21.0
+version: 0.21.1
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header opus-4.8' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Opus 4.8 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"

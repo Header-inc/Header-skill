@@ -1410,10 +1410,13 @@ EOF
 # background haiku) in the user's Claude Code transcripts. This is the reliable
 # "what are you actually running" signal: settings often pin nothing (the user
 # rides the default alias), but every session records the model that really ran.
+# Transcripts are NESTED one level per project (~/.claude/projects/<project-key>/
+# <session>.jsonl) — a flat glob matches nothing and detection silently never
+# fires. Glob both layouts; newest mtime across them wins.
 _recent_transcript_model() {
   local tdir="$HOME/.claude/projects" newest
   [ -d "$tdir" ] || return 0
-  newest="$(ls -t "$tdir"/*.jsonl 2>/dev/null | head -1)"
+  newest="$(ls -t "$tdir"/*/*.jsonl "$tdir"/*.jsonl 2>/dev/null | head -1)"
   [ -f "$newest" ] || return 0
   grep -oE '"model":"claude-(opus|sonnet)-[0-9][^"]*"' "$newest" 2>/dev/null \
     | tail -1 | sed 's/.*"model":"//; s/"$//'

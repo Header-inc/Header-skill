@@ -330,10 +330,13 @@ _model_upgrade() {
 # background haiku) in the user's Claude Code transcripts. Lets MODEL / staleness
 # / upgrade detection work for users who pin no `model` in settings (they ride the
 # default alias) — what actually ran. Mirrors header-experiment's detector.
+# Transcripts are NESTED one level per project (~/.claude/projects/<project-key>/
+# <session>.jsonl) — a flat glob matches nothing and detection silently never
+# fires. Glob both layouts; newest mtime across them wins.
 _recent_transcript_model() {
   tdir="$HOME/.claude/projects"
   [ -d "$tdir" ] || return 0
-  newest="$(ls -t "$tdir"/*.jsonl 2>/dev/null | head -1)"
+  newest="$(ls -t "$tdir"/*/*.jsonl "$tdir"/*.jsonl 2>/dev/null | head -1)"
   [ -f "$newest" ] || return 0
   grep -oE '"model":"claude-(opus|sonnet)-[0-9][^"]*"' "$newest" 2>/dev/null \
     | tail -1 | sed 's/.*"model":"//; s/"$//'

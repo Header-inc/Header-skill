@@ -1281,9 +1281,11 @@ EXP mine adopt-bad --adopt --effort bogus --from x --from-effort high --repo "$m
 assert_exit 1 "$rc" "mine --adopt rejects an invalid --effort level"
 
 # detection: no --from + no id → defaults the id AND reads the current model from
-# the most recent transcript (a sandboxed HOME so it's deterministic).
-mkdir -p "$sb/fakehome/.claude/projects"
-printf '{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{}}}\n' > "$sb/fakehome/.claude/projects/sess.jsonl"
+# the most recent transcript (a sandboxed HOME so it's deterministic). The fixture
+# is NESTED (~/.claude/projects/<project-key>/<session>.jsonl) like real Claude
+# Code — a flat fixture masked the 0.21.1 detection regression.
+mkdir -p "$sb/fakehome/.claude/projects/-home-u-proj"
+printf '{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{}}}\n' > "$sb/fakehome/.claude/projects/-home-u-proj/sess.jsonl"
 env -u ANTHROPIC_MODEL -u CLAUDE_CODE_EFFORT_LEVEL HOME="$sb/fakehome" HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 \
   "$HE" mine --adopt --repo "$mine_repo" --verify "$VC" --from-effort high --to claude-opus-4-8 --effort high --yes >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "mine --adopt with no id + no --from: defaults the id and detects the model"

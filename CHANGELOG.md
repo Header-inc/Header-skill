@@ -3,6 +3,31 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.21.1 — fix: transcript-based model detection never fired (nested layout)
+
+`_recent_transcript_model()` — the fallback that reads the model the user
+*actually* runs from their Claude Code transcripts — globbed
+`~/.claude/projects/*.jsonl`, but Claude Code nests transcripts one level
+deeper (`~/.claude/projects/<project-key>/<session>.jsonl`). The glob matched
+nothing, so for every user who pins no `model` in settings (most ride the
+default alias) the fallback silently returned empty. Downstream, that meant:
+
+- `header-audit harness` emitted no `MODEL` line → `MODEL-STALE` and
+  `MODEL-UPGRADE` never fired → a plain `/header` never surfaced the
+  engine-adoption opportunity (the 0.18.0 launch motion) for unpinned users.
+- `header-experiment mine --adopt` couldn't detect the current engine and fell
+  back to "ASSUMING arm A = claude-opus-4-7" with a warning, instead of
+  pinning the control to what actually ran.
+
+The test fixtures masked it: they wrote the fake transcript *flat*
+(`projects/s.jsonl`), matching the buggy glob rather than the real layout —
+while the cost-scan tests in the same file correctly used the nested layout.
+
+Fixed in both `header-audit` and `header-experiment`: the glob now covers both
+layouts (`projects/*/*.jsonl` + the flat form for back-compat), newest mtime
+wins. Fixtures rewritten to the nested layout (so they regression-guard the
+real bug), plus a newest-wins-across-layouts assertion. VERSION → 0.21.1.
+
 ## 0.21.0 — Determinism rails: guardrails for non-deterministic agents
 
 The audit gains a **constructive** axis. Until now it was reductive — it removed
