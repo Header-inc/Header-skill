@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.26.0
+version: 0.27.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -308,7 +308,7 @@ Local, read-only — nothing leaves the machine. Run **all five** scans. `<AUDIT
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in `key_developments`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. **Proven rows:** when the briefing carries cross-customer evidence for a pattern (a measured effect from the proven-changes library), write a 6-field row instead — `id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` — and `harness` re-emits the evidence as a `PROVEN` line (a proven row may reuse a built-in id to attach evidence to it; the scan de-duplicates by id, first wins). Keep regexes conservative (`grep -iE`); malformed lines (not exactly 3 or 6 tab fields, or a non-integer `n_repos`) are skipped. This is how the distribution wedge feeds new hypotheses — and proven library results — into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`); you'll join them with the briefing in the next step.
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
 
 ### Step 4 — Cross-reference and present
 
@@ -329,13 +329,49 @@ Build the unified list by combining:
 - **Audit findings** — every `HIT` (prompt-debt pattern, built-in *or* briefing-supplied; when the pattern id carries a `PROVEN` line, cite the library evidence and skip the local experiment), `FILE` size signal (heavy always-loaded `CLAUDE.md`/`AGENTS.md` — **sum `FILE` + `IMPORT`ed files**, since @imports are loaded every turn too; `NESTED` files are on-demand, count them apart), `MODEL` mismatch / `MODEL-STALE` (pinned to a superseded tier → model-migration `[Experiment]`), `MODEL-UPGRADE` (a newer model shipped above the current one, e.g. Fable 5 above Opus 4.8 → offer the **engine-adoption card** (`/header fable-5`, or `/header opus-4.8` for the same-price move) and `header-experiment mine --adopt` to prove it — opportunity, not debt), `SECURITY` posture, `HOOK` (arbitrary shell on agent events — the biggest unguarded execution + supply-chain surface; treat an unexpected/opaque hook command as a security finding), `SKILL` (installed skills are a supply-chain surface — note any carrying `has-bin yes`, à la `/cso`), `STALE-REF` (a referenced path/script or @import that no longer exists), and `GATE absent` from `header-audit`.
 - **Consistency findings** — `STALE-REF` lines are the deterministic half: surface each as `[Apply with review]` (fix the reference or delete the dead instruction). The other half is yours to judge — while reading `CLAUDE.md`/`AGENTS.md`, flag **mutually contradictory instructions** the greps can't catch (e.g. "use tabs" *and* "use spaces" for the same files; "always delegate to a subagent" *and* "never spawn subagents"; a rule that names a flag/command the tool no longer has). High-signal, low-risk — usually `[Apply now]` / `[Apply with review]`.
 - **Briefing-derived recommendations** — items in the briefing's `key_developments` or `summary` that touch the project's stack/tooling (read package manifests, lockfiles, language version files, build/test/CI configs, container/infra definitions, agent/skill definitions, `CLAUDE.md`, README), or that name a pattern the project doesn't yet use (or uses a now-legacy version of). The bias is toward **deletion** and toward changes the briefing endorses on the model currently configured. For a `MODEL-STALE` hit, cross-reference the briefing for the *current* recommended tier — the bin flags that it's stale; the briefing names what to move to.
-- **Waste findings** — the highest-trust deterministic wins in the audit, because each is *measured from the user's own sessions* (see "`header-audit waste`"). `MCP-UNUSED` and repo-scope `SKILL-UNUSED` → `[Apply with review]` removals, stating the evidence window ("0 calls across N session files"); an unused MCP server's tool schemas are paid for on **every turn**, so this routinely outweighs any single prompt-debt `HIT`. `ERROR-RATE` rows are investigate-hypotheses (what keeps failing, and why). A non-zero `COMPACTIONS` count alongside a heavy always-loaded `FILE`+`IMPORT` sum is the strongest practical argument for the trim recommendations — name the connection. Put `CONTEXT-TAX` on the scorecard next to the always-loaded sum. Ledger keys: `waste-mcp-<server>`, `waste-skill-<name>`.
-- **Determinism-rail findings** — each `RAIL absent` from `<AUDIT> rails` is an *opportunity to add a guardrail* (a pre-commit quality gate, a test ratchet, a compounding-memory discipline). These are the audit's **constructive** axis — see "Determinism rails (guardrails)". Surface each as **`[Apply with review]` tagged `(opinionated — Header house guardrail, not measured on your repo)`**: the new hook/skill file *is* the diff-faithful change, but the justification is conviction, not an A/B. Honor the ledger (keys `rail-precommit-gate` / `rail-test-ratchet` / `rail-compound-memory`); **skip `n/a` rows** (e.g. a test ratchet on a repo with no tests). This does **not** contradict the `HOOK`-as-risk framing: a rail is committed, reviewable, from Header's documented template, and agent-actionable — the opposite of an opaque hook. (Once installed it will appear as a `HOOK` on the next `harness` scan — recognize it as the rail you just added, don't re-flag it.)
+- **Waste findings** — the highest-trust deterministic wins in the audit, because each is *measured from the user's own sessions* (see "`header-audit waste`"). `MCP-UNUSED` and repo-scope `SKILL-UNUSED` → `[Apply with review]` removals, stating the evidence window ("0 calls across N session files"); an unused MCP server's tool schemas are paid for on **every turn**, so this routinely outweighs any single prompt-debt `HIT`. `ERROR-RATE` rows are investigate-hypotheses (what keeps failing, and why). A non-zero `COMPACTIONS` count alongside a heavy always-loaded `FILE`+`IMPORT` sum is the strongest practical argument for the trim recommendations — name the connection. Put `CONTEXT-TAX` on the scorecard next to the always-loaded sum. Ledger keys are emitted on the rows themselves (`key=waste-mcp-<server>`, `key=waste-skill-<name>`).
+- **Determinism-rail findings** — each `RAIL absent` from `<AUDIT> rails` is an *opportunity to add a guardrail* (a pre-commit quality gate, a test ratchet, a compounding-memory discipline). These are the audit's **constructive** axis — see "Determinism rails (guardrails)". Surface each as **`[Apply with review]` tagged `(opinionated — Header house guardrail, not measured on your repo)`**: the new hook/skill file *is* the diff-faithful change, but the justification is conviction, not an A/B. Honor the ledger (the keys `rail-precommit-gate` / `rail-test-ratchet` / `rail-compound-memory` are emitted on the `RAIL … absent` rows); **skip `n/a` rows** (e.g. a test ratchet on a repo with no tests). This does **not** contradict the `HOOK`-as-risk framing: a rail is committed, reviewable, from Header's documented template, and agent-actionable — the opposite of an opaque hook. (Once installed it will appear as a `HOOK` on the next `harness` scan — recognize it as the rail you just added, don't re-flag it.)
 - **Known issues** — themes from learnings/post-mortems/runbooks/architecture-decision-records/incident reports + a quick `TODO`/`FIXME`/`HACK` density scan. A recommendation that addresses a known issue jumps the queue.
 
 When a `MODEL` is known, cross-reference its model card / release notes before declaring a prompt-debt `HIT` actionable — confirm the pattern is *still* debt on that model. Prefer briefing sources for the cross-reference; fall back to the web.
 
-**Present** as a one-line scorecard, then a ranked recommendation list. Each recommendation is a hypothesis: **what** (the change), **where** (file + line/manifest), **why** (cite the audit line *or* the briefing item — link the `source_articles` URL for the latter), and the **expected effect** (`est.` and directional unless measured). Sort findings into three buckets — the audit is not just a hypothesis generator, it's also a hypothesis *filter*:
+**Present** the scorecard, then the ranked recommendation list. The shape below is a **contract, not an illustration** — same blocks, same axes, same order, every run, on every model (placeholders in `<angle brackets>`; everything else verbatim):
+
+```markdown
+## 📊 Header audit — <repo basename>
+
+💰 **Spend** (this repo, last <COST-INPUT file count> transcripts — API-rate equivalent): **~$<SPEND-TOTAL usd> / <calls> calls**
+- `<model>` — $<usd> (<share>%) ← costliest
+- `<model>` — $<usd> (<share>%)
+
+<header-cost's price-source + freshness line>. <billing-mode note: API → real dollars; subscription → usage-limit headroom, the % is identical; unknown → say so>.
+
+| Axis | State |
+|---|---|
+| Model | `<MODEL>`<. Plus the MODEL-UPGRADE / MODEL-STALE note when one fired> |
+| Always-loaded context | <FILE+IMPORT sum> tokens across <n> files; skills frontmatter +<CONTEXT-TAX est_tokens> tokens (<count> skills) |
+| Security | Bash: <allowlist / denylist / bypass / no explicit policy>; hooks: <n configured / none> |
+| Deps | <ECOSYSTEM names>; gates: <per non-n/a GATE: name present/absent><; TOOL too-old note if any> |
+| Rails | <per non-n/a RAIL: name ✓ present / ✗ absent> |
+```
+
+Hard rules:
+
+- **Spend block** — only when the scope + harness sanity check above passes (`COST-SCOPE repo` + `COST-HARNESS claude`). Otherwise replace the entire block with the single line that check prescribes (background-only global figure, harness-mismatch wording, or the no-data note) — never render the breakdown.
+- **The table is fixed** — exactly these five axes, this order, as a GitHub-flavored markdown table (not a box-drawing table, not prose, not a different row set). An axis with nothing to report reads `—`. Extra findings belong in the ranked list, not in new rows.
+- **Skip `n/a` rows** (gates, rails) everywhere, per the scan contracts.
+- A due staleness warning is one line *above* the scorecard heading, nothing more.
+
+Then the recommendations — each entry in exactly this shape, ranked by expected effect (the spend-led model-routing `[Experiment]` leads when the sanity check passed):
+
+```markdown
+### Ranked recommendations
+
+1. **[<Apply now | Apply with review | Experiment>] <imperative title>** — `<ledger-key>`
+   **Where:** <file/manifest + line>. **Why:** <the audit line or the briefing item — link the source_articles URL for briefing items>. **Est:** <expected effect — directional, marked `est.`, unless measured>.
+```
+
+`<ledger-key>` is the finding's emitted `key=` (see "Recommendation ledger") — showing it on every entry is how the user refers to an item and how the next run recognizes it. Sort findings into three buckets — the audit is not just a hypothesis generator, it's also a hypothesis *filter*:
 
 - **`[Apply now]`** — strictly deterministic, low-risk: supply-chain gate, security patches, obvious bug fixes, doc typos. On the user's yes, make the edit (show a diff first; for the gate, write/append the `<AUDIT> gate ...` snippet to `.npmrc`). No verification beyond the diff.
 - **`[Apply with review]`** — small-magnitude changes whose effect is observable from the diff alone: deletions of cargo-cult phrases (`as an AI language model`, `take a deep breath`, role puffery), trimming redundant role/persona boilerplate, doc cleanups, minor lint-style edits in CLAUDE.md / AGENTS.md. The user is the verifier — show the diff, get approval, apply. Optionally, run **one sanity replicate** (`header-experiment new --kind ... && header-experiment run <id> --k 1`) to confirm tests still pass; skip the full bootstrap A/B — the diff is the proof.
@@ -356,7 +392,16 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 
 **If you re-classify mid-flight, say so.** A finding's disposition (`[Apply now]` / `[Apply with review]` / `[Experiment]`) is a claim to the user. If you announce one and then act under another — e.g. you flagged `[Experiment]`, then on a closer look decide the diff is faithful enough to just apply — **state the change and your reason before you act**, and let the user redirect. Silently applying under a disposition other than the one you announced reads as sleight of hand, even when the new call is correct. The common case: you scope a CLAUDE.md trim as `[Experiment]`, then realize it's small *and* diff-faithful → `[Apply with review]`. Say that out loud; don't just quietly apply it.
 
-After presenting, ask which (if any) to implement. On selection, proceed with the implementation in the current project.
+**The apply menu.** After presenting, ask which recommendations (if any) to implement — one question, asked **alone**:
+
+- **Claude Code:** a single `AskUserQuestion` call containing exactly one question. Never attach a second question to this call — the custom-topic offer, schedule offer, telemetry consent, and language prompt are each their own later step, in their documented order.
+  - `question`: "Which recommendations should I implement now?" · `header`: "Apply" · `multiSelect: true`.
+  - Options, in rank order, one per recommendation, at most **3** (the tool caps options at 4 and the last slot is reserved): `label` = the recommendation's `<ledger-key>`; `description` = one line — its disposition tag plus what changes where. More than 3 recommendations → say in the question text that the rest can be named via "Other".
+  - Final option, always present: `label` "Just the report" · `description` "Change nothing now — everything stays in the ledger and is recognized next run."
+  - "Just the report" selected together with recommendations → treat as a mis-tap: apply nothing, re-ask in plain text.
+- **Other harnesses:** the same options as a numbered list (no cap); the user replies with numbers (comma-separated for several), or `0` / "none" for just the report.
+
+On selection, implement the chosen recommendations in rank order in the current project. **An unselected option is not a dismissal** — leave it `surfaced`; only an explicit rejection in the user's words earns `dismissed` (see the ledger dispositions below).
 
 **Commit signature.** When you (or the user) commit a fix that came from a recommendation the audit just surfaced, append a trailer to the commit message so the change's provenance is visible in `git log` / `git blame`:
 
@@ -364,7 +409,7 @@ After presenting, ask which (if any) to implement. On selection, proceed with th
 Header-Audit-Finding: <ledger-key> — https://joinheader.com
 ```
 
-Use the same `<ledger-key>` you logged to the recommendation ledger (e.g. `mcp-streaming`, `gate-npm`, `delete-think-step-by-step`). Multiple findings landed in one commit → emit multiple `Header-Audit-Finding:` lines, one per key. Skip the trailer when the user is making unrelated commits in the same session; this trailer is for changes that originated from a specific Header audit finding. If the user is committing manually rather than asking you to commit, show them the trailer line and let them decide whether to include it.
+Use the same `<ledger-key>` you logged to the recommendation ledger (the emitted `key=` for audit-derived findings, e.g. `gate-npm`, `delete-step-by-step`, `rail-precommit-gate`). Multiple findings landed in one commit → emit multiple `Header-Audit-Finding:` lines, one per key. Skip the trailer when the user is making unrelated commits in the same session; this trailer is for changes that originated from a specific Header audit finding. If the user is committing manually rather than asking you to commit, show them the trailer line and let them decide whether to include it.
 
 **Output format detection** — adjust depth from modifiers in the user's invocation:
 
@@ -383,7 +428,8 @@ Use the same `<ledger-key>` you logged to the recommendation ledger (e.g. `mcp-s
 Record each recommendation's disposition so future runs adapt. Skip when `<HEADER_BIN> get ledger` is `false`. `<LEDGER>` is `header-ledger`, in the same `bin/` dir.
 
 **While surfacing recommendations:**
-- Give each a short stable `key` (lowercase, hyphenated, e.g. `mcp-streaming`).
+- **Audit-derived finding → the key is already minted.** Every scan line that can become a recommendation carries a final `key=<canonical-key>` field (`gate-pip`, `rail-precommit-gate`, `delete-step-by-step`, `route-<model>`, `adopt-<model>`, `trim-<file>`, `waste-mcp-<server>`, `stale-ref-<ref>`, `bash-allowlist`, …). **Use it verbatim — never rename, shorten, or re-mint it.** A per-run model-minted key fragments the ledger: the same finding resurfaces under a new name, `status` can't see its history, and dedup silently fails.
+- **No audit line (briefing-derived or consistency finding) → mint once, reuse forever.** Before minting, run `<LEDGER> list` and reuse the existing key if any row is the same recommendation in substance (match on meaning, not exact title). Only when none exists, mint `<verb>-<object>` (lowercase, hyphenated, ≤4 words, e.g. `add-agents-md`) and keep that spelling on every re-surfacing.
 - `<LEDGER> status <key>` — if `dismissed`, drop it. If `applied`, prefer a follow-up framing over re-recommending.
 - `<LEDGER> list --action applied --since-days 30` — recently-adopted keys to proactively follow up on.
 - Record each one you surface:
@@ -424,7 +470,7 @@ curl -sS -w "\n%{http_code}" https://joinheader.com/api/v2/topics/public/catalog
 
 ## After the audit: customize your topic
 
-Once the audit + recommendations are delivered, in interactive mode, offer to **tailor the enrichment topic to this repo**. This is the upsell — the briefing that enriched the audit came from a generic topic; a custom topic targets sources about *your* stack.
+Once the audit + recommendations are delivered **and the apply menu has resolved**, in interactive mode, offer to **tailor the enrichment topic to this repo**. This is its own separate question — never bundled as a second question inside the apply-menu `AskUserQuestion` call. It is the upsell — the briefing that enriched the audit came from a generic topic; a custom topic targets sources about *your* stack.
 
 **Conditions to fire** (all must hold):
 
@@ -562,6 +608,8 @@ Telemetry stays off until the user opts in here; they can change it any time wit
 ## What the audit scans
 
 `bin/header-audit` is a deterministic, read-only scanner. The audit-led flow above calls it; this section documents the line types it emits so you can interpret them.
+
+**Canonical ledger keys (`key=`).** Any line that can become a recommendation ends with a final tab field `key=<canonical-key>`, derived deterministically from the line's own fields — `gate-<eco>` on an absent `GATE`, `rail-<name>` on an absent `RAIL`, `delete-<pattern-id>` on a `HIT`, `trim-<file>` on `FILE`/`NESTED`, `migrate-`/`adopt-<model>` on `MODEL-STALE`/`MODEL-UPGRADE`, `route-<model>` on `ROUTE-CANDIDATE`, `waste-mcp-<server>`/`waste-skill-<name>` on the unused rows, `stale-ref-<ref>`, `bash-allowlist`, `hook-<event>-<cmd>`, `review-skill-<name>`, `error-rate-<tool>`, `skill-context-tax`. Evidence/context lines (`IMPORT`, `MODEL`, `SPEND`, `TOOL-USE`, `RAIL-ENV`, present/`n/a` `GATE` and `RAIL` rows, …) carry none. The flow uses an emitted key verbatim as the recommendation-ledger key — see "Recommendation ledger".
 
 ### `header-audit harness`
 

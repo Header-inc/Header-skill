@@ -329,6 +329,39 @@ assert_contains "$SCX" $'COST-NOTE\tharness-mismatch\t' "Codex over Claude trans
 assert_not_contains "$(HOME="$sb_sc" "$AU" cost --all-projects --harness codex)" \
   $'COST-NOTE\tharness-mismatch\t' "--all-projects suppresses the harness-mismatch NOTE (explicit opt-in)"
 
+# ── canonical ledger keys (the trailing key= field) ───────────
+# Recommendation-capable lines pre-mint their ledger key so the model never
+# invents one per run (model-minted keys fragmented cross-run dedup: the same
+# finding re-surfaced as route-low-stakes-to-cheaper / route-fable5-cheaper /
+# route-low-stakes-cheaper across four audits of one repo). The derivations
+# below are a stability contract — changing one orphans users' ledger history.
+assert_contains "$H" "key=delete-step-by-step" "HIT pre-mints key=delete-<pattern-id>"
+assert_contains "$H" "key=trim-claude-md" "FILE pre-mints key=trim-<repo-relative-slug>"
+assert_contains "$D" $'GATE\tnpm\tabsent\t-\tkey=gate-npm' "an absent npm gate carries key=gate-npm"
+assert_contains "$D" $'GATE\tpip\tabsent\t-\tkey=gate-pip' "an absent pip gate carries key=gate-pip"
+assert_not_contains "$(HOME="$sb" "$AU" deps --repo "$repo" | grep 'GATE	npm	present')" "key=" \
+  "a present gate carries no key (status, not a recommendation)"
+assert_not_contains "$DG" "key=gate" "n/a gates carry no key (nothing to recommend)"
+assert_contains "$Hstale" "key=migrate-claude-3-5-sonnet-20241022" \
+  "MODEL-STALE pre-mints key=migrate-<model-slug>"
+assert_contains "$Hup" "key=adopt-claude-opus-4-8" "MODEL-UPGRADE (4.7) pre-mints key=adopt-claude-opus-4-8"
+assert_contains "$Hup48" "key=adopt-claude-fable-5" "MODEL-UPGRADE (4.8) pre-mints key=adopt-claude-fable-5"
+assert_contains "$Himp" "key=stale-ref-scripts-gone-sh" "STALE-REF pre-mints key=stale-ref-<ref-slug>"
+assert_contains "$Himp" "key=stale-ref-docs-missing-md" "an unresolved @import STALE-REF also carries a key"
+assert_contains "$Hhk" "key=hook-pretooluse-echo-guard" "HOOK pre-mints key=hook-<event>-<command-slug>"
+assert_contains "$Hsk" "key=review-skill-withbin" "SKILL pre-mints key=review-skill-<name>"
+assert_contains "$C" "key=route-claude-opus-4-8" "ROUTE-CANDIDATE pre-mints key=route-<model-slug>"
+cat > "$r/.claude/settings.json" <<'J'
+{ "permissions": { "deny": [ "Bash(curl:*)" ] } }
+J
+assert_contains "$(HOME="$sb2" "$AU" harness --repo "$r")" $'SECURITY\tbash\tdenylist\t'"$r/.claude/settings.json"$'\tkey=bash-allowlist' \
+  "a weak Bash posture (denylist) carries key=bash-allowlist"
+cat > "$r/.claude/settings.json" <<'J'
+{ "permissions": { "allow": [ "Bash(npm run test:*)" ] } }
+J
+assert_not_contains "$(HOME="$sb2" "$AU" harness --repo "$r" | grep 'SECURITY	bash')" "key=" \
+  "an allowlist posture carries no key (affirmation, not a finding)"
+
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "unknown subcommand → exit 1"

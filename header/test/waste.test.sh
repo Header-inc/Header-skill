@@ -100,6 +100,15 @@ I="$(HOME="$sb/home" "$AU" waste --repo "$repo" --input "$tdir/sess.jsonl")"
 assert_contains "$I" $'WASTE-SCOPE\tinput\t' "--input labels the scope input"
 assert_contains "$I" $'TOOL-USE\tBash\t1\t0' "--input streams the given file"
 
+# ── canonical ledger keys on recommendation-capable rows ──────
+assert_contains "$W" $'MCP-UNUSED\tbeta\t'"$repo/.mcp.json"$'\tkey=waste-mcp-beta' \
+  "MCP-UNUSED pre-mints key=waste-mcp-<server>"
+assert_contains "$W" $'SKILL-UNUSED\tdeadskill\t'"$repo/.claude/skills/deadskill"$'\tkey=waste-skill-deadskill' \
+  "SKILL-UNUSED pre-mints key=waste-skill-<name>"
+assert_contains "$W" "key=skill-context-tax" "CONTEXT-TAX carries the canonical skill-context-tax key"
+assert_not_contains "$(printf '%s\n' "$W" | grep '^TOOL-USE')" "key=" \
+  "TOOL-USE rows are evidence, not recommendations — no key"
+
 # Exit-code hygiene: success paths exit 0.
 HOME="$sb/home" "$AU" waste --repo "$repo" >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "waste exits 0 on success"

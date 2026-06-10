@@ -97,6 +97,14 @@
 #       Print the scaffold to install for a rail (stack-adapted), the analogue of
 #       `gate` for supply-chain. Reads header/scaffold/ templates.
 #
+# CANONICAL LEDGER KEYS — every line that can become a recommendation carries a
+# final tab field `key=<canonical-key>`, derived deterministically from the
+# line's own fields (slug: lowercase, runs of non-alphanumerics → '-'). The
+# SKILL.md flow uses it verbatim as the recommendation-ledger key; model-minted
+# per-run keys fragment the ledger's cross-run dedup (the same finding gets
+# re-pitched as new under a fresh name). Evidence/context lines (IMPORT, MODEL,
+# SPEND, TOOL-USE, RAIL-ENV, present/n-a GATE and RAIL rows, …) carry none.
+#
 # Reads only (harness/deps/cost/waste/rails never write). Nothing leaves the machine.
 # Env: HEADER_HOME (state dir, default $HOME/.header — used for the optional
 # briefing-supplied patterns file), HEADER_PATTERNS_FILE (override its path),
@@ -177,6 +185,24 @@ ver_ge() {
   }'
 }
 
+# ── canonical ledger keys ─────────────────────────────────────
+# _slug: lowercase; runs of non-alphanumerics → '-'; trimmed at both ends. The
+# basis of every `key=` field — derivations must be stable across runs, models,
+# and machines (no timestamps, no model-minted text).
+_slug() { printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//'; }
+# _slugn <s> <n> — _slug capped at n chars (long hook commands / refs), re-trimmed.
+_slugn() { _slug "$1" | cut -c1-"$2" | sed 's/-$//'; }
+# _relslug <path> — slug of the path relative to the repo root ($HOME-anchored
+# files get a `user-` prefix), so a key never bakes in a machine-specific prefix.
+_relslug() {
+  _rp="$1"
+  case "$_rp" in
+    "$REPO"/*) _rp="${_rp#"$REPO/"}" ;;
+    "$HOME"/*) _rp="user/${_rp#"$HOME/"}" ;;
+  esac
+  _slug "$_rp"
+}
+
 # ── detect_harness → "codex" | "claude" ───────────────────────
 # The active agent harness. Codex installs the skill under a `.codex/` tree and
 # exports CODEX_HOME; everything else is treated as Claude Code. Used by `cost`
@@ -205,12 +231,12 @@ scan_file() {
   f="$1"
   [ -f "$f" ] || return 0
   bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; [ -n "$bytes" ] || bytes=0
-  printf 'FILE\t%s\t%s\t%s\n' "$f" "$bytes" "$(( bytes / 4 ))"
+  printf 'FILE\t%s\t%s\t%s\tkey=trim-%s\n' "$f" "$bytes" "$(( bytes / 4 ))" "$(_relslug "$f")"
   _patterns | while IFS="$TAB" read -r id rx why; do
     [ -n "${id:-}" ] || continue
     grep -niE "$rx" "$f" 2>/dev/null | while IFS=: read -r ln rest; do
       ex="$(printf '%s' "$rest" | tr '\t\r' '  ' | sed 's/^[[:space:]]*//' | cut -c1-70)"
-      printf 'HIT\t%s\t%s\t%s\t%s\n' "$f" "$ln" "$id" "$ex"
+      printf 'HIT\t%s\t%s\t%s\t%s\tkey=delete-%s\n' "$f" "$ln" "$id" "$ex" "$(_slug "$id")"
     done
   done
 }
@@ -255,7 +281,7 @@ _stale_refs() {
     [ -e "$REPO/$t" ] && continue
     [ -e "$_fd/$t" ] && continue
     [ -e "$t" ] && continue
-    printf 'STALE-REF\t%s\t%s\t%s\t%s\n' "$f" "$ln" "$(printf '%s' "$t" | cut -c1-60)" "referenced path not found"
+    printf 'STALE-REF\t%s\t%s\t%s\t%s\tkey=stale-ref-%s\n' "$f" "$ln" "$(printf '%s' "$t" | cut -c1-60)" "referenced path not found" "$(_slugn "$t" 40)"
   done
 }
 
@@ -285,7 +311,7 @@ scan_tree() {
       printf 'IMPORT\t%s\t%s\n' "$f" "$res"
       scan_tree "$res" "$(( depth + 1 ))"
     else
-      printf 'STALE-REF\t%s\t%s\t%s\t%s\n' "$f" "$ln" "@$raw" "@import target not found"
+      printf 'STALE-REF\t%s\t%s\t%s\t%s\tkey=stale-ref-%s\n' "$f" "$ln" "@$raw" "@import target not found" "$(_slugn "$raw" 40)"
     fi
   done <<EOF
 $imports
@@ -337,7 +363,7 @@ _skills() {
     name="$(basename "$sk")"
     hb=no
     [ -d "${sk}bin" ] && ls "${sk}bin/"* >/dev/null 2>&1 && hb=yes
-    printf 'SKILL\t%s\t%s\t%s\t%s\n' "$name" "${sk%/}" "$hb" "$scope"
+    printf 'SKILL\t%s\t%s\t%s\t%s\tkey=review-skill-%s\n' "$name" "${sk%/}" "$hb" "$scope" "$(_slug "$name")"
   done
 }
 
@@ -352,7 +378,7 @@ _nested() {
     \( -name CLAUDE.md -o -name AGENTS.md \) -type f -print 2>/dev/null | while IFS= read -r f; do
     case "$f" in "$REPO/CLAUDE.md"|"$REPO/AGENTS.md") continue ;; esac
     b="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; [ -n "$b" ] || b=0
-    printf 'NESTED\t%s\t%s\t%s\n' "$f" "$b" "$(( b / 4 ))"
+    printf 'NESTED\t%s\t%s\t%s\tkey=trim-%s\n' "$f" "$b" "$(( b / 4 ))" "$(_relslug "$f")"
   done
 }
 
@@ -364,11 +390,11 @@ _model_staleness() {
   lm="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
   case "$lm" in
     *claude-3*|*-3-opus*|*-3-sonnet*|*-3-haiku*|*opus-3*|*sonnet-3*|*haiku-3*)
-      printf 'MODEL-STALE\t%s\t%s\n' "$1" "Claude 3.x tier — superseded; check the briefing for the current model and weigh a model-swap experiment." ;;
+      printf 'MODEL-STALE\t%s\t%s\tkey=migrate-%s\n' "$1" "Claude 3.x tier — superseded; check the briefing for the current model and weigh a model-swap experiment." "$(_slug "$1")" ;;
     *claude-2*|*claude-instant*)
-      printf 'MODEL-STALE\t%s\t%s\n' "$1" "Claude 2.x / instant — long superseded; migrate to a current tier." ;;
+      printf 'MODEL-STALE\t%s\t%s\tkey=migrate-%s\n' "$1" "Claude 2.x / instant — long superseded; migrate to a current tier." "$(_slug "$1")" ;;
     *opus-4-0*|*opus-4-1*)
-      printf 'MODEL-STALE\t%s\t%s\n' "$1" "Early Opus 4 (4.0/4.1) — superseded by Opus 4.5+; weigh a model-swap experiment." ;;
+      printf 'MODEL-STALE\t%s\t%s\tkey=migrate-%s\n' "$1" "Early Opus 4 (4.0/4.1) — superseded by Opus 4.5+; weigh a model-swap experiment." "$(_slug "$1")" ;;
   esac
 }
 
@@ -387,10 +413,10 @@ _model_upgrade() {
   case "$lm" in
     *fable-5*) : ;;                                    # already the top tier
     *opus-4-8*)
-      printf 'MODEL-UPGRADE\t%s\t%s\t%s\n' "$1" "claude-fable-5" \
+      printf 'MODEL-UPGRADE\t%s\t%s\t%s\tkey=adopt-claude-fable-5\n' "$1" "claude-fable-5" \
         "Fable 5 has shipped — a tier above Opus at 2x the token price, but even medium effort beats Opus 4.8 at any effort on FrontierCode. Weigh it: '/header fable-5', then prove it on your repo with 'header-experiment mine --adopt'." ;;
     *opus-4-5*|*opus-4-6*|*opus-4-7*)
-      printf 'MODEL-UPGRADE\t%s\t%s\t%s\n' "$1" "claude-opus-4-8" \
+      printf 'MODEL-UPGRADE\t%s\t%s\t%s\tkey=adopt-claude-opus-4-8\n' "$1" "claude-opus-4-8" \
         "Opus 4.8 has shipped (same price; stronger coding/agentic + ~4x fewer unremarked code flaws). Weigh it: '/header opus-4.8', then prove it on your repo with 'header-experiment mine --adopt'. (Fable 5 is the further, 2x-price jump: '/header fable-5'.)" ;;
   esac
 }
@@ -583,7 +609,12 @@ SIG
       [ "$_al" -eq 1 ] && lvl="allowlist"
       [ "$_al" -eq 1 ] && [ "$_dn" -eq 1 ] && lvl="allowlist+denylist"
       [ "$_by" -eq 1 ] && lvl="bypass"
-      printf 'SECURITY\tbash\t%s\t%s\n' "$lvl" "$s"
+      # Only a weak posture (bypass / pure blacklist) is a recommendation — the
+      # canonical fix is the same either way: move to an allow-list.
+      case "$lvl" in
+        bypass|denylist) printf 'SECURITY\tbash\t%s\t%s\tkey=bash-allowlist\n' "$lvl" "$s" ;;
+        *)               printf 'SECURITY\tbash\t%s\t%s\n' "$lvl" "$s" ;;
+      esac
     done
     # Always-loaded markdown harness files: scan, follow @imports inline, and flag
     # stale references. @imported files are counted as always-loaded FILE rows so
@@ -608,7 +639,7 @@ SIG
              "$HOME/.claude/settings.json"; do
       _hooks "$s" | while IFS="$TAB" read -r ev cmd; do
         [ -n "${ev:-}" ] || continue
-        printf 'HOOK\t%s\t%s\t%s\n' "$ev" "$cmd" "$s"
+        printf 'HOOK\t%s\t%s\t%s\tkey=hook-%s-%s\n' "$ev" "$cmd" "$s" "$(_slug "$ev")" "$(_slugn "$cmd" 24)"
       done
     done
     # Installed skills (repo + user scope) — supply-chain + execution surface.
@@ -681,7 +712,7 @@ SIG
       for r in "$REPO/.npmrc" "$REPO/frontend/.npmrc" "$HOME/.npmrc"; do
         [ -f "$r" ] && grep -qiE '^[[:space:]]*min-release-age[[:space:]]*=' "$r" 2>/dev/null && { npmrc="$r"; break; }
       done
-      [ -n "$npmrc" ] && printf 'GATE\tnpm\tpresent\t%s\n' "$npmrc" || printf 'GATE\tnpm\tabsent\t-\n'
+      [ -n "$npmrc" ] && printf 'GATE\tnpm\tpresent\t%s\n' "$npmrc" || printf 'GATE\tnpm\tabsent\t-\tkey=gate-npm\n'
     else
       printf 'GATE\tnpm\tn/a\t-\n'
     fi
@@ -692,7 +723,7 @@ SIG
                "$REPO/pip.conf" "$REPO/pip.ini" "$HOME/.config/pip/pip.conf"; do
         [ -f "$c" ] && grep -qiE 'uploaded-prior-to' "$c" 2>/dev/null && { pipgate="$c"; break; }
       done
-      [ -n "$pipgate" ] && printf 'GATE\tpip\tpresent\t%s\n' "$pipgate" || printf 'GATE\tpip\tabsent\t-\n'
+      [ -n "$pipgate" ] && printf 'GATE\tpip\tpresent\t%s\n' "$pipgate" || printf 'GATE\tpip\tabsent\t-\tkey=gate-pip\n'
     else
       printf 'GATE\tpip\tn/a\t-\n'
     fi
@@ -774,7 +805,10 @@ SIG
           printf "SPEND\t%s\t%d\t%.4f\t%.1f\n", m, cl, c, share
           if (c > top_cost) { top_cost = c; top_model = m; top_share = share }
         }
-        if (top_model != "") printf "ROUTE-CANDIDATE\t%s\t%.4f\t%.1f\n", top_model, top_cost, top_share
+        if (top_model != "") {
+          k = tolower(top_model); gsub(/[^a-z0-9]+/, "-", k); sub(/^-+/, "", k); sub(/-+$/, "", k)
+          printf "ROUTE-CANDIDATE\t%s\t%.4f\t%.1f\tkey=route-%s\n", top_model, top_cost, top_share, k
+        }
       }
     '
     ;;
@@ -866,6 +900,7 @@ SIG
     # newline in a -v value ("newline in string") — the header-cost idiom.
     eval "$stream_cmd" | HEADER_WASTE_MCP="$mcp_configured" HEADER_WASTE_SKILLS="$repo_skills" \
       awk -v since="$SINCE" -v nfiles="$nfiles" -v mcp_file="$MCP_FILE" '
+      function slug(s,  t) { t = tolower(s); gsub(/[^a-z0-9]+/, "-", t); sub(/^-+/, "", t); sub(/-+$/, "", t); return t }
       BEGIN {
         mcp_configured = ENVIRON["HEADER_WASTE_MCP"]
         repo_skills    = ENVIRON["HEADER_WASTE_SKILLS"]
@@ -938,7 +973,7 @@ SIG
         nconf = split(mcp_configured, MC, "\n")
         for (a = 1; a <= nconf; a++) {
           srv = MC[a]; if (srv == "") continue
-          if (!(srv in McpCalls)) printf "MCP-UNUSED\t%s\t%s\n", srv, mcp_file
+          if (!(srv in McpCalls)) printf "MCP-UNUSED\t%s\t%s\tkey=waste-mcp-%s\n", srv, mcp_file, slug(srv)
         }
         for (a = 1; a <= nsk; a++)
           printf "SKILL-USE\t%s\t%d\n", SkillKeys[a], SkillUse[SkillKeys[a]]
@@ -947,13 +982,13 @@ SIG
         for (a = 1; a <= nrs; a++) {
           if (RS_[a] == "") continue
           split(RS_[a], F, "\t")
-          if (!(F[1] in SkillUse)) printf "SKILL-UNUSED\t%s\t%s\n", F[1], F[2]
+          if (!(F[1] in SkillUse)) printf "SKILL-UNUSED\t%s\t%s\tkey=waste-skill-%s\n", F[1], F[2], slug(F[1])
         }
         # High error-rate tools (enough volume to mean something).
         for (a = 1; a <= ntk; a++) {
           nm = ToolKeys[a]; c = Calls[nm]; e = Err[nm] + 0
           if (c >= 10 && e * 5 >= c)
-            printf "ERROR-RATE\t%s\t%d\t%d\t%.0f\n", nm, e, c, e * 100 / c
+            printf "ERROR-RATE\t%s\t%d\t%d\t%.0f\tkey=error-rate-%s\n", nm, e, c, e * 100 / c, slug(nm)
         }
         cmp = (c_sum > c_bnd) ? c_sum : c_bnd
         if (cmp > 0) printf "COMPACTIONS\t%d\t%d\n", cmp, nfiles
@@ -976,7 +1011,7 @@ SIG
         tax_total=$(( tax_total + fmb )); tax_count=$(( tax_count + 1 ))
       done
     done
-    [ "$tax_count" -gt 0 ] && printf 'CONTEXT-TAX\tskills\t%s\t%s\t%s\n' "$tax_count" "$tax_total" "$(( tax_total / 4 ))"
+    [ "$tax_count" -gt 0 ] && printf 'CONTEXT-TAX\tskills\t%s\t%s\t%s\tkey=skill-context-tax\n' "$tax_count" "$tax_total" "$(( tax_total / 4 ))"
     ;;
 
   gate)
@@ -1026,9 +1061,17 @@ EOF
     printf 'RAIL-ENV\thooks-path\t%s\n' "$hp"
     printf 'RAIL-ENV\tclaude\t%s\n' "$cl"
     printf 'RAIL-ENV\ttests\t%s\n' "$tp"
-    printf 'RAIL\tprecommit-gate\t%s\n' "$(_rail_precommit_status)"
-    printf 'RAIL\ttest-ratchet\t%s\n'   "$(_rail_ratchet_status "$tp")"
-    printf 'RAIL\tcompound-memory\t%s\n' "$(_rail_compound_status)"
+    # An absent rail is a recommendation → it carries the canonical ledger key;
+    # present / n/a rows are status only.
+    _rail_row() {
+      case "$2" in
+        absent*) printf 'RAIL\t%s\t%s\tkey=rail-%s\n' "$1" "$2" "$1" ;;
+        *)       printf 'RAIL\t%s\t%s\n' "$1" "$2" ;;
+      esac
+    }
+    _rail_row precommit-gate   "$(_rail_precommit_status)"
+    _rail_row test-ratchet     "$(_rail_ratchet_status "$tp")"
+    _rail_row compound-memory  "$(_rail_compound_status)"
     ;;
 
   rail)

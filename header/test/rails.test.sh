@@ -118,6 +118,16 @@ assert_contains "$CM" ".claude/skills/compound/SKILL.md" "compound-memory prints
 assert_contains "$CM" "name: compound" "compound-memory prints the compound skill frontmatter"
 assert_contains "$CM" ".claude/memory/MEMORY.md" "compound-memory prints the seed index path"
 
+# ── canonical ledger keys: absent rails only ──────────────────
+# An absent rail is a recommendation → it pre-mints the documented ledger key
+# (rail-<name>); present and n/a rows are status and carry none.
+assert_contains "$R" "key=rail-precommit-gate" "an absent precommit-gate carries key=rail-precommit-gate"
+assert_contains "$R" "key=rail-compound-memory" "an absent compound-memory carries key=rail-compound-memory"
+assert_not_contains "$(printf '%s\n' "$R" | grep 'RAIL	test-ratchet')" "key=" \
+  "an n/a rail carries no key"
+assert_not_contains "$(HOME="$sb" "$AU" rails --repo "$repo" | grep 'RAIL	precommit-gate	present')" "key=" \
+  "a present rail carries no key"
+
 # ── errors ────────────────────────────────────────────────────
 HOME="$sb" "$AU" rail bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "an unknown rail name → exit 1"

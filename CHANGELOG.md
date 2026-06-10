@@ -3,6 +3,55 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.27.0 — determinism pass: pre-minted ledger keys, pinned scorecard, pinned apply menu
+
+Dogfood finding: the same repo audited four times in one hour logged the same
+findings under three different ledger keys (`route-low-stakes-to-cheaper` /
+`route-fable5-cheaper` / `route-low-stakes-cheaper`; `agents-md-intent-ledger`
+/ `claude-md-concrete-facts` / `add-agents-md`) — so cross-run dedup silently
+failed and run four re-pitched old findings as new. And two models rendered
+the same SKILL.md as visibly different sessions: one as an emoji box-table
+scorecard with a bundled two-question multi-select, one as compressed prose
+with a single-select. Root cause, all three: the spec pinned *content* but
+left *shape* to interpretation — "one-line scorecard" (contradicted by
+everything the scorecard was told to contain), "ask which (if any) to
+implement" (an entire interaction design in one sentence), and "give each a
+short stable key" (a generative process can't produce stable identifiers
+across independent runs). Models execute examples, not adjectives. Three fixes:
+
+- **Canonical ledger keys are emitted by the scanner, not minted by the
+  model.** Every recommendation-capable `header-audit` line now carries a
+  final `key=<canonical-key>` tab field, derived deterministically from the
+  line's own fields: `gate-<eco>` / `rail-<name>` on absent gates/rails,
+  `delete-<pattern-id>` on a `HIT`, `trim-<file-slug>` on `FILE`/`NESTED`,
+  `migrate-<model>` / `adopt-<model>` on `MODEL-STALE`/`MODEL-UPGRADE`,
+  `route-<model>` on `ROUTE-CANDIDATE`, `waste-mcp-<server>` /
+  `waste-skill-<name>`, `stale-ref-<ref>`, `bash-allowlist` (weak posture
+  only), `hook-<event>-<cmd>`, `review-skill-<name>`, `error-rate-<tool>`,
+  `skill-context-tax`. Status/evidence rows (present and `n/a` gates/rails,
+  `IMPORT`, `SPEND`, `TOOL-USE`, …) carry none. SKILL.md now says: use the
+  emitted key **verbatim**; minting is reserved for briefing-derived and
+  consistency findings, gated by a check-the-ledger-for-an-existing-key rule.
+- **The scorecard is a pinned template** — a fenced contract: `## 📊 Header
+  audit` heading, spend block (rendered only when the repo+harness sanity
+  check passes), then a fixed five-axis GFM table (Model / Always-loaded
+  context / Security / Deps / Rails), `n/a` rows skipped. Replaces "one-line
+  scorecard", which the rest of the spec contradicted (spend lead, CONTEXT-TAX
+  placement, security posture all belonged "on the scorecard"). Ranked
+  recommendations get a pinned entry shape too — disposition tag, imperative
+  title, the ledger key, Where/Why/Est — so every model renders the same list.
+- **The apply menu is a pinned interaction**: exactly one `AskUserQuestion`
+  call with exactly one question ("Which recommendations should I implement
+  now?", multiSelect), ≤3 rank-ordered options labeled by ledger key plus an
+  always-present "Just the report" — and no other post-audit offer may ride
+  along as a second question (the custom-topic offer now explicitly waits for
+  the apply menu to resolve). Unselected ≠ dismissed. Numbered-list fallback
+  for non-Claude-Code harnesses.
+
++24 tests: each key derivation asserted as a stability contract (changing a
+derivation orphans users' ledger history), plus no-key on status rows.
+VERSION → 0.27.0.
+
 ## 0.26.0 — Fable 5 engine-adoption card (the second instance, priced honestly)
 
 Fable 5 shipped today (System Card: June 9 2026), and the engine-adoption
