@@ -92,7 +92,12 @@ in [docs/experiments-design.md](docs/experiments-design.md).
 ### Engine adoption — "should you use this model in your harness?" (v0.18.0, the launch cut)
 
 **Status:** locked for build (2026-06-01). Launch instance: **Opus 4.8**. Full spec in
-[docs/engine-adoption-design.md](docs/engine-adoption-design.md).
+[docs/engine-adoption-design.md](docs/engine-adoption-design.md). **Second instance shipped
+v0.26.0 (2026-06-09): Fable 5** — `/header fable-5` card, `mine --adopt` defaults to
+`claude-fable-5`, `MODEL-UPGRADE` fires for Opus 4.8 → Fable 5 (priced honestly: 2× per token,
+unlike the same-price 4.x moves). The generalization path the spec promised ("a `<model>` snapshot
+under `data/engine-adoption/` + `--to <model>`") held with no engine changes — only defaults,
+routing, and a new snapshot.
 
 The first-class motion for a new model release, and the realization of the *"new Opus dropped →
 queue a migration experiment"* schedule-integration bullet above. Two halves:

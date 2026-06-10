@@ -28,7 +28,7 @@ Pick the row matching the detected `MODEL` (+ effort) and lead with it:
 |---|---|---|
 | `opus-4-7 @xhigh` (or @max), meaningful spend | **effort-drop savings** | 4.8 @high likely holds your quality at less cost/latency — see the effort lever below. |
 | `sonnet` / older / cheaper tier | **capability gain** | SWE-bench Pro 69.2, long-context, honesty — but it's a cost↑ trade; prove the win is worth it. |
-| already `opus-4-8` | **reverse optimization** | You're current — can you *drop* effort (xhigh→high) and save without losing quality? |
+| already `opus-4-8` | **reverse optimization — or the tier above** | Can you *drop* effort (xhigh→high) and save without losing quality? And Fable 5 (June 9 2026) now sits above this tier at 2× the price — `/header fable-5` for that card. |
 | undetected | the default verdict | flag that you couldn't read their model; ask, or proceed with the headline. |
 
 ## The effort lever (the headline almost nobody covers)

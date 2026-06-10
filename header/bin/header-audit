@@ -372,20 +372,26 @@ _model_staleness() {
   esac
 }
 
-# _model_upgrade <model-id> — flag an in-tier OPPORTUNITY (not debt): a newer,
-# same-price model in the SAME family has shipped that the current engine could
-# move to. Distinct from MODEL-STALE — the current model is fine, not superseded;
-# this is "a better default may exist, weigh it." Conservative: fires only for
-# recognized Opus tiers below the current flagship. The card (`/header opus-4.8`)
-# and the briefing carry the actual case + caveats; the audit just surfaces that
-# an opportunity exists and routes it to a provable experiment.
+# _model_upgrade <model-id> — flag an in-tier OPPORTUNITY (not debt): a newer
+# model has shipped that the current engine could move to. Distinct from
+# MODEL-STALE — the current model is fine, not superseded; this is "a better
+# default may exist, weigh it." Conservative: fires only for recognized tiers
+# with a newer engine above them, and is honest about price — pre-4.8 Opus gets
+# the SAME-PRICE move (Opus 4.8); Opus 4.8 gets the tier above (Fable 5, 2x
+# token price, so the message says so). The card (`/header fable-5`,
+# `/header opus-4.8`) and the briefing carry the actual case + caveats; the
+# audit just surfaces that an opportunity exists and routes it to a provable
+# experiment.
 _model_upgrade() {
   lm="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
   case "$lm" in
-    *opus-4-8*) : ;;                                   # already the current flagship
+    *fable-5*) : ;;                                    # already the top tier
+    *opus-4-8*)
+      printf 'MODEL-UPGRADE\t%s\t%s\t%s\n' "$1" "claude-fable-5" \
+        "Fable 5 has shipped — a tier above Opus at 2x the token price, but even medium effort beats Opus 4.8 at any effort on FrontierCode. Weigh it: '/header fable-5', then prove it on your repo with 'header-experiment mine --adopt'." ;;
     *opus-4-5*|*opus-4-6*|*opus-4-7*)
       printf 'MODEL-UPGRADE\t%s\t%s\t%s\n' "$1" "claude-opus-4-8" \
-        "Opus 4.8 has shipped (same price; stronger coding/agentic + ~4x fewer unremarked code flaws). Weigh it: '/header opus-4.8', then prove it on your repo with 'header-experiment mine --adopt'." ;;
+        "Opus 4.8 has shipped (same price; stronger coding/agentic + ~4x fewer unremarked code flaws). Weigh it: '/header opus-4.8', then prove it on your repo with 'header-experiment mine --adopt'. (Fable 5 is the further, 2x-price jump: '/header fable-5'.)" ;;
   esac
 }
 

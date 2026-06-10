@@ -1133,7 +1133,7 @@ by the repo's own suite. No task prompts or verify commands to hand-author.
 
 Engine adoption — "should you move your harness to a newer model?":
   --adopt           arm A = the model+effort you run TODAY (auto-detected);
-                    arm B = --to MODEL (default claude-opus-4-8) @ --effort LEVEL
+                    arm B = --to MODEL (default claude-fable-5) @ --effort LEVEL
                     (default high). Writes kind: engine-swap. The card's proof.
   --effort LEVEL    arm B effort (low|medium|high|xhigh|max; default high)
   --from MODEL[@E]  override the detected current model (and effort)
@@ -1146,7 +1146,7 @@ EOF
     esac
   done
   # --adopt defaults the id to adopt-<target> so the card's CTA is a bare command.
-  [ "$adopt" -eq 1 ] && [ -z "$id" ] && id="adopt-$(printf '%s' "${to:-claude-opus-4-8}" | sed 's/^claude-//; s/[^a-zA-Z0-9._-]/-/g')"
+  [ "$adopt" -eq 1 ] && [ -z "$id" ] && id="adopt-$(printf '%s' "${to:-claude-fable-5}" | sed 's/^claude-//; s/[^a-zA-Z0-9._-]/-/g')"
   [ -n "$id" ] || { err "<id> required"; return 1; }
   case "$id" in *[!a-zA-Z0-9_.-]*) err "id must be [a-zA-Z0-9_.-]+ (got '$id')"; return 1 ;; esac
   case "$limit$max_files$max_tasks$vtimeout" in *[!0-9]*) err "--limit/--max-files/--max-tasks/--timeout must be integers"; return 1 ;; esac
@@ -1160,7 +1160,7 @@ EOF
   # degenerate/invalid config fails fast instead of after the suite-validation pass.
   local adopt_sweep_eff=""
   if [ "$adopt" -eq 1 ]; then
-    [ -n "$to" ] || to="claude-opus-4-8"
+    [ -n "$to" ] || to="claude-fable-5"
     [ -n "$effort" ] || effort="high"
     case "$effort" in low|medium|high|xhigh|max) ;; *) err "--effort must be low|medium|high|xhigh|max (got '$effort')"; return 1 ;; esac
     # Arm A = the engine you run today. Detect unless overridden; an @-suffix on
@@ -3490,7 +3490,7 @@ Usage: header-experiment <command> ...
                     prompts or verify commands to author). --list to preview
                     candidates; --from/--to to set the model-swap arms.
                     --adopt → "should you move to a newer model?": A/B your
-                    CURRENT engine vs a target (default opus-4-8 @high); --sweep
+                    CURRENT engine vs a target (default fable-5 @high); --sweep
                     offers a 3rd effort arm. (The engine-adoption card's proof.)
   new <id>        audit-aware scaffolder (RECOMMENDED — interactive or one-shot)
                     --kind prompt-debt-deletion --file F --lines L1,L2,...

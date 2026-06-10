@@ -146,8 +146,14 @@ assert_contains "$Hup" $'MODEL-UPGRADE\tclaude-opus-4-7\tclaude-opus-4-8' \
 assert_not_contains "$Hup" "MODEL-STALE" \
   "a current (4.7) model is an upgrade opportunity, not stale debt"
 printf '{ "model": "claude-opus-4-8" }\n' > "$rstale/.claude/settings.json"
+Hup48="$(HOME="$sb_stale" "$AU" harness --repo "$rstale")"
+assert_contains "$Hup48" $'MODEL-UPGRADE\tclaude-opus-4-8\tclaude-fable-5' \
+  "Opus 4.8 → MODEL-UPGRADE names Fable 5 as the tier above"
+assert_contains "$Hup48" "2x the token price" \
+  "the Fable 5 upgrade message is honest about the price (not a same-price move)"
+printf '{ "model": "claude-fable-5" }\n' > "$rstale/.claude/settings.json"
 assert_not_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" "MODEL-UPGRADE" \
-  "the current flagship (Opus 4.8) is not flagged for upgrade"
+  "the top tier (Fable 5) is not flagged for upgrade"
 printf '{ "model": "claude-opus-4-1-20250805" }\n' > "$rstale/.claude/settings.json"
 assert_not_contains "$(HOME="$sb_stale" "$AU" harness --repo "$rstale")" "MODEL-UPGRADE" \
   "a superseded tier is flagged STALE, not as an upgrade opportunity"

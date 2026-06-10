@@ -1295,6 +1295,16 @@ assert_exit 0 "$rc" "mine --adopt with no id + no --from: defaults the id and de
 det_spec="$(cat "$(exp_dir_for adopt-opus-4-8)/spec" 2>/dev/null)"
 assert_contains "$det_spec" "model: claude-opus-4-6" "arm A model detected from the most recent transcript"
 
+# default target: no --to → arm B is the launch default (fable-5), and the
+# defaulted id follows it (adopt-fable-5) so the card's CTA stays a bare command.
+env -u ANTHROPIC_MODEL -u CLAUDE_CODE_EFFORT_LEVEL HOME="$sb/fakehome" HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 \
+  "$HE" mine --adopt --repo "$mine_repo" --verify "$VC" --from-effort high --yes >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "mine --adopt with no --to scaffolds against the default target"
+def_spec="$(cat "$(exp_dir_for adopt-fable-5)/spec" 2>/dev/null)"
+assert_contains "$def_spec" "model: claude-fable-5" "default arm B is the current adoption target (fable-5)"
+assert_contains "$def_spec" "'claude-fable-5' @high matches your current" \
+  "the default hypothesis names the fable-5 target"
+
 # ── --sweep: a 3rd effort arm + analyze/report --vs C (the offered frontier) ──
 EXP mine adopt-sweep --adopt --repo "$mine_repo" --verify "$VC" \
   --from claude-opus-4-7 --from-effort xhigh --to claude-opus-4-8 --effort high --sweep --yes >/dev/null 2>&1; rc=$?

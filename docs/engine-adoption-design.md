@@ -1,6 +1,11 @@
 # Engine adoption — "should you use this model in your harness?" — design spec
 
 Status: **locked for build** (2026-06-01). Launch instance: **Opus 4.8**. Target: skill **v0.18.0**.
+Second instance: **Fable 5** (shipped v0.26.0, 2026-06-09) — exercised the §4.2/"future models" generalization
+path: a new snapshot (`data/engine-adoption/fable-5.md`), routing keywords, `mine --adopt` default target,
+and an Opus 4.8 → Fable 5 `MODEL-UPGRADE` arm. One deliberate divergence from the launch framing: Fable 5 is
+**not** same-price (it is 2× Opus 4.8 per token), so its card and audit message lead with cost-per-task and
+the effort lever rather than "same price, better behavior."
 
 The header skill already audits *model choice* (`header-audit` emits `MODEL` / `MODEL-STALE`) and
 already proves harness changes by experiment (`header-experiment`, the `model-swap` kind, the

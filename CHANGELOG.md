@@ -3,6 +3,40 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.26.0 — Fable 5 engine-adoption card (the second instance, priced honestly)
+
+Fable 5 shipped today (System Card: June 9 2026), and the engine-adoption
+motion now treats it first-class, the way Opus 4.8 was treated at its launch:
+
+- **New bundled snapshot** `data/engine-adoption/fable-5.md`, grounded in the
+  Fable 5 / Mythos 5 System Card (SWE-bench Pro 80.0 vs 69.2; FrontierCode #1
+  with "even at medium effort, outperforms every other model at any effort";
+  GraphWalks BFS@1M 79.4 vs 68.1) — plus the caveats the launch coverage
+  won't lead with: the **2× token price** ($10/$50 vs $5/$25), the safeguard
+  **fallback to Opus 4.8** on security-adjacent work (20.9% of Terminal-Bench
+  trials), the §6.3.5 diligence soft spots, and the unattended-run posture
+  (reckless-action rate and grader awareness both slightly above 4.8).
+- **Routing:** `/header fable-5` (also `fable5`, `claude-fable-5`) renders the
+  card; bare `adopt` now renders the newest snapshot (Fable 5); `/header
+  opus-4.8` still renders the Opus card, which now cross-links the tier above.
+- **`mine --adopt` default target** is `claude-fable-5 @high` (`--to
+  claude-opus-4-8` remains the same-price move). No engine changes — the
+  v0.18.0 generalization path ("a `<model>` snapshot + `--to <model>`") held.
+- **`MODEL-UPGRADE`** now fires for **Opus 4.8 → Fable 5**, and the message is
+  honest that this one costs 2× per token (unlike the same-price 4.x → 4.8
+  arm, which still recommends Opus 4.8 first). Fable 5 is the new quiet top
+  tier.
+
+The card's framing deliberately diverges from the Opus 4.8 card: that one was
+"same price, so the decision is behavior"; this one is "the price doubled, so
+the decision is cost-per-task — and the effort lever (Fable @medium ≥ anyone
+@any effort) is what can make it a wash." Both end the same way: prove it on
+your repo with `header-experiment mine --adopt`.
+
++5 tests (audit: 4.8→Fable upgrade fires with the price note, Fable 5 quiet;
+experiment: default `--to` is fable-5 with a fable-named id + hypothesis;
+install: the new snapshot ships). VERSION → 0.26.0.
+
 ## 0.25.0 — deps scan scoped to detected ecosystems (no more phantom gates)
 
 `header-audit deps` emitted its `TOOL` and `GATE` rows **unconditionally**: a
