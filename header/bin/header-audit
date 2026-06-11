@@ -1034,6 +1034,120 @@ SIG
     [ "$tax_count" -gt 0 ] && printf 'CONTEXT-TAX\tskills\t%s\t%s\t%s\tkey=skill-context-tax\n' "$tax_count" "$tax_total" "$(( tax_total / 4 ))"
     ;;
 
+  retro)
+    # Behavioral mining of the user's OWN sessions — the COACH axis, distinct from
+    # waste's pay-for-vs-use accounting. Same input (Claude Code transcripts), same
+    # repo-scope discipline (HEA-435). Emits: window session count, edit-thrash
+    # (files re-edited heavily = rework), failed-tool volume (the gotcha/pitfall
+    # signal), git-workflow tells (stash / branch-switch / reset / force-push /
+    # worktree), and DERIVED capability nudges (RETRO-CAP) that map demonstrated
+    # behavior to the practice that addresses it — worktrees for branch juggling, a
+    # guardrail for repeated failures, compounding memory for ungathered pitfalls.
+    # The SKILL.md coach flow ranks + narrates these; the host supplies per-gotcha
+    # detail from its own session context. Deterministic, read-only; nothing leaves.
+    set -- $args_rest
+    SRC=""; SINCE=""; ALL_PROJECTS=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --input) SRC="${2:-}"; shift 2 ;;
+        --since) SINCE="${2:-}"; shift 2 ;;
+        --all-projects) ALL_PROJECTS=1; shift ;;
+        *) shift ;;
+      esac
+    done
+    stream_cmd=""; nfiles=0
+    if [ -n "$SRC" ]; then
+      [ -f "$SRC" ] || { printf 'NOTE\tretro\tinput file not found: %s\n' "$SRC"; exit 0; }
+      printf 'RETRO-SCOPE\tinput\t%s\n' "$SRC"; nfiles=1
+      stream_cmd="cat \"$SRC\""
+    elif [ -n "$ALL_PROJECTS" ]; then
+      tdir="$HOME/.claude/projects"
+      [ -d "$tdir" ] || { printf 'NOTE\tretro\tno usage history at %s — run some sessions first\n' "$tdir"; exit 0; }
+      ndirs="$(find "$tdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      printf 'RETRO-SCOPE\tglobal\t%s\t%s\tproject dirs\n' "$tdir" "$ndirs"
+      stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
+    else
+      key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
+      tdir="$HOME/.claude/projects/$key"
+      [ -d "$tdir" ] || { printf 'NOTE\tretro\tno transcripts for this repo at %s — run `header-audit retro --all-projects` for machine-wide history\n' "$tdir"; exit 0; }
+      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      printf 'RETRO-SCOPE\trepo\t%s\n' "$REPO"
+      printf 'RETRO-INPUT\t%s\t%s\tfiles\n' "$tdir" "$nfiles"
+      stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
+    fi
+
+    # committed compounding memory present? drives the RETRO-CAP compound nudge.
+    mem_present=0
+    for _m in "$REPO"/.claude/memory/*.md; do [ -f "$_m" ] && { mem_present=1; break; }; done
+
+    if [ -n "$SINCE" ]; then printf 'RETRO-WINDOW\t%s\t%s\n' "$nfiles" "$SINCE"
+    else printf 'RETRO-WINDOW\t%s\n' "$nfiles"; fi
+
+    eval "$stream_cmd" | awk -v since="$SINCE" -v mem_present="$mem_present" '
+      function base(p,  n) { n = p; sub(/.*\//, "", n); return n }
+      {
+        if (since != "" && match($0, /"timestamp":"[^"]*"/)) {
+          ts = substr($0, RSTART + 13, RLENGTH - 14); if (ts < since) next
+        }
+        line = $0
+        # tool_use: count edits per file (thrash); map id->name for error joins.
+        while (match(line, /"type":"tool_use","id":"[^"]*","name":"[^"]*"/)) {
+          blk = substr(line, RSTART, RLENGTH); rest = substr(line, RSTART + RLENGTH)
+          id = blk; sub(/.*"id":"/, "", id); sub(/".*/, "", id)
+          nm = blk; sub(/.*"name":"/, "", nm); sub(/"$/, "", nm)
+          Name[id] = nm; if (!(nm in Calls)) ToolKeys[++ntk] = nm; Calls[nm]++
+          if (nm == "Edit" || nm == "Write" || nm == "NotebookEdit") {
+            seg = substr(rest, 1, 400)
+            if (match(seg, /"file_path":"[^"]*"/)) {
+              fp = substr(seg, RSTART + 13, RLENGTH - 14); b = base(fp)
+              if (!(b in Edits)) EditKeys[++nek] = b; Edits[b]++
+            }
+          }
+          line = rest
+        }
+        # git-workflow tells: count distinctive subcommands anywhere in the line
+        # (they live in Bash command strings; counting is reliable even when the
+        # full command cannot be cleanly extracted from escaped JSON).
+        if ($0 ~ /git stash/)                    Git["stash"]++
+        if ($0 ~ /git (checkout|switch) /)       Git["branch-switch"]++
+        if ($0 ~ /git worktree/)                 Git["worktree"]++
+        if ($0 ~ /git reset --hard/)             Git["reset-hard"]++
+        if ($0 ~ /git push/ && $0 ~ /(--force|-f )/) Git["force-push"]++
+        # tool_result error attribution — positional pairing (per the waste scan).
+        nid = 0; ner = 0; line = $0
+        while (match(line, /"tool_use_id":"[^"]*"/)) { Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16); line = substr(line, RSTART + RLENGTH) }
+        line = $0
+        while (match(line, /"is_error":(true|false)/)) { ErrFlag[++ner] = (substr(line, RSTART, RLENGTH) ~ /true/) ? 1 : 0; line = substr(line, RSTART + RLENGTH) }
+        for (k = 1; k <= nid && k <= ner; k++) if (ErrFlag[k] && (Ids[k] in Name)) Err[Name[Ids[k]]]++
+      }
+      END {
+        # THRASH: heavily re-edited files. Sort desc; surface those >= 5 edits.
+        for (a = 1; a <= nek; a++) for (b = a + 1; b <= nek; b++)
+          if (Edits[EditKeys[b]] > Edits[EditKeys[a]]) { t = EditKeys[a]; EditKeys[a] = EditKeys[b]; EditKeys[b] = t }
+        for (a = 1; a <= nek; a++) { b = EditKeys[a]; if (Edits[b] >= 5) printf "RETRO-THRASH\t%s\t%d\n", b, Edits[b] }
+        # FAILS: per-tool error volume — the gotcha/pitfall signal.
+        bash_fail = 0
+        for (a = 1; a <= ntk; a++) {
+          nm = ToolKeys[a]; e = Err[nm] + 0
+          if (e > 0) printf "RETRO-FAILS\t%s\t%d\t%d\n", nm, e, Calls[nm]
+          if (nm == "Bash") bash_fail = e
+        }
+        # GIT tells, in a fixed order.
+        git_switch = Git["stash"] + Git["branch-switch"] + Git["worktree"]
+        n = split("stash branch-switch worktree reset-hard force-push", GK, " ")
+        for (a = 1; a <= n; a++) { g = GK[a]; if (Git[g] > 0) printf "RETRO-GIT\t%s\t%d\n", g, Git[g] }
+        # DERIVED capability nudges (behavior -> the practice that addresses it).
+        if (git_switch >= 3 && Git["worktree"] == 0)
+          printf "RETRO-CAP\tworktree\t%d branch-juggling events (stash/switch), no worktree use\tkey=cap-worktree\n", git_switch
+        if (bash_fail >= 3)
+          printf "RETRO-CAP\tguardrail\t%d failed Bash calls; a pre-commit gate catches breakage in-loop\tkey=cap-guardrail\n", bash_fail
+        if (bash_fail >= 3 && mem_present == 0)
+          printf "RETRO-CAP\tcompound\t%d gotchas and no committed .claude/memory; capture them via /header wrapup\tkey=cap-compound\n", bash_fail
+      }
+    '
+    ;;
+
   gate)
     eco="$(printf '%s' "$args_rest" | awk '{print $1}')"
     days="$(printf '%s' "$args_rest" | awk '{print $2}')"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
@@ -1190,11 +1304,11 @@ EOF
     ;;
 
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|waste|rails|rail|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|waste|rails|rail|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac
