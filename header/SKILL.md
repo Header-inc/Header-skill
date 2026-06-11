@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.29.0
+version: 0.30.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Also captures session learnings natively: '/header wrapup' (or '/header compound') reviews the session and writes the pitfalls/learnings worth keeping into committed .claude/memory/ — the compounding-memory flywheel, run by Header instead of a separate skill. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Run '/header wrapup' at session end — or '/header compound' anytime (mid-session after something breaks/works, or at the end) — to review the session and capture its learnings/pitfalls into committed .claude/memory/ so future sessions stop re-hitting them; triggers include wrap up, wrapup, session retro/wrap-up, capture learnings, what did we learn, note the pitfalls, compound, remember this for next time. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -162,6 +162,28 @@ touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
 
 Replace `Chosen` with the user's pick. Persisting `English` explicitly is harmless. Always touch the marker so the prompt never fires again. Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
 
+### Register — before the audit
+
+The coach tunes its depth to how technical you are (see Step 4 "Register"). Set it **once**, by *inferring then confirming* — never by asking the user to describe themselves.
+
+If `<HEADER_BIN> get user_level` is **empty** and `${HEADER_HOME:-$HOME/.header}/.register-prompted` is absent (and `INTERACTIVE: yes`):
+
+1. **Infer** from the user's own prompts — machine-wide, since register is a person-property: `<AUDIT> level --all-projects`. Read `LEVEL <verdict> <conf>`, the `LEVEL-SIGNAL coderef` line (the discriminator — files/functions named per prompt), and `LEVEL-EVIDENCE` (a representative prompt). If it returns `NOTE level` (no history yet), **skip** — don't guess from nothing; you'll infer on a later run.
+2. **Confirm** with exactly **one** `AskUserQuestion`, prefilled with the inference and grounded in the evidence (mark the inferred option *recommended*; options in this order):
+   - **"Keep it technical"** — full depth: counts, ledger keys, experiment specs.
+   - **"Lead with outcomes"** — plain language, fewer internals.
+   - **"Mix — technical but outcome-framed"** — the middle.
+   Frame it as a confirmation, citing the evidence: *"You name a file or function ~`<coderef per-prompt>`× per prompt (e.g. ‹evidence›), so you look **<verdict>**. Keep it that way?"* **Never** show an open "describe yourself."
+3. **Persist + mark** (map: technical→`technical`, outcomes→`business`, mix→`mixed`):
+   ```bash
+   <HEADER_BIN> set user_level "<technical|business|mixed>"
+   touch "${HEADER_HOME:-$HOME/.header}/.register-prompted"
+   ```
+
+Skip entirely if `INTERACTIVE: no`, the marker exists, or `user_level` is already set. The verdict is a *starting point* the user confirms — an explicit pick always wins over the inference.
+
+**Post-update ledger refresh (optional, once).** This step doubles as the post-update re-onboarding moment — an existing user reaches it precisely because `user_level` is new and unset. While here, if `<LEDGER> list` shows rows from before the coach finding shapes, you may offer a one-time `<LEDGER> reset` (archives to a `.bak-*`, never destroys) so cross-run dedup starts clean. Keep it **optional and low-key** — "your recommendation history predates the new coach findings; reset it to start fresh? (optional)" — then `touch "${HEADER_HOME:-$HOME/.header}/.ledger-reset-offered"` so it's asked only once, whatever they choose.
+
 ## Staying up to date
 
 Driven by the preamble's `UPDATE_CHECK` line. Handle it **right after the preamble, before the audit** — an out-of-date skill may not work against the API. If there was no `UPDATE_CHECK` line, skip this section. Both branches use `<HEADER_BIN>`.
@@ -300,7 +322,7 @@ From the JSON, pull `summary`, `key_developments`, `source_articles` (title + ur
 
 ### Step 3 — Run the audit
 
-Local, read-only — nothing leaves the machine. Run **all five** scans. `<AUDIT>` is `header-audit`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
+Local, read-only — nothing leaves the machine. Run **all six** scans. `<AUDIT>` is `header-audit`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
 
 ```bash
 <AUDIT> harness          # CLAUDE.md / AGENTS.md (+ @imports) / settings / hooks / skills / commands / subagents / MCP / Bash posture / model staleness / stale refs
@@ -308,15 +330,36 @@ Local, read-only — nothing leaves the machine. Run **all five** scans. `<AUDIT
 <AUDIT> cost             # spend-by-model from your real transcripts → top model-routing candidate
 <AUDIT> waste            # usage accounting from the same transcripts: unused MCP servers / skills, tool error rates, compaction pressure, skill context tax
 <AUDIT> rails            # determinism guardrails present|absent (pre-commit gate / test ratchet / compounding memory) — opinionated, additive
+<AUDIT> retro            # behavioral mining of your own sessions: edit-thrash, gotcha volume, git-workflow tells, ranked capability nudges (worktree / guardrail / compound) — the coach lead
 ```
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in `key_developments`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. **Proven rows:** when the briefing carries cross-customer evidence for a pattern (a measured effect from the proven-changes library), write a 6-field row instead — `id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` — and `harness` re-emits the evidence as a `PROVEN` line (a proven row may reuse a built-in id to attach evidence to it; the scan de-duplicates by id, first wins). Keep regexes conservative (`grep -iE`); malformed lines (not exactly 3 or 6 tab fields, or a non-integer `n_repos`) are skipped. This is how the distribution wedge feeds new hypotheses — and proven library results — into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`, `RETRO-SCOPE`, `RETRO-INPUT`, `RETRO-WINDOW`, `RETRO-THRASH`, `RETRO-FAILS`, `RETRO-GIT`, `RETRO-CAP`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
 
 ### Step 4 — Cross-reference and present
 
-The audit's findings + the briefing's items become **one ranked recommendation list**.
+The audit's findings + the briefing's items become a ranked list — but the **front door is the coach, not the config audit.** Render the default `/header` output as a **coach lead** (this subsection), then the existing scorecard + config recommendations as the **audit tail** below. The session-review feedback was unambiguous: what lands is *behavioral* (what happened, what to learn, what to do differently); what falls flat is config-artifact accounting (line counts, gates, dollar tables). So lead behavioral, demote config.
+
+#### Coach lead — render first, in this fixed order
+
+Built from `<AUDIT> retro` (+ your own session context). Heading: `## 🧭 Header — <repo basename>`.
+
+1. **Position — wrapup or setup.** *Wrapup*: substantial work already happened in *this* session (it's in your context) → open with what this session did, and close the lead by offering `/header compound` to capture its learnings. *Setup*: a fresh session → open with the week's pattern from the transcripts. A session with prior tool use is a wrapup. (If `<AUDIT> retro` returned only a `NOTE` — no transcripts for this repo yet — skip the week read; do the session-context parts and say machine-wide history is available via `retro --all-projects`.)
+
+2. **This week, in one read** — 2–4 plain-language lines: `RETRO-WINDOW` (sessions + window) + what the work was about. No token counts here.
+
+3. **⚠️ Gotchas & pitfalls** — `RETRO-FAILS` volume + the *actual* failing moments (your own session context for a wrapup; the recent transcript otherwise). Each: what bit, the one-line fix; if the learning is durable, note `/header wrapup` would capture it. `RETRO-FAILS` 0 errors → "clean week," don't invent gotchas to fill the section.
+
+4. **🎯 Best practices for you — ranked by `RETRO-CAP`** (emission order = order of demonstrated need; render only the caps that fired). `worktree` → recommend git worktrees, citing the branch-juggling count. `guardrail` → recommend `<AUDIT> rail precommit-gate`, citing the failed-call count (if `RAIL precommit-gate` is already present, **affirm** it, don't re-pitch). `compound` → recommend `/header wrapup` + seeding `.claude/memory/`, citing the gotcha count + absent memory. All `[Apply with review]`; use each `key=cap-<name>` verbatim in the ledger. A weak cap (low count) → rank it low and **say it's weak**; never hard-sell — that anti-upsell discipline is exactly what the Fable-5 card got wrong.
+
+5. **🧪 Bigger experiments** *(opt-in depth)* — one or two `[Experiment]` items (model routing from `ROUTE-CANDIDATE`, engine adoption), framed "want me to prove it?" Below the practices, never above.
+
+**Register** — tune depth to `<HEADER_BIN> get user_level` (see "First-run onboarding"): **business** → plain language, hide ledger keys / token math / line counts, lead with outcomes; **technical** → full depth (keys, counts, experiment specs); **mixed** / unset → middle. The coach lead is the same; only the register changes.
+
+#### Audit tail — the config scorecard, demoted (still rendered)
+
+After the coach lead, render the **spend + scorecard + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** For a **business** register, collapse this tail to the 1–2 highest-value items + "(more in the full audit — just ask)". Spend leads *this* section — the "open with the money" rule below applies here, not at the top of the report.
 
 **Recent activity (diff-aware):** glance at recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`). Weight recommendations toward areas with recent activity — a briefing item or audit hit that touches code the user changed this week is more actionable than one about a dormant corner. Name the connection when you surface it.
 
@@ -450,6 +493,8 @@ Record each recommendation's disposition so future runs adapt. Skip when `<HEADE
 <LEDGER> record snoozed   "<key>"    # "not now"
 <LEDGER> record wanted    "<key>"    # an [Experiment] the user wants (and isn't running locally via header-experiment)
 ```
+
+**Reset (start fresh after a finding-shape change).** When a Header update introduces new finding keys or retires old ones (e.g. the `cap-*` / `RETRO-*` coach findings, or the STALE-REF precision pass that orphaned the old false-positive `stale-ref-*` entries), the ledger can carry stale rows. `<LEDGER> reset` **archives** the current `ledger.jsonl` to a timestamped `.bak-*` (never destroys) and starts fresh. Offer it once, optionally — the canonical keys are stable, so this is a cleanup, not a requirement (see "Register — before the audit" for the one-time post-update prompt).
 
 All ledger writes are best-effort, local-only, and never block the audit. They land under `${HEADER_HOME:-$HOME/.header}` (`ledger.jsonl`, `.last-run`, `credentials`, onboarding markers). Under a restrictive filesystem sandbox — notably Codex `workspace-write`, which usually excludes `~/.header` — these writes silently no-op; the preamble's `HEADER_STATE: readonly` line flags this, and the fix is to make `${HEADER_HOME:-$HOME/.header}` writable (add it to the sandbox's writable roots) or set `HEADER_HOME` to a writable path.
 
@@ -709,10 +754,25 @@ The **constructive** scan: where `harness`/`deps`/`cost` find debt to remove, `r
 ```bash
 <AUDIT> rail precommit-gate --ecosystem <eco> --delivery <git|pretooluse|both> [--ratchet on|off]
 <AUDIT> rail test-ratchet                 # the standalone ratchet block, to insert into an existing gate
-<AUDIT> rail compound-memory              # the /compound skill + a seed .claude/memory/MEMORY.md
+<AUDIT> rail compound-memory              # native /header wrapup pointer + a seed .claude/memory/MEMORY.md (standalone /compound skill optional)
 ```
 
 Like `gate npm 7` prints the `.npmrc`, `rail <name>` prints the ready artifact — stack-adapted from the `header/scaffold/` templates, with the chosen delivery wiring appended. `precommit-gate` bundles the test ratchet by default (`--ratchet off` to omit); the correctness-critical bits (the `git commit` detector, the corrected skip/xfail regex) travel verbatim in the template. An unknown ecosystem still prints a usable gate with a `TODO` checks block. The SKILL.md flow writes the files; the bin only prints.
+
+### `header-audit retro`
+
+The **coach** scan: behavioral mining of the user's OWN sessions — the signals the accounting scans (`cost`/`waste`) don't surface. Same repo-scope discipline (this repo's transcript dir by default; a missing dir is a `NOTE`; `--all-projects` is the global opt-in; `--since T` windows it; `--input F` reads an explicit JSONL). Read-only; nothing leaves. Output lines:
+
+- `RETRO-SCOPE` / `RETRO-INPUT` — same scope semantics as `cost`/`waste`; a `global` scope is background, never a per-repo claim.
+- `RETRO-WINDOW <n_sessions> [<since>]` — sessions in the window.
+- `RETRO-THRASH <file> <edits>` — a file re-edited ≥5 times: a rework signal (the agent not landing it first pass), sorted desc. Heavy thrash on one file alongside a heavy always-loaded `FILE` + non-zero `COMPACTIONS` is the practical argument to split it.
+- `RETRO-FAILS <tool> <errors> <calls>` — failed-tool volume. **Bash errors are the gotcha/pitfall signal** — the count is precise (error attribution), but the *narrative* (what actually broke) you read from your own session context (a wrapup) or the recent transcript. 0 errors → a clean week; say so, don't invent gotchas to fill the section.
+- `RETRO-GIT <pattern> <count>` — git-workflow tells (`stash`, `branch-switch`, `worktree`, `reset-hard`, `force-push`). **Interpret, don't verdict** (à la `ERROR-RATE`): counts include git strings that appear in tool inputs (test fixtures, examples), so treat `reset-hard`/`force-push` as soft signals. The CAP derivations below key only off `stash`/`branch-switch`/`worktree` and precise error attribution.
+- `RETRO-CAP <capability> <evidence> key=cap-<capability>` — the **derived** behavior→practice nudges, the ranked spine of the coach lead. Three, each emitted only when its threshold is met:
+  - `worktree` — ≥3 branch-juggling events (stash/switch) and **no** worktree use → recommend git worktrees.
+  - `guardrail` — ≥3 failed Bash calls → recommend the `precommit-gate` rail (cross-check `RAIL precommit-gate`; **affirm** it if already present).
+  - `compound` — ≥3 gotchas **and** no committed `.claude/memory/` → recommend `/header wrapup`.
+  Render only the caps that fired, in emission order (= order of demonstrated need). Each carries `key=cap-<name>` — use it verbatim in the ledger. A weak cap (low count) → rank it low and **say it's weak**; never hard-sell (the anti-upsell discipline that the engine-adoption upsell got wrong).
 
 ### Record findings
 

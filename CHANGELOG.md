@@ -3,6 +3,41 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.30.0 — the coach front door: lead with behavior, demote the audit
+
+The answer to "nothing was mindblowing." `/header` now opens with a **coach read
+of your own sessions** — what happened this week, what bit you, what to do
+differently — and demotes the config audit (line counts, gates, dollar tables) to
+a hygiene tail. The behavioral data layer (`header-audit retro`) landed the prior
+commit; this wires it into the render and makes it the front door.
+
+- **Coach lead (Step 4), pinned order.** Position-detect *wrapup* vs *setup* →
+  "this week, in one read" → ⚠️ gotchas & pitfalls (from `RETRO-FAILS` + your own
+  session context) → 🎯 best practices **ranked by `RETRO-CAP`** (the behavior→
+  practice mapping — worktree / guardrail / compound, only the caps that fired,
+  weak ones ranked low and *said* to be weak: the anti-upsell discipline the
+  Fable-5 card got wrong) → 🧪 bigger experiments (opt-in depth) → 🧹 the config
+  scorecard, demoted but rendered intact. `<AUDIT> retro` joins the scan set.
+
+- **A register that fits the reader (`user_level`).** New `header-audit level`
+  infers technical | business | mixed from the user's *own* prompts — keying off
+  code-reference density (do they name a file/function, or frame an outcome?),
+  machine-wide since register is a person-property. A one-time onboarding step
+  **confirms** the inference, grounded in a real prompt of theirs, rather than
+  asking them to describe themselves — then stores `user_level`. The coach lead
+  tunes depth to it: business → plain language, hide keys/token-math; technical →
+  full depth; mixed → middle. This is the actual fix for the less-technical user
+  who got a technical report: the skill had exactly one register.
+
+- **Post-update re-onboarding + ledger reset.** Existing users reach the register
+  confirm automatically (`user_level` ships unset). `header-ledger reset` archives
+  the ledger (timestamped `.bak-*`, never destroys) so cross-run dedup starts
+  clean on the new finding shapes — offered once, optionally, from that same step.
+
++12 assertions (level, register config, ledger reset) atop the retro foundation's
+17. Validated on real transcripts; awk cross-checked across gawk/mawk. Green on
+the Linux + macOS (Bash 3.2 / BSD awk) CI matrix. VERSION → 0.30.0.
+
 ## 0.29.0 — `/header wrapup` + `/header compound`: native session capture
 
 The feedback that started this thread — "nothing was mindblowing," from a

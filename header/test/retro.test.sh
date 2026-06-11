@@ -62,4 +62,27 @@ fix3="$sb/s3.jsonl"
 R4="$(HOME="$sb" "$AU" retro --repo "$repo" --input "$fix3")"
 assert_not_contains "$R4" $'RETRO-THRASH\tbar.ts' "a file edited only twice is below the thrash threshold"
 
+# ── level: technical register inference from the user's OWN typed prompts ──
+techf="$sb/tech.jsonl"; bizf="$sb/biz.jsonl"
+{
+  printf '%s\n' '{"type":"user","message":{"content":"the regex in `header-audit` is wrong — fix the gsub in foo.ts and rerun pytest on test/run.sh"}}'
+  printf '%s\n' '{"type":"user","message":{"content":"refactor parseConfig() to handle the json schema; the commit broke the branch, git rebase onto main"}}'
+  printf '%s\n' '{"type":"user","message":{"content":"why does `npm test` fail at src/index.ts — check the async function and the stderr"}}'
+} > "$techf"
+{
+  printf '%s\n' '{"type":"user","message":{"content":"make the pricing page clearer so customers convert better, this is for our launch"}}'
+  printf '%s\n' '{"type":"user","message":{"content":"the messaging needs to resonate with our audience and drive adoption and growth"}}'
+  printf '%s\n' '{"type":"user","message":{"content":"can we make the onboarding feel more premium so users stick around and retention improves"}}'
+} > "$bizf"
+LT="$(HOME="$sb" "$AU" level --input "$techf")"
+assert_contains "$LT" $'LEVEL\ttechnical' "code-reference-dense prompts → technical register"
+assert_contains "$LT" $'LEVEL-EVIDENCE\t' "a representative prompt is surfaced as evidence (grounds the confirm)"
+LB="$(HOME="$sb" "$AU" level --input "$bizf")"
+assert_contains "$LB" $'LEVEL\tbusiness' "outcome-framed prompts with no code refs → business register"
+# array (tool_result) content is NOT a typed prompt — must not read as technical
+arrf="$sb/arr.jsonl"
+printf '%s\n' '{"type":"user","message":{"content":[{"tool_use_id":"x","type":"tool_result","content":[{"type":"text","text":"git commit refactor schema endpoint pytest"}]}]}}' > "$arrf"
+LA="$(HOME="$sb" "$AU" level --input "$arrf")"
+assert_contains "$LA" $'NOTE\tlevel' "tool_result (array) content is not a typed prompt → NOTE, no false read"
+
 t_done

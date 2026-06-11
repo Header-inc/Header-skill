@@ -1148,6 +1148,83 @@ SIG
     '
     ;;
 
+  level)
+    # Technical register inference from the user's OWN typed prompts — for the
+    # coach onboarding confirm ("we think you're X, right?"), never an open
+    # "describe yourself". A person-property, so it defaults to MACHINE-WIDE
+    # (all projects); --repo-scope narrows to this repo, --input reads a JSONL.
+    # The discriminator that matters is code-reference density (do they name a
+    # file/function/path, or frame an outcome?); the tech/biz lexicons are a
+    # tiebreaker. Read-only; the prompt text never leaves the machine — LEVEL-
+    # EVIDENCE is shown back to the user locally to ground the confirm.
+    set -- $args_rest
+    SRC=""; REPO_SCOPE=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --input) SRC="${2:-}"; shift 2 ;;
+        --repo-scope) REPO_SCOPE=1; shift ;;
+        *) shift ;;
+      esac
+    done
+    if [ -n "$SRC" ]; then
+      [ -f "$SRC" ] || { printf 'NOTE\tlevel\tinput file not found: %s\n' "$SRC"; exit 0; }
+      scope="input"; stream_cmd="cat \"$SRC\""
+    elif [ -n "$REPO_SCOPE" ]; then
+      key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
+      tdir="$HOME/.claude/projects/$key"
+      [ -d "$tdir" ] || { printf 'NOTE\tlevel\tno transcripts for this repo yet\n'; exit 0; }
+      scope="repo"; stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
+    else
+      tdir="$HOME/.claude/projects"
+      [ -d "$tdir" ] || { printf 'NOTE\tlevel\tno usage history yet — run some sessions first\n'; exit 0; }
+      scope="global"; stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
+    fi
+
+    eval "$stream_cmd" | awk -v scope="$scope" '
+      {
+        if ($0 !~ /"type":"user"/) next
+        ci = index($0, "\"content\":\"")
+        if (ci == 0) next                       # array content (tool_result) → not a typed prompt
+        s = substr($0, ci + 11)
+        if (s ~ /^</ || s ~ /^Caveat/ || s ~ /local-command/ || s ~ /^\[Request/) next
+        if (length(s) < 12) next
+        nprompts++
+        nwords += split(s, W, /[^A-Za-z0-9_]+/) - 1
+        # Count on a throwaway copy (t) with an empty replacement: gsub returns the
+        # match count without touching s, so the four passes stay independent (no
+        # tech-term eating a later coderef extension). Avoids the &-escaping footgun.
+        t = s; tech += gsub(/git|commit|branch|rebase|refactor|regex|async|schema|endpoint|pytest|stderr|parser|json|yaml|function|opus|sonnet|fable|haiku|token|deploy|npm|docker|webpack|kubernetes|merge|lint|compiler|runtime/, "", t)
+        t = s; biz  += gsub(/customer|revenue|users|growth|launch|market|pricing|business|stakeholder|positioning|adoption|messaging|brand|audience|conversion|retention|roadmap/, "", t)
+        t = s; c  = gsub(/`[^`]+`/, "", t)
+        t = s; c += gsub(/[A-Za-z0-9_]+\.(py|md|sh|ts|js|json|go|rb|rs|ya?ml|tsx|jsx|cpp|toml)/, "", t)
+        t = s; c += gsub(/[A-Za-z_][A-Za-z0-9_]*\([A-Za-z0-9_ ,]*\)/, "", t)
+        t = s; c += gsub(/\/[a-z][a-z0-9_]*\/[a-z]/, "", t)
+        cref += c
+        if (c > ev_max) { ev_max = c; e = substr(s, 1, 200); gsub(/[ \t\r\n]+/, " ", e); sub(/"[}\] ]*$/, "", e); ev = e }
+      }
+      END {
+        if (nprompts == 0) { print "NOTE\tlevel\tno typed prompts found in the window"; exit }
+        cref_pp = cref / nprompts
+        techd = (nwords > 0) ? tech / nwords * 1000 : 0
+        bizd  = (nwords > 0) ? biz  / nwords * 1000 : 0
+        denom = (biz > 0) ? biz : 1
+        if ((tech + cref) >= 3 * denom && cref_pp >= 1)  level = "technical"
+        else if (biz > tech && cref_pp < 1)              level = "business"
+        else                                             level = "mixed"
+        conf = "medium"
+        if (nprompts < 3)                                    conf = "low"
+        else if (level == "technical" && cref_pp >= 6)       conf = "high"
+        else if (level == "business" && biz >= 2 * (tech+1)) conf = "high"
+        printf "LEVEL-INPUT\t%s\t%d\t%d\n", scope, nprompts, nwords
+        printf "LEVEL-SIGNAL\ttechnical\t%d\t%.1f\n", tech, techd
+        printf "LEVEL-SIGNAL\tbusiness\t%d\t%.1f\n", biz, bizd
+        printf "LEVEL-SIGNAL\tcoderef\t%d\t%.1f\n", cref, cref_pp
+        printf "LEVEL\t%s\t%s\n", level, conf
+        if (ev != "") printf "LEVEL-EVIDENCE\t%s\n", ev
+      }
+    '
+    ;;
+
   gate)
     eco="$(printf '%s' "$args_rest" | awk '{print $1}')"
     days="$(printf '%s' "$args_rest" | awk '{print $2}')"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
@@ -1304,11 +1381,11 @@ EOF
     ;;
 
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|level|rails|rail|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|level|rails|rail|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac

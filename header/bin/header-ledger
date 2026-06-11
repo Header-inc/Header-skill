@@ -189,12 +189,29 @@ case "$cmd" in
       }'
     ;;
 
+  reset)
+    # Archive the current ledger and start fresh — for when finding shapes change
+    # (a Header update introduces new keys / retires old ones) and stale dedup
+    # entries should not linger. Best-effort, local-only; never destroys (archives).
+    if [ -f "$LEDGER" ]; then
+      n="$(grep -c . "$LEDGER" 2>/dev/null || echo 0)"
+      bak="$LEDGER.bak-$(date +%Y%m%d%H%M%S 2>/dev/null || echo old)"
+      if mv "$LEDGER" "$bak" 2>/dev/null; then
+        echo "ledger: archived $n entries → $bak; starting fresh"
+      else
+        echo "ledger: could not archive (read-only state dir?)" >&2; exit 1
+      fi
+    else
+      echo "ledger: nothing to reset (no ledger yet)"
+    fi
+    ;;
+
   -h|--help)
-    echo "Usage: header-ledger {record|status|get|list} ..."
+    echo "Usage: header-ledger {record|status|get|list|reset} ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-ledger {record|status|get|list} ..." >&2
+    echo "Usage: header-ledger {record|status|get|list|reset} ..." >&2
     exit 1
     ;;
 esac

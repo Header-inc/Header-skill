@@ -76,6 +76,7 @@ lookup_default() {
     telemetry)               echo "off" ;;
     auto_tune)               echo "false" ;;
     repo_memory)             echo "true" ;;     # remember a repo's bound topic across sessions
+    user_level)              echo "" ;;        # empty → not yet set; the coach onboarding detects + confirms it. technical|business|mixed
     experiment_sync)         echo "off" ;;      # off (default): never syncs — matches the telemetry/consent posture. auto: when an API key is present, sync each experiment edit to the account. Opt in explicitly.
     aggregate_submit)        echo "off" ;;      # on: after each analyze, submit the ANONYMIZED effect size to the cross-customer library. off (default): never.
     *)                       echo "" ;;
@@ -83,7 +84,7 @@ lookup_default() {
 }
 
 # Keys recognized by `list` and `defaults` (the personal config surface).
-KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory experiment_sync aggregate_submit"
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory experiment_sync aggregate_submit user_level"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 # A topic id is a UUID or bare slug — hyphens allowed (config keys are not).
@@ -147,6 +148,9 @@ case "${1:-}" in
     fi
     if [ "$KEY" = "aggregate_submit" ]; then
       case "$VALUE" in on|off) ;; *) echo "header-config: aggregate_submit must be on|off; using off" >&2; VALUE="off" ;; esac
+    fi
+    if [ "$KEY" = "user_level" ]; then
+      case "$VALUE" in technical|business|mixed) ;; *) echo "header-config: user_level must be technical|business|mixed; using mixed" >&2; VALUE="mixed" ;; esac
     fi
     upsert "$CONFIG_FILE" "$CONFIG_HEADER" "$KEY" "$VALUE"
     ;;

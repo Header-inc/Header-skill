@@ -134,4 +134,15 @@ assert_eq "applied" "$(HEADER_HOME="$HH3" "$LG" status lit-key --repo custom-nam
 assert_contains "$(cat "$HH3/ledger.jsonl")" '"repo":"custom-name"' \
   "a non-directory --repo is written literally"
 
+# ── reset: archive the ledger and start fresh (post-update finding-shape change) ──
+HHR="$sb/.header-reset"
+HEADER_HOME="$HHR" "$LG" record surfaced gate-npm --repo r --title "x" >/dev/null
+HEADER_HOME="$HHR" "$LG" record surfaced cap-worktree --repo r --title "y" >/dev/null
+out_reset="$(HEADER_HOME="$HHR" "$LG" reset)"
+assert_contains "$out_reset" "archived 2 entries" "reset reports how many entries it archived"
+assert_eq "no" "$([ -f "$HHR/ledger.jsonl" ] && echo yes || echo no)" "reset removes the live ledger (fresh start)"
+assert_eq "1" "$(ls "$HHR"/ledger.jsonl.bak-* 2>/dev/null | wc -l | tr -d ' ')" "reset archives to a timestamped backup (never destroys)"
+assert_eq "none" "$(HEADER_HOME="$HHR" "$LG" status gate-npm --repo r)" "after reset, prior keys read as 'none' (history archived)"
+assert_contains "$(HEADER_HOME="$HHR" "$LG" reset)" "nothing to reset" "reset on an empty ledger is a graceful no-op"
+
 t_done
