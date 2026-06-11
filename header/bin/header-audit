@@ -1122,11 +1122,12 @@ EOF
             else print "# (test ratchet not included — add later: header-audit rail test-ratchet)"
             next }
         /^#==COMPOUND==$/ {
-            print "# ── (optional) /compound gate — require a session-learning review per commit ──"
-            print "# Off by default. To enforce: uncomment, and have /compound run `touch .claude/.compound_ran`"
-            print "# (cleared in a post-commit hook). See Header scaffold/compound/SKILL.md."
+            print "# ── (optional) compound gate — require a session-learning review per commit ──"
+            print "# Off by default. To enforce: uncomment, and have /header wrapup (or a standalone"
+            print "# /compound) run `touch .claude/.compound_ran` (cleared in a post-commit hook)."
+            print "# See the Session wrap-up & compound flow in the Header skill."
             print "# if [ ! -f .claude/.compound_ran ]; then"
-            print "#   fail \"/compound not run for this commit — invoke /compound, then retry\"; exit 2"
+            print "#   fail \"compound not run for this commit — invoke /header wrapup, then retry\"; exit 2"
             print "# fi"
             next }
         { print }
@@ -1166,15 +1167,20 @@ EOF
         cat "$SCAFFOLD/ratchet.sh"
         ;;
       compound-memory)
-        echo "# ===== compounding memory — install the /compound skill + a seed memory index ====="
-        echo "# 1. Create the skill file:"
-        echo "# ----- FILE: .claude/skills/compound/SKILL.md -----"
-        cat "$SCAFFOLD/compound/SKILL.md"
-        printf '\n# 2. Seed the committed memory index (skip if .claude/memory/MEMORY.md already exists):\n'
+        echo "# ===== compounding memory — capture session learnings into committed .claude/memory/ ====="
+        echo "# Header runs this natively: '/header wrapup' at session end (or '/header compound'"
+        echo "# anytime) reviews the session and writes the pitfalls/learnings worth keeping here."
+        echo "# No separate skill to install. This just seeds the committed index it writes to."
+        printf '\n# 1. Seed the committed memory index (skip if .claude/memory/MEMORY.md already exists):\n'
         echo "# ----- FILE: .claude/memory/MEMORY.md -----"
         cat "$SCAFFOLD/compound/MEMORY.md"
-        printf '\n# 3. Run /compound at session end (and after notable events). Optional: enable the\n'
-        echo "#    /compound commit gate in scripts/pre-commit-gate.sh to require it per commit."
+        printf '\n# 2. Run /header wrapup at session end (and /header compound after notable events).\n'
+        echo "#    Optional: enable the compound commit gate in scripts/pre-commit-gate.sh to"
+        echo "#    require a capture review per commit."
+        printf '\n# 3. (Optional) For sessions that do NOT use Header, install a standalone /compound\n'
+        echo "#    skill that mirrors the native flow:"
+        echo "# ----- FILE: .claude/skills/compound/SKILL.md -----"
+        cat "$SCAFFOLD/compound/SKILL.md"
         ;;
       *)
         echo "header-audit: rail <precommit-gate|test-ratchet|compound-memory> [--ecosystem E] [--delivery git|pretooluse|both] [--ratchet on|off]" >&2

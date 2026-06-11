@@ -113,10 +113,16 @@ assert_contains "$TR" "Test ratchet" "test-ratchet prints the ratchet block"
 assert_contains "$TR" 'xfail\([[:space:]]*[a-zA-Z_]' "ratchet carries the corrected kwarg-only xfail regex"
 
 # ── rail printer: compound-memory ─────────────────────────────
+# Native-first (v0.29.0): the rail leads with /header wrapup (Header runs capture
+# itself), seeds the committed index, and offers the standalone /compound skill
+# only as an option for sessions that don't use Header.
 CM="$(HOME="$sb" "$AU" rail compound-memory)"
-assert_contains "$CM" ".claude/skills/compound/SKILL.md" "compound-memory prints the skill file path"
-assert_contains "$CM" "name: compound" "compound-memory prints the compound skill frontmatter"
-assert_contains "$CM" ".claude/memory/MEMORY.md" "compound-memory prints the seed index path"
+assert_contains "$CM" "/header wrapup" "compound-memory leads with the native /header wrapup capture"
+assert_contains "$CM" "/header compound" "compound-memory names the native /header compound verb"
+assert_contains "$CM" "natively" "compound-memory frames capture as native, not a skill install"
+assert_contains "$CM" ".claude/memory/MEMORY.md" "compound-memory still seeds the committed index path"
+assert_contains "$CM" ".claude/skills/compound/SKILL.md" "compound-memory still offers the standalone skill (optional)"
+assert_contains "$CM" "name: compound" "the standalone skill carries its frontmatter"
 
 # ── canonical ledger keys: absent rails only ──────────────────
 # An absent rail is a recommendation → it pre-mints the documented ledger key

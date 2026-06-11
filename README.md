@@ -113,6 +113,15 @@ Add a short word at the end to switch what gets shown — the audit always runs 
 | `sources`, `links` | Just the briefing's `source_articles`. No audit output. |
 | _none_ (default) | Full output: scorecard + audit + briefing-enriched recommendations. |
 
+### Session wrap-up & capture learnings (beta)
+
+```
+/header wrapup      # session-end ritual: short recap, then capture
+/header compound    # capture only — run anytime (mid-session or at the end)
+```
+
+Header captures what a session learned into the repo's **committed `.claude/memory/`**, so a pitfall you hit once is one a future session — yours or a teammate's — won't re-hit. It runs this natively (no separate skill to install): it reviews the session, pulls the few learnings worth keeping (a user correction, an approach that worked, something that broke, a project fact), de-dupes against the existing index, **drafts** the entries, and asks once before writing — you choose **commit (shared with your team)**, write-but-local, or skip. `/header wrapup` recaps what the session did first; `/header compound` goes straight to capture and is handy mid-session right after something breaks or a workaround lands. This is the compounding-memory rail, promoted to a first-class command.
+
 ### Cost analytics (beta)
 
 ```

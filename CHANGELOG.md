@@ -3,6 +3,46 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.29.0 — `/header wrapup` + `/header compound`: native session capture
+
+The feedback that started this thread — "nothing was mindblowing," from a
+less-technical user — kept pointing at one thing: the parts that *did* land were
+behavioral (end-of-session analysis, learnings, pitfalls), and they came from the
+audit's weakest-instrumented corner. Compound-memory was rail #3 of 3, and all the
+audit did was **recommend you install a separate `/compound` skill**. This release
+makes Header *run* that capture itself — the cheapest, most on-thesis win, and
+verbatim what the feedback asked for ("more session analysis at the end wrap up" +
+"finding learnings, noting pitfalls").
+
+- **Two new first-class flows, routed like the engine-adoption card.**
+  `/header wrapup` (also `wrap-up`, `wrap`) and `/header compound` switch to a
+  *capture* flow instead of the audit. `compound` is capture-only (run it
+  mid-session after something breaks/works, or at the end); `wrapup` adds a 2–4
+  line session recap first (the seed of the fuller coach retro to come). Both
+  review the session from the host's own context and write the learnings worth
+  keeping into the repo's committed `.claude/memory/`.
+
+- **The flow is pinned, not improvised** (the 0.27 determinism discipline applied
+  to a new surface): locate/seed `.claude/memory/` → pull ≤3 learnings by category
+  (`feedback_`/`pattern_`/`pitfall_`/`domain_`, most sessions 0–2, don't force it)
+  → de-dupe against the `MEMORY.md` index → draft each in a fixed file template →
+  **draft-then-ask** (one `AskUserQuestion`; the locked default — a "just write"
+  opt-in comes later) → write + index. The capture disposition is the user's
+  choice: **write + stage (team — committed memory travels to teammates)**, write
+  uncommitted (just me), show full files first, or skip. Files are written via
+  Bash, so the skill's `Bash, AskUserQuestion` permission surface is unchanged.
+
+- **The `compound-memory` rail is reframed from referral to native command.**
+  `header-audit rail compound-memory` now leads with "Header runs this natively —
+  `/header wrapup`", seeds the committed index, and offers the standalone
+  `/compound` skill only as an option for repos whose sessions don't use Header.
+  The optional pre-commit compound gate and the rails table/install-flow prose
+  follow suit. We stop selling someone else's flywheel and run our own.
+
++6 rails assertions (printer leads native, still seeds the index + offers the
+standalone skill). Frontmatter `description`/`when_to_use` carry the new triggers.
+All 16 suites green on the Linux + macOS CI matrix. VERSION → 0.29.0.
+
 ## 0.28.0 — trust repairs: STALE-REF precision + experiment_sync ships off
 
 Two fixes aimed at the audit's trust surface, both surfaced by real session

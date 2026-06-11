@@ -1,7 +1,7 @@
 # Memory Index
 
 Committed, compounding memory for this repo. Future sessions read this first.
-Each entry is one file under `.claude/memory/`; the `/compound` skill adds them.
+Each entry is one file under `.claude/memory/`; `/header compound` adds them.
 Keep each line one scannable, actionable sentence.
 
 ## Feedback

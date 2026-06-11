@@ -1,8 +1,8 @@
 ---
 name: header
-version: 0.28.0
-description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
-when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
+version: 0.29.0
+description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Also captures session learnings natively: '/header wrapup' (or '/header compound') reviews the session and writes the pitfalls/learnings worth keeping into committed .claude/memory/ — the compounding-memory flywheel, run by Header instead of a separate skill. Public access needs no auth; authenticated workflows use an API key."
+when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Run '/header wrapup' at session end — or '/header compound' anytime (mid-session after something breaks/works, or at the end) — to review the session and capture its learnings/pitfalls into committed .claude/memory/ so future sessions stop re-hitting them; triggers include wrap up, wrapup, session retro/wrap-up, capture learnings, what did we learn, note the pitfalls, compound, remember this for next time. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
 allowed-tools: Bash, AskUserQuestion
 ---
@@ -247,7 +247,11 @@ Configuration resolves in this order, highest priority first: **environment vari
 
 Every invocation runs this flow. The audit is local and read-only; the briefing is fetched from Header for enrichment.
 
-> **Mode routing:** the audit always runs. A short word at the end of the invocation switches **what gets shown**, not what gets done: `summary` → render only the briefing's `summary` field, no audit output; `sources` → only `source_articles`, no audit output; `add-source <url>` → see "Add a source"; `since-last` → see "Since-last digest"; `cost` → see "Cost analytics". One argument is special-cased to a *different* flow: `fable-5` (also `fable5`, `claude-fable-5`), `opus-4.8` (also `opus-4-8`), or `adopt` → render the **engine-adoption card** (see "Engine-adoption card (`/header fable-5`)"), a self-contained "should you move your harness to this model?" answer — not a topic; bare `adopt` renders the newest snapshot (Fable 5). Anything else (a topic name/UUID/briefing URL, or no argument) runs the full audit-led flow below.
+> **Mode routing:** the audit always runs. A short word at the end of the invocation switches **what gets shown**, not what gets done: `summary` → render only the briefing's `summary` field, no audit output; `sources` → only `source_articles`, no audit output; `add-source <url>` → see "Add a source"; `since-last` → see "Since-last digest"; `cost` → see "Cost analytics". Some arguments are special-cased to a *different* flow, not a display mode:
+- `fable-5` (also `fable5`, `claude-fable-5`), `opus-4.8` (also `opus-4-8`), or `adopt` → render the **engine-adoption card** (see "Engine-adoption card (`/header fable-5`)"), a self-contained "should you move your harness to this model?" answer — not a topic; bare `adopt` renders the newest snapshot (Fable 5).
+- `wrapup` (also `wrap-up`, `wrap`) or `compound` → run the **session wrap-up / compound** flow (see "Session wrap-up & compound (`/header wrapup`, `/header compound`)"): review the session and capture its learnings/pitfalls into committed `.claude/memory/`. This does **not** run the audit — it's the session-end capture ritual. `wrapup` adds a short session recap first; `compound` is capture-only.
+
+Anything else (a topic name/UUID/briefing URL, or no argument) runs the full audit-led flow below.
 
 ### Step 0 — Resolve the topic
 
@@ -775,7 +779,7 @@ On turn 47 the agent commits without running `black` (the rule is buried), and "
 |---|---|---|
 | `precommit-gate` | format + lint + test pass before every commit | recommend installing it (bundles the ratchet by default) |
 | `test-ratchet` | the agent can't green the suite by deleting / skipping the failing test | if a gate exists but has no ratchet, recommend inserting the block; a fresh `precommit-gate` already includes it |
-| `compound-memory` | session learnings get captured (committed `.claude/memory/`) so they stop recurring | recommend the `/compound` skill + seed index — the compounding flywheel; adjacent to Header's own recommendation ledger |
+| `compound-memory` | session learnings get captured (committed `.claude/memory/`) so they stop recurring | recommend the native **`/header wrapup`** capture ritual + seed the index — Header runs the compounding flywheel itself (see "Session wrap-up & compound"), no separate skill to install |
 
 ### Delivery: let the user choose (explain the tradeoff)
 
@@ -798,8 +802,112 @@ The audit flags opaque hooks as the biggest unguarded execution surface (`HOOK` 
 1. Run `<AUDIT> rails`. For each `RAIL absent` (skip `n/a`), check the ledger (`rail-precommit-gate` / `rail-test-ratchet` / `rail-compound-memory`) and drop anything `dismissed`.
 2. Present the surviving rails as `[Apply with review] (opinionated)` with the pitch above — comprehensive: offer the full set of missing rails, not just one.
 3. On a yes, present the **delivery chooser** (git-native / PreToolUse / both) for gate-based rails, using the `RAIL-ENV git-remote` / `claude` context to recommend a default.
-4. Print the artifact: `<AUDIT> rail <name> --ecosystem <RAIL-ENV ecosystem> --delivery <choice>`. **Write the files** it describes (the gate script `chmod +x`, the wiring, the `/compound` skill + seed). Stack-adaptation is automatic from `--ecosystem`; if it's `unknown`, fill in the `TODO` checks block from the detected tooling before writing.
+4. Print the artifact: `<AUDIT> rail <name> --ecosystem <RAIL-ENV ecosystem> --delivery <choice>`. **Write the files** it describes (the gate script `chmod +x`, the wiring). For `compound-memory` the only file to seed is `.claude/memory/MEMORY.md` — capture itself runs natively via `/header wrapup` (see "Session wrap-up & compound"); the printer also offers a standalone `/compound` skill for repos whose sessions don't use Header. Stack-adaptation is automatic from `--ecosystem`; if it's `unknown`, fill in the `TODO` checks block from the detected tooling before writing.
 5. Record dispositions in the ledger (`applied` / `dismissed` / `snoozed`). On a commit, append the `Header-Audit-Finding: <key>` trailer.
+
+## Session wrap-up & compound (`/header wrapup`, `/header compound`)
+
+> **Beta — Header's compounding-memory motion, run natively.** Header *does* the
+> capture instead of recommending you go install a separate `/compound` skill.
+> The canonical process is `scaffold/compound/SKILL.md`; this section is that
+> process, executed by the skill. No audit runs in this flow.
+
+**What each is for.**
+- **`/header compound`** — *capture only*. Run it anytime: mid-session right after
+  something breaks, a workaround lands, the user corrects you, or an approach
+  works notably well; or at the end. Straight to capture, no recap.
+- **`/header wrapup`** — the **session-end ritual**: a 2–4 line recap of what the
+  session actually did, then the same capture. (This is the seed of the fuller
+  "coach" retro; today it is recap + capture.)
+
+Both write to the repo's committed `.claude/memory/`, so a captured pitfall is
+one a *future* session — yours or a teammate's — won't re-hit. This is the
+compounding flywheel, adjacent to Header's own recommendation ledger.
+
+### The flow (pinned)
+
+1. **(`wrapup` only) Recap.** From your own session context, render 2–4 plain-
+   language lines: what the user set out to do, what actually shipped/changed,
+   and any notable rough patch. Then continue to capture.
+
+2. **Review the session for learnings.** Source is your own conversation context
+   — you lived this session. *(Run in a fresh session with no relevant context?
+   Fall back to the repo's most recent transcript under
+   `~/.claude/projects/<repo-key>/`.)* Pull **at most 3**, each in exactly one
+   category (the filename prefix):
+   - `feedback_` — a user correction or stated preference.
+   - `pattern_` — an approach that worked and should be repeated.
+   - `pitfall_` — something that broke, failed, or wasted time.
+   - `domain_` — a project fact discovered during the work.
+   Most sessions yield **0–2. Do not force it.** Nothing notable → print
+   `Compound: reviewed, nothing notable to capture` and stop. The review itself
+   is the work product. **Do not capture:** task status/progress, implementation
+   detail (→ code comments), anything already in `CLAUDE.md`/`AGENTS.md`, or
+   one-off debugging that won't recur.
+
+3. **Locate / seed the store.** Memory lives in `.claude/memory/` (committed). If
+   `.claude/memory/MEMORY.md` doesn't exist, seed it first (via Bash) with this
+   skeleton — it mirrors `scaffold/compound/MEMORY.md`:
+   ```
+   # Memory Index
+
+   Committed, compounding memory for this repo. Future sessions read this first.
+   Each entry is one file under `.claude/memory/`; `/header compound` adds them.
+
+   ## Feedback
+   ## Patterns
+   ## Pitfalls
+   ## Domain
+   ```
+
+4. **De-duplicate.** Read the existing `.claude/memory/MEMORY.md` + entry files.
+   A learning on the same topic as an existing entry → **update that file**, don't
+   create a near-duplicate.
+
+5. **Draft (don't write yet).** For each kept learning, draft a file at
+   `.claude/memory/{prefix}_{slug}.md` (`{slug}` = kebab-case of the topic, e.g.
+   `pitfall_git-from-repo-root.md`), 3–8 line body, in this **pinned** format:
+   ```markdown
+   ---
+   name: <short imperative name>
+   description: <one actionable line — starts with a verb or Never/Always; becomes the MEMORY.md index line>
+   type: feedback | pattern | pitfall | domain
+   date: <YYYY-MM-DD, from `date +%F`>
+   ---
+
+   <the learning, stated plainly>
+
+   **Context:** <when/why it matters — cite the moment it came from>
+   **Apply when:** <the specific condition a future session should recall this under>
+   ```
+
+6. **Draft-then-ask** *(locked: always ask before writing — a `header-config`
+   "just write, don't ask" opt-in comes later)*. Show a compact summary — one
+   bullet per draft, `{prefix}_{slug} — description` — then the line *"These live
+   in `.claude/memory/` (committed → teammates read them next session)."* Then
+   exactly **one** `AskUserQuestion`:
+   - **Question:** "Capture these N learning(s) to `.claude/memory/`?"
+   - **Options** (single-select; mark the **team** option *Recommended* when the
+     repo has a git remote, else the just-me option):
+     1. **Write + stage (team)** — write the files, `git add` them (committed
+        memory travels to teammates).
+     2. **Write, uncommitted (just me)** — write the files, no `git add`.
+     3. **Show me the full files first** — render the full drafts, then re-ask.
+     4. **Skip** — don't write; print `Compound: reviewed, chose not to capture`.
+   "Skip" ≠ "wrong" — the user may want them local-only, or not now.
+
+7. **Write + index** (Bash — the skill's only write path). For each confirmed
+   file: write it, then add its line `- [{prefix}_{slug}.md]({prefix}_{slug}.md) —
+   <description>` under the matching `## Section` in `.claude/memory/MEMORY.md`. If
+   the user chose **team**, `git add` the written files — do **not** commit unless
+   they ask. Close with one line: `Compound: captured N learning(s) — <slugs>`.
+
+### When the audit sends you here
+
+The `compound-memory` rail (when `absent`) points at this flow: the audit
+recommends running `/header wrapup` at session end rather than installing a
+separate skill. If the user takes it, seed `.claude/memory/MEMORY.md` (step 3) so
+the store is ready for the first capture.
 
 ## Engine-adoption card (`/header fable-5`)
 
