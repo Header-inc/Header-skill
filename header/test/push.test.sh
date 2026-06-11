@@ -230,15 +230,20 @@ HEADER_HOME="$HH" "$HE" push --help >/dev/null 2>&1; assert_exit 0 "$?" "push --
 rc=0; HEADER_HOME="$HH" "$HE" push 2>/dev/null || rc=$?
 assert_exit 1 "$rc" "push with no id and no --all → exit 1"
 
-# ── 8. config key experiment_sync (auto default, closed domain) ──
-assert_eq "auto" "$(HEADER_HOME="$HH" "$CFG" get experiment_sync)" "experiment_sync defaults to auto"
+# ── 8. config key experiment_sync (off default, closed domain) ──
+# Ships off to match the telemetry/consent posture — egress is opt-in, never a
+# default the host model has to disarm on sight.
+assert_eq "off" "$(HEADER_HOME="$HH" "$CFG" get experiment_sync)" "experiment_sync defaults to off"
 HEADER_HOME="$HH" "$CFG" set experiment_sync bogus 2>/dev/null
-assert_eq "auto" "$(HEADER_HOME="$HH" "$CFG" get experiment_sync)" "invalid experiment_sync coerced to auto"
+assert_eq "off" "$(HEADER_HOME="$HH" "$CFG" get experiment_sync)" "invalid experiment_sync coerced to off"
 # experiment_sync is egress/consent → must be rejected from a committed team config
 rc=0; HEADER_HOME="$HH" HEADER_TEAM_DIR="$sb/team" "$CFG" team-set experiment_sync auto 2>/dev/null || rc=$?
 assert_exit 1 "$rc" "experiment_sync refused in a committed team config"
 
 # ── 9. auto-sync on a lifecycle edit: no key → recommend once ────
+# Opt into auto first (it ships off now); the recommend-once path is what an
+# auto-configured user with no key yet should see.
+HEADER_HOME="$HH" "$CFG" set experiment_sync auto >/dev/null 2>&1
 msg="$(EXP_NOKEY define ds1 --arm A=m --arm B=m 2>&1)"
 assert_contains "$msg" "Connect a Header account" "no-key define → recommends an account"
 assert_eq "yes" "$([ -f "$HH/experiments/ds1/.sync-recommended" ] && echo yes || echo no)" \

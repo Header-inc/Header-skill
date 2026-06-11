@@ -203,6 +203,51 @@ assert_not_contains "$Himp" "scripts/deploy.sh	referenced path not found" \
 assert_not_contains "$Himp" "path/to/placeholder.md	referenced path not found" \
   "a path/to/ documentation placeholder is not flagged"
 
+# ── STALE-REF precision: the 12/12 false-positive shapes from real sessions ──
+# Reproduces the revturbine AGENTS.md FPs (branch-name examples, gitignore/folder
+# tokens in a fence, forbidden-file + absolute examples) and asserts they are all
+# suppressed, while a genuine moved-file ref still fires.
+sb_fp="$(make_sandbox)"; rfp="$sb_fp/r"; mkdir -p "$rfp/scripts"
+printf 'x\n' > "$rfp/scripts/build.sh"                 # exists → the existing-file control
+cat > "$rfp/AGENTS.md" <<'MD'
+# Conventions
+
+Do not create `.cursor/rules` or commit into `/code`.
+Name branches like `feat/add-login`, `fix/null-pointer`, or `mark/update-specs`.
+Run `scripts/build.sh` before committing, never `scripts/gone.sh`.
+
+Folder layout and ignores (illustrative):
+
+```
+to_do/
+inprogress/
+completed/
+deferred/
+```
+
+```gitignore
+.pnpm-store/
+dist/
+build/
+```
+MD
+Hfp="$(HOME="$sb_fp" "$AU" harness --repo "$rfp")"
+for fp_tok in ".cursor/rules" "/code" "feat/add-login" "fix/null-pointer" \
+              "mark/update-specs" "to_do/" "inprogress/" "completed/" \
+              "deferred/" ".pnpm-store/" "dist/" "build/"; do
+  assert_not_contains "$Hfp" "$fp_tok	referenced path not found" \
+    "STALE-REF suppresses the false-positive shape '$fp_tok'"
+done
+assert_contains "$Hfp" $'scripts/gone.sh\treferenced path not found' \
+  "a real moved-file ref (extensioned, in prose) still fires"
+assert_not_contains "$Hfp" "scripts/build.sh	referenced path not found" \
+  "an existing extensioned file ref is not flagged"
+# a fenced extensioned example must be suppressed (fence wins over extension)
+printf '\n```sh\nrun `scripts/fenced-example.sh`\n```\n' >> "$rfp/AGENTS.md"
+Hfp2="$(HOME="$sb_fp" "$AU" harness --repo "$rfp")"
+assert_not_contains "$Hfp2" "scripts/fenced-example.sh	referenced path not found" \
+  "an extensioned ref inside a code fence is suppressed (illustrative, not live)"
+
 # ── nested CLAUDE.md (on-demand, reported apart from always-loaded) ──
 mkdir -p "$rimp/sub"; printf '# nested rules\n' > "$rimp/sub/CLAUDE.md"
 Hnest="$(HOME="$sb_imp" "$AU" harness --repo "$rimp")"

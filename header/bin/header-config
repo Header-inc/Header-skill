@@ -76,7 +76,7 @@ lookup_default() {
     telemetry)               echo "off" ;;
     auto_tune)               echo "false" ;;
     repo_memory)             echo "true" ;;     # remember a repo's bound topic across sessions
-    experiment_sync)         echo "auto" ;;     # auto: when an API key is present, sync each experiment edit to the account. off: never.
+    experiment_sync)         echo "off" ;;      # off (default): never syncs — matches the telemetry/consent posture. auto: when an API key is present, sync each experiment edit to the account. Opt in explicitly.
     aggregate_submit)        echo "off" ;;      # on: after each analyze, submit the ANONYMIZED effect size to the cross-customer library. off (default): never.
     *)                       echo "" ;;
   esac
@@ -143,7 +143,7 @@ case "${1:-}" in
       case "$VALUE" in off|anonymous|full) ;; *) echo "header-config: telemetry must be off|anonymous|full; using off" >&2; VALUE="off" ;; esac
     fi
     if [ "$KEY" = "experiment_sync" ]; then
-      case "$VALUE" in auto|off) ;; *) echo "header-config: experiment_sync must be auto|off; using auto" >&2; VALUE="auto" ;; esac
+      case "$VALUE" in auto|off) ;; *) echo "header-config: experiment_sync must be auto|off; using off" >&2; VALUE="off" ;; esac
     fi
     if [ "$KEY" = "aggregate_submit" ]; then
       case "$VALUE" in on|off) ;; *) echo "header-config: aggregate_submit must be on|off; using off" >&2; VALUE="off" ;; esac

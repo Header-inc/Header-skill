@@ -258,15 +258,31 @@ _resolve_import() {
   esac
 }
 
-# _stale_refs <file> — flag backtick-quoted tokens that look like in-repo paths
-# but resolve to nothing (a script/file the instructions still name after it was
-# moved or deleted). Conservative: only path-shaped tokens (a slash, no spaces,
-# not a URL / glob / placeholder / flag), checked against the repo root, the
-# file's own dir, and as an absolute path.
+# _stale_refs <file> — flag backtick-quoted tokens that name an in-repo *file*
+# the instructions still reference after it was moved or deleted. Tuned hard for
+# precision: two real audit sessions produced 12/12 false positives (example
+# branch names `feat/add-login`, gitignore/folder-tree tokens `dist/` `to_do/`,
+# forbidden-file examples `.cursor/rules`), all of them *mentioned* in prose or
+# code fences, none a live reference. A false STALE-REF is negative-value — the
+# host model must re-read the file to adjudicate it — so a missed stale dir-ref
+# (invisible, harmless) is the right trade. Three precision gates beyond the
+# original path-shape guards:
+#   1. Skip fenced code blocks (``` / ~~~): their contents are illustrative —
+#      folder-tree diagrams, gitignore snippets, command examples — not live refs.
+#   2. Require an extension on the *basename* (`a/b.ext`): a real stale-ref names
+#      a file (`scripts/gone.sh`, `docs/old.md`); branch names, directory tokens,
+#      and `word/word` examples are extensionless and are suppressed.
+#   3. (retained) URL / glob / placeholder / flag / whitespace guards.
+# An extensioned ref that lives ONLY inside a fence is the one true positive this
+# can miss; acceptable given the FP-vs-FN cost asymmetry. @import stale-refs
+# (scan_tree) are unaffected — an import that fails to load is high-signal.
 _stale_refs() {
   f="$1"; [ -f "$f" ] || return 0
   _fd="$(dirname "$f")"
+  # Line numbers that fall *inside* a fenced code block (delimiter lines excluded).
+  _fenced="$(awk '/^[[:space:]]*```/||/^[[:space:]]*~~~/{infence=!infence;next}{if(infence)printf "%d ",NR}' "$f" 2>/dev/null)"
   grep -noE '`[^`]+`' "$f" 2>/dev/null | while IFS=: read -r ln tok; do
+    case " $_fenced " in *" $ln "*) continue ;; esac      # inside a code fence → illustrative
     t="${tok#\`}"; t="${t%\`}"
     case "$t" in
       *' '*|*'	'*) continue ;;                         # has whitespace → prose, not a path
@@ -278,6 +294,10 @@ _stale_refs() {
       *) continue ;;                                     # bare word → not treated as a ref
     esac
     t="${t%[.,:;]}"                                      # strip trailing sentence punctuation
+    case "${t##*/}" in                                   # require a file extension on the basename
+      *.*) : ;;                                          # `a/b.ext` → a real file ref
+      *) continue ;;                                     # extensionless (dir / branch / example)
+    esac
     [ -e "$REPO/$t" ] && continue
     [ -e "$_fd/$t" ] && continue
     [ -e "$t" ] && continue

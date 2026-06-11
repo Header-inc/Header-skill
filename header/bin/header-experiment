@@ -98,10 +98,11 @@
 #   HEADER_EXPERIMENTS_URL      override the full experiments endpoint.
 #   HEADER_EXPERIMENT_NOSYNC    when set, disables auto-sync entirely (test/CI guard).
 #
-# Auto-sync: each lifecycle change (new/define/validate/run/analyze/merge) syncs
-# the experiment's metadata to the user's account when an API key is present and
-# config `experiment_sync` is `auto` (the default) — see `push`. No key → a once-
-# per-experiment recommendation. `experiment_sync off` disables it.
+# Auto-sync: opt-in. `experiment_sync` ships `off` (matches the telemetry/consent
+# posture). When the user sets it to `auto`, each lifecycle change (new/define/
+# validate/run/analyze/merge) syncs the experiment's metadata to the account if an
+# API key is present — see `push`; auto + no key → a once-per-experiment account
+# recommendation. Default `off` → fully silent and local.
 #
 # BETA — interface and output shape will change. The runner is local by design
 # (customer-infra runner is the on-thesis architecture, design doc §7.3); the only
@@ -139,7 +140,7 @@ die()        { err "$*"; exit 1; }
 # beta_banner — printed to stderr on the user-facing subcommands so it's clear
 # the verdict / interface / file shapes are not yet frozen.
 beta_banner() {
-  echo "header-experiment is BETA — interface & output shapes may change. Experiments run locally; with an API key present each lifecycle edit auto-syncs its METADATA to your account (opt out: 'header-config set experiment_sync off')." >&2
+  echo "header-experiment is BETA — interface & output shapes may change. Experiments run locally; account sync is off by default (opt in: 'header-config set experiment_sync auto', requires an API key)." >&2
 }
 
 # spec_path / exp_dir — locate the spec for an id; create the dir on define only.
@@ -3187,15 +3188,16 @@ _recommend_account() {
   } >&2
 }
 
-# _autosync <id> — fire-and-track sync after a lifecycle change. Auto when a key
-# is present (config experiment_sync != off); otherwise recommend an account.
-# Never affects the caller's exit status. The user asked for auto-on-when-keyed,
-# so there is no per-run prompt — the visible '⤴ dashboard:' line + the
-# 'experiment_sync off' switch are the transparency/opt-out.
+# _autosync <id> — fire-and-track sync after a lifecycle change. Only when the
+# user has opted into `experiment_sync auto` AND a key is present; auto + no key →
+# recommend an account. Default `off` → no-op. Never affects the caller's exit
+# status. Once opted in there is no per-run prompt — the visible '⤴ dashboard:'
+# line + the 'experiment_sync off' switch are the transparency/opt-out. Fails
+# CLOSED: if the config can't be read, treat egress as off.
 _autosync() {
   local id="${1:-}"; [ -n "$id" ] || return 0
   [ -n "${HEADER_EXPERIMENT_NOSYNC:-}" ] && return 0     # test/CI egress guard
-  [ "$("$SELF_DIR/header-config" get experiment_sync 2>/dev/null || echo auto)" = "off" ] && return 0
+  [ "$("$SELF_DIR/header-config" get experiment_sync 2>/dev/null || echo off)" = "auto" ] || return 0
   if [ -z "$(resolve_key)" ]; then _recommend_account "$id"; return 0; fi
   _sync_one "$id" 1 "" "" "" || true
   return 0

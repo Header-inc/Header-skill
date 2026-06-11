@@ -3,6 +3,46 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.28.0 — trust repairs: STALE-REF precision + experiment_sync ships off
+
+Two fixes aimed at the audit's trust surface, both surfaced by real session
+review (a less-technical user's run, corroborated by an independent model pass).
+The throughline: the audit was spending the host's attention on noise, and a
+default egress setting read as a risk to disarm rather than a feature to opt in.
+
+- **STALE-REF: precision over recall.** Two real audit sessions produced *12/12*
+  false positives — example branch names (`feat/add-login`), folder-tree and
+  gitignore tokens inside fenced blocks (`dist/`, `to_do/`), forbidden-file
+  examples (`.cursor/rules`) — none a live reference, every one forcing the host
+  model to re-read the file and adjudicate (the skill exporting its QA cost onto
+  the host's context). `_stale_refs` now applies two gates beyond the existing
+  path-shape guards: it **skips fenced code blocks** (` ``` ` / `~~~`), whose
+  contents are illustrative; and it **requires a file extension on the basename**
+  — a real stale-ref names a *file* (`scripts/gone.sh`), while branch names,
+  directory tokens, and `word/word` examples are extensionless. On a faithful
+  repro of the offending `AGENTS.md`, 12 false positives drop to 0 while the one
+  genuine moved-file ref still fires. The trade is deliberate: a missed stale
+  *directory* ref is invisible and harmless; a false stale-ref is negative-value.
+  (Also fixed an attendant bug — the fenced-line set was emitted
+  newline-separated but matched as space-separated, so fence-skip silently never
+  fired and the extensionless gate was carrying all the weight.)
+
+- **`experiment_sync` ships `off`.** It previously defaulted to `auto`, so adding
+  an API key for *any* reason (e.g. a custom briefing) would silently begin
+  POSTing experiment metadata — repo git-remote identity, commit, hostname, task
+  titles, hypotheses — to the account. That coupling is precisely what a
+  privacy-conscious user has to notice and disarm. The default now matches the
+  telemetry/consent posture: egress is opt-in (`header-config set experiment_sync
+  auto`), `_autosync` **fails closed** (an unreadable config means no egress), and
+  a default-off user gets no sync and no nag. SKILL.md's sync section, the
+  `header-experiment` BETA banner/comments, and the invalid-value coercion are
+  updated to match.
+
++15 audit assertions (the 12 false-positive shapes asserted suppressed, the
+genuine ref still firing, a fenced extensioned ref suppressed) and an updated
+push suite (default-off, opt-in path). All 16 suites green on the Linux + macOS
+(Bash 3.2 / BSD awk) CI matrix. VERSION → 0.28.0.
+
 ## 0.27.0 — determinism pass: pre-minted ledger keys, pinned scorecard, pinned apply menu
 
 Dogfood finding: the same repo audited four times in one hour logged the same

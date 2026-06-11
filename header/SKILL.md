@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.27.0
+version: 0.28.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -925,14 +925,15 @@ The runner spends real tokens — the cost gate confirms before launching. Don't
 
 On a B-wins verdict, `header-experiment merge <id>` applies arm B's overrides to the repo — it shows the unified diff first, asks for confirmation, refuses any non-B-wins verdict unless `--force`, and prints a suggested `git commit` with the `Header-Audit-Finding:` trailer when the experiment came from an audit finding. It does **not** auto-commit; you retain the final say.
 
-### Sync experiments to your account — beta, automatic when a key is present
+### Sync experiments to your account — beta, opt-in (ships off)
 
 Experiments sync to the user's Header account so they show up in the web UI — a live-updating record of *which experiment, testing which hypothesis, from which goal/topic/briefing, on which repo and machine, and how it came out*. Nothing runs server-side; the runner stays local. This is the user's own identified dashboard, distinct from the (still-anonymized, still-future) cross-customer aggregate submit.
 
-**It is automatic, not a prompt.** Every lifecycle change — `new`, `define`, `validate` (the "I edited the spec" hook), `run`, `analyze`, `merge` — fires a background sync, gated on:
+**Egress is opt-in.** `experiment_sync` ships **`off`** — matching the telemetry/consent posture, so account egress is never a default the user has to discover and disarm. Set `header-config set experiment_sync auto` to turn it on; thereafter every lifecycle change — `new`, `define`, `validate` (the "I edited the spec" hook), `run`, `analyze`, `merge` — fires a background sync, gated on:
 
-- **`HAS_KEY: yes`** (and `experiment_sync` is `auto`, the default) → the tool syncs and prints a faint `⤴ dashboard: …` status line. **Don't ask permission per edit** — the user opted in by configuring a key. Surface the line if useful; mention the dashboard URL on success.
-- **`HAS_KEY: no`** → the tool prints a one-time per-experiment recommendation to connect an account. **Reinforce it** — route through the post-audit signup flow — but never block the experiment. Recommend, don't require.
+- **`experiment_sync` is `off` (default)** → no sync, no per-experiment nudge. Silent and local. If the user asks to connect a dashboard, point them at `experiment_sync auto`.
+- **`experiment_sync auto` + `HAS_KEY: yes`** → the tool syncs and prints a faint `⤴ dashboard: …` status line. **Don't ask permission per edit** — configuring a key + opting into `auto` is the consent. Surface the line if useful; mention the dashboard URL on success.
+- **`experiment_sync auto` + `HAS_KEY: no`** → the tool prints a one-time per-experiment recommendation to connect an account. **Reinforce it** — route through the post-audit signup flow — but never block the experiment. Recommend, don't require.
 
 The lifecycle `status` (`defined → run → analyzed → merged`) is part of every sync, so the UI shows each experiment's last-known state. A local `~/.header/experiments/<id>/.last-sync` marker (`<iso> <http_code>`) records the last sync result for offline inspection.
 
