@@ -3,6 +3,23 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.34.0 — tighter coach output + git-window fix
+
+From a real run: the report was correct but far too long, and `RETRO-SHIP` stayed
+silent on a repo whose last commit was ~11 days back.
+
+- **Git window.** retro's ship pass used a fixed 7d, missing recent commit streams
+  when sessions are sparse/recent. Now it **floors at 30d** (and widens to the full
+  session span for long-running work), so "what shipped" actually shows.
+- **Render discipline (pinned).** Coach lead is **proportional to signal** — thin
+  window → 2–3 lines, don't narrate emptiness. Absent rails collapse to **one**
+  recommendation (not one per rail). Weak experiments → **one parked line**. Drop
+  empty `Est` (no "est."/"directional" padding). Ranked list ~5; scorecard cells
+  one clause. `RETRO-SHIP` is the coach's ship source — the Step-4 git glance is
+  audit-only.
+
++1 retro assertion (the 30d floor catches 11-day-old commits a 7d window misses).
+
 ## 0.33.1 — briefings: cross-reference from `summary`, not empty `key_developments`
 
 The flow read `key_developments` for the audit cross-reference, but that field is

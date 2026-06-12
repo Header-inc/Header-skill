@@ -98,16 +98,18 @@ assert_contains "$RS" $'RETRO-HARNESS\tclaude-transcripts' "retro labels the har
 assert_contains "$RS" $'RETRO-PLAN\t1\t1' "a session that opened plan mode is counted"
 assert_contains "$RS" $'RETRO-CORRECTION\t2' "user redirects (no…/actually…) counted as corrections"
 
-# ── git ship/peak (repo scope, real git repo) ──
+# ── git ship/peak (repo scope) — commits dated 11d ago validate the 30d floor ──
+# (a fixed 7d window would miss them; the floor catches recent commit streams).
 gitrepo="$sb/gitrepo"; mkdir -p "$gitrepo"
+gd="$(date -d '11 days ago' '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -v-11d '+%Y-%m-%dT%H:%M:%S')"
 ( cd "$gitrepo" && git init -q && git config user.email t@t.t && git config user.name t \
-  && echo a > f && git add f && git commit -qm c1 \
-  && printf 'a\nbb\n' > f && git add f && git commit -qm c2 ) >/dev/null 2>&1
+  && echo a > f && git add f && GIT_AUTHOR_DATE="$gd" GIT_COMMITTER_DATE="$gd" git commit -qm c1 \
+  && printf 'a\nbb\n' > f && git add f && GIT_AUTHOR_DATE="$gd" GIT_COMMITTER_DATE="$gd" git commit -qm c2 ) >/dev/null 2>&1
 gkey="$(printf '%s' "$gitrepo" | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$sb/.claude/projects/$gkey"
 printf '%s\n' '{"type":"user","message":{"role":"user","content":"x"}}' > "$sb/.claude/projects/$gkey/s.jsonl"
 GS="$(HOME="$sb" "$AU" retro --repo "$gitrepo")"
-assert_contains "$GS" $'RETRO-SHIP\t2\t' "RETRO-SHIP reports commit count + LOC from git over the window"
+assert_contains "$GS" $'RETRO-SHIP\t2\t' "RETRO-SHIP reports commits + LOC over the floored window (catches 11d-old commits a 7d window misses)"
 assert_contains "$GS" "RETRO-PEAK" "RETRO-PEAK reports the busiest day"
 
 # ── per-session join: RETRO-CORR (plan → outcome) + RETRO-GAP (claim, no test) ──

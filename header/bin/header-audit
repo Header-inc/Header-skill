@@ -1184,7 +1184,21 @@ SIG
     # Shipped this window (git) — repo scope only, in a git repo. Enriches the
     # coach overview ("N commits / M LOC; busiest day Tue").
     if [ -z "$SRC" ] && [ -z "$ALL_PROJECTS" ] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-      gsince="${SINCE:-7 days ago}"
+      # Window: --since if given, else the SESSION span floored at 30 days — so a
+      # recent commit stream still shows when sessions are sparse/recent (e.g. last
+      # commit 11 days ago, 3 sessions this week), and widens to the full span for
+      # long-running work. A fixed 7d missed the common "committed last week" case.
+      if [ -n "$SINCE" ]; then gsince="$SINCE"
+      else
+        oldest=""
+        for f in "${files[@]}"; do
+          m="$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)"
+          if [ -z "$oldest" ] || [ "$m" -lt "$oldest" ]; then oldest="$m"; fi
+        done
+        now="$(date +%s)"; floor=$(( now - 30 * 86400 ))
+        gepoch="${oldest:-$floor}"; [ "$gepoch" -gt "$floor" ] && gepoch="$floor"
+        gsince="$(date -r "$gepoch" '+%Y-%m-%d' 2>/dev/null || date -d "@$gepoch" '+%Y-%m-%d' 2>/dev/null || echo '30 days ago')"
+      fi
       ncommits="$(git -C "$REPO" log --since="$gsince" --format='%h' 2>/dev/null | wc -l | tr -d ' ')"
       if [ "${ncommits:-0}" -gt 0 ]; then
         set -- $(git -C "$REPO" log --since="$gsince" --numstat --format= 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {a+=$1; d+=$2} END{print a+0, d+0}')
