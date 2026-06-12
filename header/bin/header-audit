@@ -1055,26 +1055,27 @@ SIG
         *) shift ;;
       esac
     done
-    stream_cmd=""; nfiles=0
+    # Files go to awk as ARGS (not catted) so FNR==1/FILENAME mark session
+    # boundaries — the per-session join behind RETRO-CORR / RETRO-GAP.
+    files=(); nfiles=0
     if [ -n "$SRC" ]; then
       [ -f "$SRC" ] || { printf 'NOTE\tretro\tinput file not found: %s\n' "$SRC"; exit 0; }
-      printf 'RETRO-SCOPE\tinput\t%s\n' "$SRC"; nfiles=1
-      stream_cmd="cat \"$SRC\""
+      printf 'RETRO-SCOPE\tinput\t%s\n' "$SRC"; files=("$SRC"); nfiles=1
     elif [ -n "$ALL_PROJECTS" ]; then
       tdir="$HOME/.claude/projects"
       [ -d "$tdir" ] || { printf 'NOTE\tretro\tno usage history at %s — run some sessions first\n' "$tdir"; exit 0; }
       ndirs="$(find "$tdir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
-      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$tdir" -name '*.jsonl' -print0 2>/dev/null)
+      nfiles=${#files[@]}
       printf 'RETRO-SCOPE\tglobal\t%s\t%s\tproject dirs\n' "$tdir" "$ndirs"
-      stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
     else
       key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
       tdir="$HOME/.claude/projects/$key"
       [ -d "$tdir" ] || { printf 'NOTE\tretro\tno transcripts for this repo at %s — run `header-audit retro --all-projects` for machine-wide history\n' "$tdir"; exit 0; }
-      nfiles="$(find "$tdir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+      while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$tdir" -name '*.jsonl' -print0 2>/dev/null)
+      nfiles=${#files[@]}
       printf 'RETRO-SCOPE\trepo\t%s\n' "$REPO"
       printf 'RETRO-INPUT\t%s\t%s\tfiles\n' "$tdir" "$nfiles"
-      stream_cmd="find \"$tdir\" -name '*.jsonl' -exec cat {} + 2>/dev/null"
     fi
 
     # committed compounding memory present? drives the RETRO-CAP compound nudge.
@@ -1084,25 +1085,37 @@ SIG
     if [ -n "$SINCE" ]; then printf 'RETRO-WINDOW\t%s\t%s\n' "$nfiles" "$SINCE"
     else printf 'RETRO-WINDOW\t%s\n' "$nfiles"; fi
     printf 'RETRO-HARNESS\tclaude-transcripts\n'   # the harness these signals are read from
-    # plan-mode usage: session files that opened plan mode at least once.
-    if [ -n "$SRC" ]; then nplan="$(grep -lE '"permissionMode":"plan"' "$SRC" 2>/dev/null | wc -l | tr -d ' ')"
-    else nplan="$(find "$tdir" -name '*.jsonl' -exec grep -lE '"permissionMode":"plan"' {} + 2>/dev/null | wc -l | tr -d ' ')"; fi
-    printf 'RETRO-PLAN\t%s\t%s\n' "${nplan:-0}" "$nfiles"
-
-    eval "$stream_cmd" | awk -v since="$SINCE" -v mem_present="$mem_present" '
+    [ "${#files[@]}" -gt 0 ] || exit 0
+    awk -v since="$SINCE" -v mem_present="$mem_present" -v nfiles="$nfiles" '
       function base(p,  n) { n = p; sub(/.*\//, "", n); return n }
+      # finalize the session that just ended: bucket it for the per-session signals.
+      function endsession() {
+        if (!seen) return
+        if (s_active) {
+          nsess++
+          if (s_plan) { plan_n++; plan_err += s_err } else { noplan_n++; noplan_err += s_err }
+          if (s_edit && s_claim && !s_test) gap_n++
+        }
+        s_active = 0; s_plan = 0; s_err = 0; s_edit = 0; s_claim = 0; s_test = 0
+      }
+      FNR == 1 { endsession(); seen = 1 }      # new file = new session boundary
       {
         if (since != "" && match($0, /"timestamp":"[^"]*"/)) {
           ts = substr($0, RSTART + 13, RLENGTH - 14); if (ts < since) next
         }
+        if ($0 ~ /"permissionMode":"plan"/) s_plan = 1
+        # fix/done claim in assistant text (heuristic) + test/build command this session.
+        if ($0 ~ /"role":"assistant"/ && tolower($0) ~ /should (now )?work|that should (fix|do it)|all set|fixed (it|the|that)|is fixed|now (fixed|works)|good to go|that fixes/) s_claim = 1
+        if ($0 ~ /(npm (run )?test|pytest|go test|jest|vitest|cargo test|rspec|bats|make test|\.\/test|test\/run)/) s_test = 1
         line = $0
         # tool_use: count edits per file (thrash); map id->name for error joins.
         while (match(line, /"type":"tool_use","id":"[^"]*","name":"[^"]*"/)) {
           blk = substr(line, RSTART, RLENGTH); rest = substr(line, RSTART + RLENGTH)
           id = blk; sub(/.*"id":"/, "", id); sub(/".*/, "", id)
           nm = blk; sub(/.*"name":"/, "", nm); sub(/"$/, "", nm)
-          Name[id] = nm; if (!(nm in Calls)) ToolKeys[++ntk] = nm; Calls[nm]++
+          Name[id] = nm; if (!(nm in Calls)) ToolKeys[++ntk] = nm; Calls[nm]++; s_active = 1
           if (nm == "Edit" || nm == "Write" || nm == "NotebookEdit") {
+            s_edit = 1
             seg = substr(rest, 1, 400)
             if (match(seg, /"file_path":"[^"]*"/)) {
               fp = substr(seg, RSTART + 13, RLENGTH - 14); b = base(fp)
@@ -1132,9 +1145,11 @@ SIG
         while (match(line, /"tool_use_id":"[^"]*"/)) { Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16); line = substr(line, RSTART + RLENGTH) }
         line = $0
         while (match(line, /"is_error":(true|false)/)) { ErrFlag[++ner] = (substr(line, RSTART, RLENGTH) ~ /true/) ? 1 : 0; line = substr(line, RSTART + RLENGTH) }
-        for (k = 1; k <= nid && k <= ner; k++) if (ErrFlag[k] && (Ids[k] in Name)) Err[Name[Ids[k]]]++
+        for (k = 1; k <= nid && k <= ner; k++) if (ErrFlag[k] && (Ids[k] in Name)) { Err[Name[Ids[k]]]++; if (Name[Ids[k]] == "Bash") s_err++ }
       }
       END {
+        endsession()                                       # finalize the last session
+        printf "RETRO-PLAN\t%d\t%d\n", plan_n + 0, nsess + 0
         # THRASH: heavily re-edited files. Sort desc; surface those >= 5 edits.
         for (a = 1; a <= nek; a++) for (b = a + 1; b <= nek; b++)
           if (Edits[EditKeys[b]] > Edits[EditKeys[a]]) { t = EditKeys[a]; EditKeys[a] = EditKeys[b]; EditKeys[b] = t }
@@ -1151,6 +1166,11 @@ SIG
         n = split("stash branch-switch worktree reset-hard force-push", GK, " ")
         for (a = 1; a <= n; a++) { g = GK[a]; if (Git[g] > 0) printf "RETRO-GIT\t%s\t%d\n", g, Git[g] }
         if (corrections > 0) printf "RETRO-CORRECTION\t%d\n", corrections
+        # Per-session join: plan-mode -> avg Bash errors (both buckets >=2 to dodge
+        # N=1 noise), and verification gaps (edit + completion claim + no test run).
+        if (plan_n >= 2 && noplan_n >= 2)
+          printf "RETRO-CORR\tplan-mode\t%.2f\t%.2f\n", plan_err / plan_n, noplan_err / noplan_n
+        if (gap_n > 0) printf "RETRO-GAP\t%d\t%d\tkey=cap-verify\n", gap_n, nsess
         # DERIVED capability nudges (behavior -> the practice that addresses it).
         if (git_switch >= 3 && Git["worktree"] == 0)
           printf "RETRO-CAP\tworktree\t%d branch-juggling events (stash/switch), no worktree use\tkey=cap-worktree\n", git_switch
@@ -1159,7 +1179,7 @@ SIG
         if (bash_fail >= 3 && mem_present == 0)
           printf "RETRO-CAP\tcompound\t%d gotchas and no committed .claude/memory; capture them via /header wrapup\tkey=cap-compound\n", bash_fail
       }
-    '
+    ' "${files[@]}"
 
     # Shipped this window (git) — repo scope only, in a git repo. Enriches the
     # coach overview ("N commits / M LOC; busiest day Tue").

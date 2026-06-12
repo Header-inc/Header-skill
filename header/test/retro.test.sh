@@ -89,6 +89,7 @@ assert_contains "$LA" $'NOTE\tlevel' "tool_result (array) content is not a typed
 sigf="$sb/sig.jsonl"
 {
   printf '%s\n' '{"type":"permission-mode","permissionMode":"plan"}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"/x.ts"}}]}}'
   printf '%s\n' '{"type":"user","message":{"role":"user","content":"no, that is wrong — revert that"}}'
   printf '%s\n' '{"type":"user","message":{"role":"user","content":"actually use a different approach"}}'
 } > "$sigf"
@@ -108,5 +109,16 @@ printf '%s\n' '{"type":"user","message":{"role":"user","content":"x"}}' > "$sb/.
 GS="$(HOME="$sb" "$AU" retro --repo "$gitrepo")"
 assert_contains "$GS" $'RETRO-SHIP\t2\t' "RETRO-SHIP reports commit count + LOC from git over the window"
 assert_contains "$GS" "RETRO-PEAK" "RETRO-PEAK reports the busiest day"
+
+# ── per-session join: RETRO-CORR (plan → outcome) + RETRO-GAP (claim, no test) ──
+psb="$sb/ps"; P="$psb/.claude/projects/-k"; mkdir -p "$P"
+printf '%s\n' '{"type":"permission-mode","permissionMode":"plan"}' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"/a.ts"}}]}}' > "$P/s1.jsonl"
+printf '%s\n' '{"type":"permission-mode","permissionMode":"plan"}' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"/a.ts"}}]}}' > "$P/s2.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"x"}}]}}' '{"type":"user","message":{"content":[{"tool_use_id":"b","type":"tool_result","is_error":true,"content":[{"type":"text","text":"e"}]}]}}' > "$P/s3.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"y"}}]}}' '{"type":"user","message":{"content":[{"tool_use_id":"b","type":"tool_result","is_error":true,"content":[{"type":"text","text":"e"}]}]}}' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"fixed it, should now work"}]}}' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e2","name":"Edit","input":{"file_path":"/b.ts"}}]}}' > "$P/s4.jsonl"
+PS="$(HOME="$psb" "$AU" retro --repo /k)"
+assert_contains "$PS" $'RETRO-PLAN\t2\t4' "plan-mode counted per session (2 of 4 active sessions)"
+assert_contains "$PS" $'RETRO-CORR\tplan-mode\t0.00\t1.00' "plan sessions correlate to fewer Bash errors than no-plan"
+assert_contains "$PS" $'RETRO-GAP\t1\t4' "a session with edit + fix-claim + no test is a verification gap"
 
 t_done

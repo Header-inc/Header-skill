@@ -3,6 +3,22 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.33.0 — per-session retro: RETRO-CORR + RETRO-GAP
+
+`retro` now processes sessions **file-by-file** (awk over file args, `FNR`
+boundaries) instead of one concatenated blob — the per-session join the last two
+signals needed. Window-wide signals (thrash/fails/git/corrections/caps) are
+unchanged. New:
+
+- `RETRO-CORR plan-mode <planned> <unplanned>` — avg Bash errors per session,
+  plan vs no-plan (emitted with ≥2 of each); *quantifies* the plan-first nudge.
+- `RETRO-GAP <n> <total>` `key=cap-verify` — sessions with an edit + a "fixed/done"
+  claim but **no test run**: a verification-gap pitfall (→ compound / the
+  precommit-gate rail).
+
+Only sessions with real tool activity count, so empty / out-of-window sessions
+don't skew the buckets. +3 retro assertions.
+
 ## 0.32.0 — coach signals: git ship, plan-mode, corrections; harness-native; level fix
 
 `header-audit retro` gains git + behavioral signals, all folded in (no new scan):
