@@ -3,6 +3,17 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.31.0 — progressive disclosure: SKILL.md core/reference split
+
+SKILL.md was ~36k tokens loaded on *every* run. Moved the explicitly-triggered,
+rarely-hit material to `reference/*.md` (read on demand, not every run):
+experiments, custom-briefings/API + response shapes, topics/signup,
+engine-adoption, the rails pitch, the cost deep-dive. Core keeps the always-run
+path — preamble, audit flow, scorecard, coach lead, compound, scan line-types.
+**−44% always-loaded (~36k → ~20k tokens); behavior unchanged.** `install.sh`
+ships `reference/` via its existing `cp -R`; pointers in core link each moved
+section to its file.
+
 ## 0.30.0 — the coach front door: lead with behavior, demote the audit
 
 The answer to "nothing was mindblowing." `/header` now opens with a **coach read
