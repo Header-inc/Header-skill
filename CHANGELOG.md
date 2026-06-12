@@ -3,6 +3,28 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.32.0 — coach signals: git ship, plan-mode, corrections; harness-native; level fix
+
+`header-audit retro` gains git + behavioral signals, all folded in (no new scan):
+`RETRO-SHIP`/`RETRO-PEAK` (commits + LOC + busiest day from git, window-scoped),
+`RETRO-PLAN` (plan-mode rate), `RETRO-CORRECTION` (user redirects → `feedback_`
+candidates for compound), `RETRO-HARNESS` (the harness these read). The coach lead
+weaves them: a one-line hook, "what shipped" in the week read, a plan-first nudge,
+corrections → `/header wrapup`.
+
+**Harness-native, not cross-tool.** `retro`/`level` label that they read Claude
+transcripts; the coach caveats when the active harness isn't `claude` (a Codex
+reader ships with the Codex install — Header doesn't read every tool from inside
+one).
+
+**`level` correctness fix.** It was counting harness-injected "The file … updated"
+reminders and nested `tool_result` content as typed prompts (inflated counts, junk
+evidence quote). Now anchors on message-level `"role":"user","content"` — real
+prompts only. On this repo: 2,610 → 171 prompts, evidence is an actual prompt.
+
+Deferred (need a per-session join): `RETRO-CORR` (behavior→outcome correlation),
+`RETRO-GAP` (verification gap). +5 retro assertions; green on Linux + macOS.
+
 ## 0.31.0 — progressive disclosure: SKILL.md core/reference split
 
 SKILL.md was ~36k tokens loaded on *every* run. Moved the explicitly-triggered,

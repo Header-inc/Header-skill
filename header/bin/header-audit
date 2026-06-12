@@ -1083,6 +1083,11 @@ SIG
 
     if [ -n "$SINCE" ]; then printf 'RETRO-WINDOW\t%s\t%s\n' "$nfiles" "$SINCE"
     else printf 'RETRO-WINDOW\t%s\n' "$nfiles"; fi
+    printf 'RETRO-HARNESS\tclaude-transcripts\n'   # the harness these signals are read from
+    # plan-mode usage: session files that opened plan mode at least once.
+    if [ -n "$SRC" ]; then nplan="$(grep -lE '"permissionMode":"plan"' "$SRC" 2>/dev/null | wc -l | tr -d ' ')"
+    else nplan="$(find "$tdir" -name '*.jsonl' -exec grep -lE '"permissionMode":"plan"' {} + 2>/dev/null | wc -l | tr -d ' ')"; fi
+    printf 'RETRO-PLAN\t%s\t%s\n' "${nplan:-0}" "$nfiles"
 
     eval "$stream_cmd" | awk -v since="$SINCE" -v mem_present="$mem_present" '
       function base(p,  n) { n = p; sub(/.*\//, "", n); return n }
@@ -1114,6 +1119,14 @@ SIG
         if ($0 ~ /git worktree/)                 Git["worktree"]++
         if ($0 ~ /git reset --hard/)             Git["reset-hard"]++
         if ($0 ~ /git push/ && $0 ~ /(--force|-f )/) Git["force-push"]++
+        # user redirects (corrections) — course-correct rate + compound feedback_.
+        if ($0 ~ /"type":"user"/) {
+          ci = index($0, "\"role\":\"user\",\"content\":\"")
+          if (ci > 0) {
+            u = tolower(substr($0, ci + 25, 160))
+            if (u ~ /^(no |no,|nope|actually|wait,|stop |revert|undo|instead|don.t )/ || u ~ /that.?s (wrong|not)|not what i|you (broke|misunderstood)/) corrections++
+          }
+        }
         # tool_result error attribution — positional pairing (per the waste scan).
         nid = 0; ner = 0; line = $0
         while (match(line, /"tool_use_id":"[^"]*"/)) { Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16); line = substr(line, RSTART + RLENGTH) }
@@ -1137,6 +1150,7 @@ SIG
         git_switch = Git["stash"] + Git["branch-switch"] + Git["worktree"]
         n = split("stash branch-switch worktree reset-hard force-push", GK, " ")
         for (a = 1; a <= n; a++) { g = GK[a]; if (Git[g] > 0) printf "RETRO-GIT\t%s\t%d\n", g, Git[g] }
+        if (corrections > 0) printf "RETRO-CORRECTION\t%d\n", corrections
         # DERIVED capability nudges (behavior -> the practice that addresses it).
         if (git_switch >= 3 && Git["worktree"] == 0)
           printf "RETRO-CAP\tworktree\t%d branch-juggling events (stash/switch), no worktree use\tkey=cap-worktree\n", git_switch
@@ -1146,6 +1160,19 @@ SIG
           printf "RETRO-CAP\tcompound\t%d gotchas and no committed .claude/memory; capture them via /header wrapup\tkey=cap-compound\n", bash_fail
       }
     '
+
+    # Shipped this window (git) — repo scope only, in a git repo. Enriches the
+    # coach overview ("N commits / M LOC; busiest day Tue").
+    if [ -z "$SRC" ] && [ -z "$ALL_PROJECTS" ] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+      gsince="${SINCE:-7 days ago}"
+      ncommits="$(git -C "$REPO" log --since="$gsince" --format='%h' 2>/dev/null | wc -l | tr -d ' ')"
+      if [ "${ncommits:-0}" -gt 0 ]; then
+        set -- $(git -C "$REPO" log --since="$gsince" --numstat --format= 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {a+=$1; d+=$2} END{print a+0, d+0}')
+        printf 'RETRO-SHIP\t%s\t%s\t%s\n' "$ncommits" "${1:-0}" "${2:-0}"
+        peak="$(git -C "$REPO" log --since="$gsince" --format='%ad' --date=format:'%a' 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print $2"\t"$1}')"
+        [ -n "$peak" ] && printf 'RETRO-PEAK\t%s\n' "$peak"
+      fi
+    fi
     ;;
 
   level)
@@ -1183,10 +1210,11 @@ SIG
     eval "$stream_cmd" | awk -v scope="$scope" '
       {
         if ($0 !~ /"type":"user"/) next
-        ci = index($0, "\"content\":\"")
-        if (ci == 0) next                       # array content (tool_result) → not a typed prompt
-        s = substr($0, ci + 11)
+        ci = index($0, "\"role\":\"user\",\"content\":\"")   # message-level string content = a typed prompt
+        if (ci == 0) next                       # array content (tool_result) / nested content → skip
+        s = substr($0, ci + 25)
         if (s ~ /^</ || s ~ /^Caveat/ || s ~ /local-command/ || s ~ /^\[Request/) next
+        if (s ~ /^The file / || index(s, "is current in your context") || index(s, "system-reminder") || index(s, "tool_use_error")) next  # harness-injected reminders, not typed prompts
         if (length(s) < 12) next
         nprompts++
         nwords += split(s, W, /[^A-Za-z0-9_]+/) - 1
@@ -1216,6 +1244,7 @@ SIG
         else if (level == "technical" && cref_pp >= 6)       conf = "high"
         else if (level == "business" && biz >= 2 * (tech+1)) conf = "high"
         printf "LEVEL-INPUT\t%s\t%d\t%d\n", scope, nprompts, nwords
+        print "LEVEL-HARNESS\tclaude-transcripts"
         printf "LEVEL-SIGNAL\ttechnical\t%d\t%.1f\n", tech, techd
         printf "LEVEL-SIGNAL\tbusiness\t%d\t%.1f\n", biz, bizd
         printf "LEVEL-SIGNAL\tcoderef\t%d\t%.1f\n", cref, cref_pp
