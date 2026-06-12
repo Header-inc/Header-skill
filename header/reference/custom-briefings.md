@@ -390,8 +390,8 @@ For full API documentation, see [joinheader.com/docs](https://joinheader.com/doc
 | `id` | string | Briefing UUID |
 | `goal_id` | string | Parent goal UUID |
 | `status` | string | `IN_PROGRESS`, `COMPLETED`, or `FAILED` |
-| `summary` | string | Full markdown briefing text |
-| `key_developments` | string | JSON-encoded array — parse from string into structured list; feeds the audit cross-reference in Step 4 |
+| `summary` | string | Full markdown briefing text — **the content**; its "Key Insights" / bolded developments feed the Step 4 cross-reference |
+| `key_developments` | string | JSON-encoded array, **typically empty in practice — don't depend on it**; read developments from `summary` instead |
 | `source_articles` | array | Source articles used (title, url, metadata) |
 | `estimated_duration_seconds` | int? | Server-computed ETA on the create response. Static — fixed at create time; compute remaining as `estimated_duration_seconds - (now - created_at)`. Null on completed/public briefings and pre-field briefings. |
 | `source_count` | int? | Number of sources the ETA was based on. Null on completed/public briefings and pre-field briefings. |

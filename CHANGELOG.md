@@ -3,6 +3,14 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.33.1 — briefings: cross-reference from `summary`, not empty `key_developments`
+
+The flow read `key_developments` for the audit cross-reference, but that field is
+empty in practice — the content is the `summary` markdown ("Key Insights" /
+bolded developments). The fetch, two-briefing merge, briefing-supplied patterns,
+and docs now read `summary`; the response schema flags `key_developments` as
+don't-depend-on-it.
+
 ## 0.33.0 — per-session retro: RETRO-CORR + RETRO-GAP
 
 `retro` now processes sessions **file-by-file** (awk over file args, `FNR`
