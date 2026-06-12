@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.34.0
+version: 0.35.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Also captures session learnings natively: '/header wrapup' (or '/header compound') reviews the session and writes the pitfalls/learnings worth keeping into committed .claude/memory/ — the compounding-memory flywheel, run by Header instead of a separate skill. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Run '/header wrapup' at session end — or '/header compound' anytime (mid-session after something breaks/works, or at the end) — to review the session and capture its learnings/pitfalls into committed .claude/memory/ so future sessions stop re-hitting them; triggers include wrap up, wrapup, session retro/wrap-up, capture learnings, what did we learn, note the pitfalls, compound, remember this for next time. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -163,28 +163,6 @@ touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
 ```
 
 Replace `Chosen` with the user's pick. Persisting `English` explicitly is harmless. Always touch the marker so the prompt never fires again. Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
-
-### Register — before the audit
-
-The coach tunes its depth to how technical you are (see Step 4 "Register"). Set it **once**, by *inferring then confirming* — never by asking the user to describe themselves.
-
-If `<HEADER_BIN> get user_level` is **empty** and `${HEADER_HOME:-$HOME/.header}/.register-prompted` is absent (and `INTERACTIVE: yes`):
-
-1. **Infer** from the user's own prompts — machine-wide, since register is a person-property: `<AUDIT> level --all-projects`. Read `LEVEL <verdict> <conf>`, the `LEVEL-SIGNAL coderef` line (the discriminator — files/functions named per prompt), and `LEVEL-EVIDENCE` (a representative prompt). If it returns `NOTE level` (no history yet), **skip** — don't guess from nothing; you'll infer on a later run.
-2. **Confirm** with exactly **one** `AskUserQuestion`, prefilled with the inference and grounded in the evidence (mark the inferred option *recommended*; options in this order):
-   - **"Keep it technical"** — full depth: counts, ledger keys, experiment specs.
-   - **"Lead with outcomes"** — plain language, fewer internals.
-   - **"Mix — technical but outcome-framed"** — the middle.
-   Frame it as a confirmation, citing the evidence: *"You name a file or function ~`<coderef per-prompt>`× per prompt (e.g. ‹evidence›), so you look **<verdict>**. Keep it that way?"* **Never** show an open "describe yourself."
-3. **Persist + mark** (map: technical→`technical`, outcomes→`business`, mix→`mixed`):
-   ```bash
-   <HEADER_BIN> set user_level "<technical|business|mixed>"
-   touch "${HEADER_HOME:-$HOME/.header}/.register-prompted"
-   ```
-
-Skip entirely if `INTERACTIVE: no`, the marker exists, or `user_level` is already set. The verdict is a *starting point* the user confirms — an explicit pick always wins over the inference.
-
-**Post-update ledger refresh (optional, once).** This step doubles as the post-update re-onboarding moment — an existing user reaches it precisely because `user_level` is new and unset. While here, if `<LEDGER> list` shows rows from before the coach finding shapes, you may offer a one-time `<LEDGER> reset` (archives to a `.bak-*`, never destroys) so cross-run dedup starts clean. Keep it **optional and low-key** — "your recommendation history predates the new coach findings; reset it to start fresh? (optional)" — then `touch "${HEADER_HOME:-$HOME/.header}/.ledger-reset-offered"` so it's asked only once, whatever they choose.
 
 ## Staying up to date
 
@@ -359,11 +337,11 @@ Built from `<AUDIT> retro` (+ your own session context). Heading: `## 🧭 Heade
 
 5. **🧪 Bigger experiments** *(opt-in depth)* — one or two `[Experiment]` items (model routing from `ROUTE-CANDIDATE`, engine adoption), framed "want me to prove it?" Below the practices, never above.
 
-**Register** — tune depth to `<HEADER_BIN> get user_level` (see "First-run onboarding"): **business** → plain language, hide ledger keys / token math / line counts, lead with outcomes; **technical** → full depth (keys, counts, experiment specs); **mixed** / unset → middle. The coach lead is the same; only the register changes.
+**One register, for everyone.** Plain language, lead with outcomes, no jargon dump. Keep the depth available (counts, ledger keys, experiment specs) but never let it crowd the lead — a line a non-engineer follows *and* an engineer trusts. Don't fork by audience; just be clear.
 
 #### Audit tail — the config scorecard, demoted (still rendered)
 
-After the coach lead, render the **spend + scorecard + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** For a **business** register, collapse this tail to the 1–2 highest-value items + "(more in the full audit — just ask)". Spend leads *this* section — the "open with the money" rule below applies here, not at the top of the report.
+After the coach lead, render the **spend + scorecard + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** Keep it tight (the ranked-list cap applies). Spend leads *this* section — the "open with the money" rule below applies here, not at the top of the report.
 
 **Recent activity (diff-aware):** glance at recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`) to **weight audit recommendations** toward areas the user just changed. This is for the audit tail only — the **coach lead's "what shipped" comes from `RETRO-SHIP`** (a windowed count); don't narrate raw commit subjects from this glance up in the coach lead.
 

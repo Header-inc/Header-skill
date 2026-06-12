@@ -24,14 +24,6 @@ assert_eq "false" "$(HEADER_HOME="$sb/.header" "$HC" get auto_tune)" \
   "get auto_tune on missing file → default false"
 assert_eq "true" "$(HEADER_HOME="$sb/.header" "$HC" get repo_memory)" \
   "get repo_memory on missing file → default true"
-assert_eq "" "$(HEADER_HOME="$sb/.header" "$HC" get user_level)" \
-  "get user_level on missing file → empty (not yet set; coach onboarding detects it)"
-HEADER_HOME="$sb/.header" "$HC" set user_level business
-assert_eq "business" "$(HEADER_HOME="$sb/.header" "$HC" get user_level)" \
-  "set then get user_level → business"
-HEADER_HOME="$sb/.header" "$HC" set user_level nonsense 2>/dev/null
-assert_eq "mixed" "$(HEADER_HOME="$sb/.header" "$HC" get user_level)" \
-  "invalid user_level coerced to mixed (closed domain technical|business|mixed)"
 
 # ── set then get; header written on first create ──────────────
 HEADER_HOME="$sb/.header" "$HC" set language Turkish

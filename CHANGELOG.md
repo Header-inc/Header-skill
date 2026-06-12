@@ -3,6 +3,16 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.35.0 — drop the technical-level register; one clear voice for everyone
+
+The `user_level` detection (`header-audit level`) + the onboarding "how technical
+are you?" confirm + the business/technical/mixed render fork are removed — the
+detection was speculative and the fork added surface for little gain. The coach
+now renders in **one register for everyone**: plain language, outcomes first,
+depth available but never crowding the lead. Simpler, lower-risk, less to load.
+Removes the `level` scan/case, the `user_level` config key, the Register
+onboarding step, and their tests/docs.
+
 ## 0.34.0 — tighter coach output + git-window fix
 
 From a real run: the report was correct but far too long, and `RETRO-SHIP` stayed
