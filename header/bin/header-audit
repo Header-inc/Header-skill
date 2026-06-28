@@ -97,6 +97,19 @@
 #       Print the scaffold to install for a rail (stack-adapted), the analogue of
 #       `gate` for supply-chain. Reads header/scaffold/ templates.
 #
+#   header-audit grade [--repo DIR]
+#       Composite, deterministic SETUP GRADE over the five scorecard axes
+#       (context / model / security / deps / rails) — the single glanceable mark
+#       the audit headlines with ("Setup grade B+"). Re-runs harness+deps+rails
+#       (cheap, read-only) and reduces their findings to one +/- letter grade.
+#       STATIC-CONFIG ONLY: the transcript-mined scans (cost/waste/retro) are
+#       excluded so the grade is stable whether or not the repo has session
+#       history. Start at 100, deduct per finding, clamp 0..100, map to a +/-
+#       band. The weights + bands are a STABILITY CONTRACT (changing one moves
+#       every user's grade), so they live here — computed, never model-assigned.
+#         GRADE-AXIS <axis>  <delta>  <note>   (per-axis deduction; 5 rows)
+#         GRADE      <letter>  <score>  100     (the composite; 100 = clean)
+#
 # CANONICAL LEDGER KEYS — every line that can become a recommendation carries a
 # final tab field `key=<canonical-key>`, derived deterministically from the
 # line's own fields (slug: lowercase, runs of non-alphanumerics → '-'). The
@@ -1364,12 +1377,77 @@ EOF
     esac
     ;;
 
+  grade)
+    # Composite, deterministic SETUP GRADE over the five scorecard axes
+    # (context / model / security / deps / rails) — the single glanceable mark the
+    # audit headlines with ("Setup grade B+"). Re-runs harness+deps+rails (cheap,
+    # read-only) and reduces their findings to one +/- letter grade plus a per-axis
+    # breakdown. STATIC-CONFIG ONLY: the transcript-mined scans (cost/waste/retro)
+    # are deliberately excluded so the grade is stable whether or not the repo has
+    # session history. Start at 100, deduct per finding, clamp 0..100, map to a
+    # standard +/- band. The weights + bands are a STABILITY CONTRACT — changing
+    # one moves every user's grade — hence computed here, never model-assigned.
+    {
+      "$0" harness --repo "$REPO" 2>/dev/null
+      "$0" deps    --repo "$REPO" 2>/dev/null
+      "$0" rails   --repo "$REPO" 2>/dev/null
+    } | awk -F"$TAB" '
+      function clamp(x) { return x < 0 ? 0 : (x > 100 ? 100 : x) }
+      function d(x)     { return x == 0 ? "0" : "-" x }    # render a deduction
+      $1 == "FILE"          { ctx_tok += $4 + 0 }
+      $1 == "HIT"           { hits++ }
+      $1 == "STALE-REF"     { stale++ }
+      $1 == "MODEL-STALE"   { model_stale = 1 }
+      $1 == "MODEL-UPGRADE" { model_up = 1 }
+      $1 == "SECURITY" && $2 == "bash" {
+        # worst posture wins; an allow-list (even alongside a deny) counts as OK.
+        rank = ($3 ~ /bypass/) ? 3 : (($3 ~ /allowlist/) ? 0 : (($3 ~ /denylist/) ? 2 : 0))
+        if (rank > sec_rank) sec_rank = rank
+      }
+      $1 == "GATE" && $3 == "absent"  { gates++ }
+      $1 == "RAIL" && $3 == "absent"  { rails_absent++ }
+      END {
+        # context: always-loaded tokens (tiered) + prompt-debt hits + stale refs
+        t = ctx_tok
+        cd = (t > 30000) ? 22 : ((t > 15000) ? 15 : ((t > 8000) ? 9 : ((t > 4000) ? 4 : 0)))
+        hd = hits * 2;  if (hd > 8) hd = 8
+        sd = stale * 2; if (sd > 6) sd = 6
+        ctxd = cd + hd + sd
+        # model: only a SUPERSEDED tier is debt. A newer model shipping (MODEL-UPGRADE)
+        # is an opportunity, not debt — never penalize being on a current tier.
+        md = model_stale ? 12 : 0
+        # security: only an actively weak Bash posture deducts (no policy is fine for local dev)
+        secd = (sec_rank == 3) ? 18 : ((sec_rank == 2) ? 8 : 0)
+        # deps: each absent supply-chain cooldown gate (the machine package-tool
+        # version is a scorecard note, not a graded axis — it would make the grade
+        # machine-dependent rather than a property of the repo config)
+        depd = gates * 7
+        # rails: opinionated house guardrails — weigh light (anti-upsell discipline)
+        raild = rails_absent * 2; if (raild > 6) raild = 6
+        score = clamp(100 - ctxd - md - secd - depd - raild)
+        g = score>=97?"A+":score>=93?"A":score>=90?"A-":score>=87?"B+":score>=83?"B":score>=80?"B-":score>=77?"C+":score>=73?"C":score>=70?"C-":score>=67?"D+":score>=63?"D":score>=60?"D-":"F"
+        ctxk = sprintf("%.1fk", ctx_tok / 1000)
+        printf "GRADE-AXIS\tcontext\t%s\t%s always-loaded tokens%s%s\n", d(ctxd), ctxk,
+          (hits ? sprintf(", %d debt hit(s)", hits) : ""), (stale ? sprintf(", %d stale ref(s)", stale) : "")
+        printf "GRADE-AXIS\tmodel\t%s\t%s\n", d(md),
+          (model_stale ? "on a superseded tier" : (model_up ? "a newer model is available (optional)" : "current tier"))
+        printf "GRADE-AXIS\tsecurity\t%s\t%s\n", d(secd),
+          (sec_rank == 3 ? "Bash permissions bypassed (no gating)" : (sec_rank == 2 ? "Bash deny-list (bypassable)" : "allow-list or local-only"))
+        printf "GRADE-AXIS\tdeps\t%s\t%s\n", d(depd),
+          (gates ? sprintf("%d supply-chain gate(s) absent", gates) : "supply-chain gates present or n/a")
+        printf "GRADE-AXIS\trails\t%s\t%s\n", d(raild),
+          (rails_absent ? sprintf("%d determinism rail(s) absent", rails_absent) : "determinism rails present or n/a")
+        printf "GRADE\t%s\t%d\t100\n", g, score
+      }
+    '
+    ;;
+
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|grade|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|grade|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac

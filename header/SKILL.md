@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.35.0
+version: 0.36.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Also captures session learnings natively: '/header wrapup' (or '/header compound') reviews the session and writes the pitfalls/learnings worth keeping into committed .claude/memory/ — the compounding-memory flywheel, run by Header instead of a separate skill. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Run '/header wrapup' at session end — or '/header compound' anytime (mid-session after something breaks/works, or at the end) — to review the session and capture its learnings/pitfalls into committed .claude/memory/ so future sessions stop re-hitting them; triggers include wrap up, wrapup, session retro/wrap-up, capture learnings, what did we learn, note the pitfalls, compound, remember this for next time. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -302,7 +302,7 @@ From the JSON, pull `summary`, `source_articles` (title + url), and `generated_a
 
 ### Step 3 — Run the audit
 
-Local, read-only — nothing leaves the machine. Run **all six** scans. `<AUDIT>` is `header-audit`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
+Local, read-only — nothing leaves the machine. Run **all seven** scans. `<AUDIT>` is `header-audit`, in the same `bin/` dir as the preamble's `HEADER_BIN`.
 
 ```bash
 <AUDIT> harness          # CLAUDE.md / AGENTS.md (+ @imports) / settings / hooks / skills / commands / subagents / MCP / Bash posture / model staleness / stale refs
@@ -311,11 +311,12 @@ Local, read-only — nothing leaves the machine. Run **all six** scans. `<AUDIT>
 <AUDIT> waste            # usage accounting from the same transcripts: unused MCP servers / skills, tool error rates, compaction pressure, skill context tax
 <AUDIT> rails            # determinism guardrails present|absent (pre-commit gate / test ratchet / compounding memory) — opinionated, additive
 <AUDIT> retro            # behavioral mining of your own sessions: edit-thrash, gotcha volume, git-workflow tells, ranked capability nudges (worktree / guardrail / compound) — the coach lead
+<AUDIT> grade            # composite setup grade (e.g. B+) over the 5 scorecard axes — composites harness+deps+rails internally; static-config only, deterministic
 ```
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in the `summary`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. **Proven rows:** when the briefing carries cross-customer evidence for a pattern (a measured effect from the proven-changes library), write a 6-field row instead — `id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` — and `harness` re-emits the evidence as a `PROVEN` line (a proven row may reuse a built-in id to attach evidence to it; the scan de-duplicates by id, first wins). Keep regexes conservative (`grep -iE`); malformed lines (not exactly 3 or 6 tab fields, or a non-integer `n_repos`) are skipped. This is how the distribution wedge feeds new hypotheses — and proven library results — into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`, `RETRO-SCOPE`, `RETRO-INPUT`, `RETRO-WINDOW`, `RETRO-HARNESS`, `RETRO-THRASH`, `RETRO-FAILS`, `RETRO-GIT`, `RETRO-SHIP`, `RETRO-PEAK`, `RETRO-PLAN`, `RETRO-CORRECTION`, `RETRO-CORR`, `RETRO-GAP`, `RETRO-CAP`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`, `RETRO-SCOPE`, `RETRO-INPUT`, `RETRO-WINDOW`, `RETRO-HARNESS`, `RETRO-THRASH`, `RETRO-FAILS`, `RETRO-GIT`, `RETRO-SHIP`, `RETRO-PEAK`, `RETRO-PLAN`, `RETRO-CORRECTION`, `RETRO-CORR`, `RETRO-GAP`, `RETRO-CAP`, `GRADE`, `GRADE-AXIS`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
 
 ### Step 4 — Cross-reference and present
 
@@ -341,7 +342,7 @@ Built from `<AUDIT> retro` (+ your own session context). Heading: `## 🧭 Heade
 
 #### Audit tail — the config scorecard, demoted (still rendered)
 
-After the coach lead, render the **spend + scorecard + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** Keep it tight (the ranked-list cap applies). Spend leads *this* section — the "open with the money" rule below applies here, not at the top of the report.
+After the coach lead, render the **setup grade + spend + scorecard + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** Keep it tight (the ranked-list cap applies). The one-line **setup grade** (`header-audit grade`'s `GRADE` line) is the scorecard's headline — a single glanceable mark for "how's my setup?"; spend sits directly below it, where the "open with the money" rule applies (not at the top of the report).
 
 **Recent activity (diff-aware):** glance at recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`) to **weight audit recommendations** toward areas the user just changed. This is for the audit tail only — the **coach lead's "what shipped" comes from `RETRO-SHIP`** (a windowed count); don't narrate raw commit subjects from this glance up in the coach lead.
 
@@ -369,6 +370,8 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 ```markdown
 ## 📊 Header audit — <repo basename>
 
+**Setup grade: `<GRADE letter>`** — <one clause: the heaviest `GRADE-AXIS` deduction, e.g. "supply-chain gate + rails absent"; or "clean, current setup" at A/A+>.
+
 💰 **Spend** (this repo, last <COST-INPUT file count> transcripts — API-rate equivalent): **~$<SPEND-TOTAL usd> / <calls> calls**
 - `<model>` — $<usd> (<share>%) ← costliest
 - `<model>` — $<usd> (<share>%)
@@ -386,6 +389,7 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 
 Hard rules:
 
+- **Setup grade** — the line directly under the heading shows the **letter only** from `header-audit grade`'s `GRADE <letter> <score> 100` line, rendered as `**Setup grade: <letter>**`. **Drop the numeric `<score>`/100** — the front-end (howsmyaicoding.com) shows just the letter; match it. **Never** model-assign or recompute the letter — it is deterministic by design (the website's "Setup grade B+" is this letter). Follow it with one short clause naming the heaviest `GRADE-AXIS` deduction (or "clean, current setup" at A/A+). The `GRADE-AXIS` breakdown rows (and the underlying score) are the *why* — surface them only if the user asks "why that grade?". Omit the grade line only if the scan emitted no `GRADE` row at all.
 - **Spend block** — only when the scope + harness sanity check above passes (`COST-SCOPE repo` + `COST-HARNESS claude`). Otherwise replace the entire block with the single line that check prescribes (background-only global figure, harness-mismatch wording, or the no-data note) — never render the breakdown.
 - **The table is fixed** — exactly these five axes, this order, as a GitHub-flavored markdown table (not a box-drawing table, not prose, not a different row set). An axis with nothing to report reads `—`. **Each cell is one short clause** — no paragraphs; detail belongs in the ranked list, not in the row.
 - **Skip `n/a` rows** (gates, rails) everywhere, per the scan contracts.
@@ -643,6 +647,15 @@ The **coach** scan: behavioral mining of the user's OWN sessions — the signals
   - `guardrail` — ≥3 failed Bash calls → recommend the `precommit-gate` rail (cross-check `RAIL precommit-gate`; **affirm** it if already present).
   - `compound` — ≥3 gotchas **and** no committed `.claude/memory/` → recommend `/header wrapup`.
   Render only the caps that fired, in emission order (= order of demonstrated need). Each carries `key=cap-<name>` — use it verbatim in the ledger. A weak cap (low count) → rank it low and **say it's weak**; never hard-sell (the anti-upsell discipline that the engine-adoption upsell got wrong).
+
+### `header-audit grade`
+
+The **composite setup grade** — one glanceable mark (e.g. `B+`) summarizing the five scorecard axes, so the report can answer "how's my setup?" before the detail. Re-runs `harness` + `deps` + `rails` internally (cheap, read-only) and reduces their findings to a single letter. **Static-config only:** the transcript-mined scans (`cost` / `waste` / `retro`) are excluded, so the grade is stable whether or not the repo has session history — and identical run-to-run, model-to-model, because it is **computed in the bin, never model-assigned**. Output lines:
+
+- `GRADE-AXIS <axis> <delta> <note>` — the per-axis deduction (five rows, fixed order: `context` / `model` / `security` / `deps` / `rails`); `delta` is `-N` or `0`, with a one-clause reason. The breakdown behind the letter — surface it only if the user asks "why that grade?".
+- `GRADE <letter> <score> 100` — the composite (start 100, deduct per finding, clamp 0–100), mapped to a standard `+`/`-` band (`A+` … `F`). Render the **letter only** as the scorecard headline — drop the `<score>` (see the contract above); the score stays in the line for the breakdown + tests, not the user-facing render.
+
+**What it weighs** (a stability contract — the same inputs always yield the same grade, so the bands/weights don't drift between runs): always-loaded context tokens (tiered) + prompt-debt `HIT`s + `STALE-REF`s · a `MODEL-STALE` superseded tier (a `MODEL-UPGRADE` *opportunity* is **not** penalized — being on a current tier never costs points) · a weak Bash posture (`bypass` / `denylist`; "no explicit policy" is fine for local dev and doesn't deduct) · absent supply-chain cooldown gates · absent determinism rails (weighed **light** — opinionated house guardrails, not measured on your repo). A clean, current, lean setup lands at `A`/`A+`; debt and risk pull it down. Package-tool versions (`TOOL too-old`) are a scorecard note, **not** a graded axis — grading them would make the mark machine-dependent.
 
 ### Record findings
 

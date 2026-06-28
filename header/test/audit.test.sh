@@ -407,6 +407,55 @@ J
 assert_not_contains "$(HOME="$sb2" "$AU" harness --repo "$r" | grep 'SECURITY	bash')" "key=" \
   "an allowlist posture carries no key (affirmation, not a finding)"
 
+# ── composite setup grade (the website's "Setup grade B+") ────
+# Deterministic letter grade over the five scorecard axes. The canonical
+# website-example scenario — lean CLAUDE.md, current model, ONE absent
+# supply-chain gate, 0/3 determinism rails — must land EXACTLY on B+ (87). This
+# is a stability contract: the weights/bands are pinned, so a change here is a
+# deliberate decision, not a silent drift of everyone's grade.
+sb_gr="$(make_sandbox)"; rgr="$sb_gr/site"; mkdir -p "$rgr/.claude" "$rgr/tests"
+cat > "$rgr/CLAUDE.md" <<'MD'
+# Project
+Use tabs. Run the test suite before committing.
+MD
+printf '{ "model": "claude-opus-4-8" }\n' > "$rgr/.claude/settings.json"
+printf '{"name":"x"}\n' > "$rgr/package.json"
+printf 'def test_x(): pass\n' > "$rgr/tests/test_x.py"
+G="$(HOME="$sb_gr" "$AU" grade --repo "$rgr")"
+assert_contains "$G" $'GRADE\tB+\t87\t100' \
+  "the website-example scenario grades exactly B+ (87/100)"
+assert_contains "$G" $'GRADE-AXIS\tdeps\t-7\t1 supply-chain gate' \
+  "the deps axis docks the one absent cooldown gate"
+assert_contains "$G" $'GRADE-AXIS\trails\t-6\t3 determinism rail' \
+  "the rails axis docks the three absent rails (weighed light)"
+assert_contains "$G" $'GRADE-AXIS\tmodel\t0\t' \
+  "a MODEL-UPGRADE opportunity (opus-4-8) is NOT penalized — a current tier costs nothing"
+# determinism: identical run-to-run (computed in the bin, never model-assigned)
+assert_eq "$G" "$(HOME="$sb_gr" "$AU" grade --repo "$rgr")" \
+  "grade is deterministic — same repo, byte-identical output"
+# all five axes present
+for ax in context model security deps rails; do
+  assert_contains "$G" "GRADE-AXIS	$ax	" "grade emits the $ax axis row"
+done
+
+# a lean, current, dependency-free repo → A band (only the light rail dings apply)
+rcl="$sb_gr/clean"; mkdir -p "$rcl"
+printf '# Clean\nUse tabs.\n' > "$rcl/CLAUDE.md"
+Gcl="$(HOME="$sb_gr" "$AU" grade --repo "$rcl")"
+assert_contains "$Gcl" $'GRADE\tA\t' "a clean, current, dependency-free setup grades in the A band"
+assert_contains "$Gcl" $'GRADE-AXIS\tdeps\t0\t' "no ecosystem → no deps deduction (n/a, not absent)"
+
+# a high-risk repo (bypass perms + superseded model + heavy always-loaded file) → F
+rbad="$sb_gr/bad"; mkdir -p "$rbad/.claude"
+head -c 140000 /dev/zero | tr '\0' 'x' > "$rbad/CLAUDE.md"
+printf '{ "model": "claude-3-5-sonnet-20241022", "permissions": { "defaultMode": "bypassPermissions" } }\n' > "$rbad/.claude/settings.json"
+Gbad="$(HOME="$sb_gr" "$AU" grade --repo "$rbad")"
+assert_contains "$Gbad" $'GRADE\tF\t' "a bypass-perms, superseded-model, bloated-context setup grades F"
+assert_contains "$Gbad" $'GRADE-AXIS\tsecurity\t-18\tBash permissions bypassed' \
+  "bypassPermissions docks the security axis hardest"
+assert_contains "$Gbad" $'GRADE-AXIS\tmodel\t-12\ton a superseded tier' \
+  "a Claude 3.x model docks the model axis as superseded debt"
+
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "unknown subcommand → exit 1"

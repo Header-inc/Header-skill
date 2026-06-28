@@ -3,6 +3,35 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.36.0 — a real composite setup grade (`A+`…`F`)
+
+The audit now headlines with a single glanceable mark — **"Setup grade: B+"** —
+backing the promise the front-end (howsmyaicoding.com) already makes. Previously
+the scorecard had five per-axis states but no overall grade; the website's "Setup
+grade B+" had nothing behind it.
+
+- **New `header-audit grade` scan.** Composites `harness` + `deps` + `rails`
+  (cheap, read-only) into one `+`/`-` letter grade over the five scorecard axes
+  (context / model / security / deps / rails). Emits `GRADE <letter> <score> 100`
+  plus a `GRADE-AXIS` breakdown row per axis.
+- **Deterministic, not model-assigned.** Start at 100, deduct per finding, clamp,
+  map to a standard band — computed in the bin so it is byte-identical run-to-run
+  and model-to-model (the same stability contract as the canonical `key=` fields).
+- **Static-config only.** The transcript-mined scans (`cost` / `waste` / `retro`)
+  are excluded, so the grade holds whether or not the repo has session history.
+- **Honest weighting.** A `MODEL-UPGRADE` *opportunity* (e.g. Fable 5 shipping
+  above Opus 4.8) is **not** penalized — only a superseded tier is debt. "No
+  explicit Bash policy" doesn't deduct (fine for local dev). Determinism rails
+  weigh light (anti-upsell). Package-tool versions stay a scorecard note, not a
+  graded axis, so the mark is a property of the repo config, not the machine.
+- **Rendered as the scorecard headline** (the **letter only**, e.g. `Setup grade:
+  B+` — no `/100`, matching howsmyaicoding.com), directly under `## 📊 Header
+  audit`, above the spend block. The score stays in the `GRADE` line for the
+  breakdown + tests; the `GRADE-AXIS` rows are the *why*, surfaced only on request.
+
++9 audit assertions (the canonical website-example scenario pins exactly B+/87;
+clean → A band; bypass+stale+bloat → F; determinism; all five axes present).
+
 ## 0.35.0 — drop the technical-level register; one clear voice for everyone
 
 The `user_level` detection (`header-audit level`) + the onboarding "how technical
