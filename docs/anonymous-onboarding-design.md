@@ -280,8 +280,10 @@ the session.
   `reference/topics.md`. Reuse `header-repo bind` + the freshness check.
 - **Phase 3 — deferred briefing.** Present-now / background-wait / surface-when-ready; second apply
   pass; block fallback; other-harness "next run" path.
-- **Phase 4 — claim & lifecycle.** `/header account`; claim-nudge cadence; trial-expiry messaging +
-  public fallback; README / SKILL.md / `llms.txt` privacy rewrite.
+- **Phase 4 — claim & lifecycle.** `/header account` mode routing ✅ (backed by `header-auth status`,
+  works offline); README + SKILL.md privacy rewrite ✅. **Remaining (need `GET /auth/me`):**
+  claim-nudge cadence (after ≥3 applied recs), trial-expiry messaging + public fallback, `llms.txt`
+  top-line lingo.
 
 ## 8. Open questions / follow-ups
 
