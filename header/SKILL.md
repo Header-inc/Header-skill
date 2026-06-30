@@ -90,6 +90,12 @@ else
   else
     echo "HAS_KEY: no"
   fi
+  _HA="$(dirname "$_HC")/header-auth"
+  echo "ACCOUNT: $([ -x "$_HA" ] && "$_HA" state 2>/dev/null || echo none)"
+  echo "AUTO_REGISTER: $("$_HC" get auto_register)"
+  _EM="$("$_HR" enrich-mode 2>/dev/null || true)"
+  [ -n "$_EM" ] || _EM="$("$_HC" get enrich_mode 2>/dev/null || true)"
+  echo "ENRICH_MODE: ${_EM:-unset}"
   _UPD="$("$(dirname "$_HC")/header-update-check" 2>/dev/null || true)"
   case "$_UPD" in UPDATE_*) echo "UPDATE_CHECK: $_UPD" ;; esac
 fi
@@ -115,6 +121,9 @@ If `HEADER_INSTALL: ok`, use the echoed values for the rest of the session:
 | `WELCOME_SEEN` | `no` (with `INTERACTIVE: yes`) → show the first-run welcome before the audit. |
 | `LANGUAGE_PROMPTED` | `no` (with `INTERACTIVE: yes` and `LANGUAGE: English`) → show the first-run language prompt. |
 | `SIGNUP_STATE` / `HAS_KEY` | Drive the post-audit custom-topic offer — see `reference/topics.md`. |
+| `ENRICH_MODE` | `custom` / `generic` / `unset` for this repo (per-repo `header-repo enrich-mode` › global `enrich_mode` default). `unset` (with `INTERACTIVE: yes`, `HAS_KEY: no`, `AUTO_REGISTER` ≠ `false`) → ask the generic-vs-custom enrichment choice — see "Default flow". `generic` → public topics, never register. `custom` → use the repo's bound topic (register/key already resolved). |
+| `ACCOUNT` | `none` / `anonymous-unclaimed` / `anonymous-claimed` / `full` (from `header-auth state`). `none` + `HAS_KEY: no` → the enrichment choice may register an anonymous account (new user) or save a pasted key (existing user). Drives the `/header account` view and the claim nudge. |
+| `AUTO_REGISTER` | `true` / `false` (config `auto_register`, default `true`). `false` → never offer custom / never register; generic public-topic behavior only. |
 | `TELEMETRY_PROMPTED` | `no` (with `INTERACTIVE: yes`, after the post-audit flow resolves) → ask telemetry consent once. |
 | `TOPIC_OFFERED` | **Per-repo** flag. `no` (with `INTERACTIVE: yes` and empty `REPO_TOPIC`) → offer to create a custom topic for *this* repo after the audit. Once per repo. |
 | `SCHEDULE_OFFERED` | **Per-repo** flag. `no` (with a bound `REPO_TOPIC` not yet on a schedule, `INTERACTIVE: yes`) → make the schedule offer for *this* repo's topic. Once per repo. |

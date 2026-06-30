@@ -121,6 +121,34 @@ printf 'HEADER_API_KEY=hdr_sk_fromfile\n' > "$sb/.header/credentials"
 assert_contains "$(run_preamble "$SKILL_DIR" "$sb")" "HAS_KEY: yes" \
   "credentials file containing a key → HAS_KEY: yes"
 
+# ── ENRICH_MODE / ACCOUNT / AUTO_REGISTER (anonymous-onboarding signals) ──
+sb="$(make_sandbox)"; mkdir -p "$sb/.header"
+out="$(run_preamble "$SKILL_DIR" "$sb")"
+assert_contains "$out" "ACCOUNT: none"        "no account → ACCOUNT: none"
+assert_contains "$out" "AUTO_REGISTER: true"  "AUTO_REGISTER default true"
+assert_contains "$out" "ENRICH_MODE: unset"   "ENRICH_MODE unset by default"
+
+# global enrich_mode default folds in when this repo has no per-repo value
+HEADER_HOME="$sb/.header" "$SKILL_DIR/bin/header-config" set enrich_mode generic >/dev/null
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_REPO_KEY=nomode)" "ENRICH_MODE: generic" \
+  "global enrich_mode default echoed when no per-repo value"
+
+# per-repo enrich-mode wins over the global default
+HEADER_HOME="$sb/.header" HEADER_REPO_KEY=erk "$SKILL_DIR/bin/header-repo" enrich-mode custom
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb" HEADER_REPO_KEY=erk)" "ENRICH_MODE: custom" \
+  "per-repo enrich-mode overrides the global default"
+
+# AUTO_REGISTER opt-out echoed
+HEADER_HOME="$sb/.header" "$SKILL_DIR/bin/header-config" set auto_register false >/dev/null
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb")" "AUTO_REGISTER: false" "auto_register false echoed"
+
+# an anonymous .account → ACCOUNT: anonymous-unclaimed
+sb="$(make_sandbox)"; mkdir -p "$sb/.header"
+printf '{"account_id":"a","anonymous":true,"claimed":false,"tier":"trial","trial_ends_at":"","claim_url":"u"}\n' \
+  > "$sb/.header/.account"
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb")" "ACCOUNT: anonymous-unclaimed" \
+  "an anonymous .account → ACCOUNT: anonymous-unclaimed"
+
 # ── credentials file is parsed, never sourced/executed ────────
 sb="$(make_sandbox)"; mkdir -p "$sb/.header"
 printf 'HEADER_API_KEY=hdr_sk_x\necho PWNED_BY_SOURCE\n' > "$sb/.header/credentials"
