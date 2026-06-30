@@ -67,12 +67,17 @@ that makes all of them reachable by default.
 **New backend** (one endpoint family — see the backend spec):
 
 - `POST /api/v2/auth/anonymous` — idempotent on `installation_id`; creates an anonymous account,
-  **auto-starts the free trial** (so `POST /topics/` doesn't immediately bounce on
-  `TOPIC_LIMIT_FREE`), mints a read+write `hdr_sk_…`, returns it + a `claim_url`.
-- `GET /api/v2/auth/me` — tier / trial / claimed status + a current `claim_url`, so the skill can
-  nudge and detect expiry.
-- `/signup?code=<claim_code>` — UI consumes the code, attaches auth to the existing account.
-- Abuse controls on the above (anonymous + write-capable + free-trial is a spam magnet).
+  **auto-starts the existing 15-day Pro trial** (reusing `/billing/trial/start`, keyed per
+  installation since there's no email — so `POST /topics/` doesn't bounce on `TOPIC_LIMIT_FREE`),
+  mints a `full`-scope `hdr_sk_…` (existing `/api-keys` model), returns it + trial fields + `claim_url`.
+- `/signup?code=<claim_code>` — UI consumes the code, attaches a Clerk identity to the same account.
+- Abuse controls on `POST /auth/anonymous` (the spam magnet is account *creation*; the trial itself
+  stays standard).
+
+**Everything else reuses the existing API** — no new surface: `GET /subscription` for tier/trial
+state (`trial_active` / `trial_ends_at` / `can_start_trial` / `tier_flip_kind`); the `*_FREE` /
+`*_QUOTA` tier-gate codes (flat `{"error_code","message"}`); `/billing/create-checkout` for upgrade.
+**No `/auth/me`, no `TRIAL_EXPIRED`.**
 
 **New client** (mostly re-sequencing existing pieces):
 
@@ -200,8 +205,9 @@ the onboarding run:
 
 ## 5. Claim, trial, upgrade
 
-**Claim (anytime).** `header-auth status` / `GET /auth/me` returns a current `claim_url`
-(`/signup?code=<claim_code>`). Surface it:
+**Claim (anytime).** The `claim_url` (`/signup?code=<claim_code>`) is cached in `~/.header/.account`
+at register and re-fetchable from the idempotent `POST /auth/anonymous` — `header-auth claim-url`
+surfaces it. Show it:
 
 - once at onboarding (disclosure line, §2.6),
 - as a **soft nudge** after the user has applied **N≥3** recommendations (reuse the
@@ -213,20 +219,21 @@ Wording: *"Your topics live in a free Header trial. Create a full account — ke
 this repo's topic, and you can browse your briefings in the web UI: `<claim_url>`. Optional; works
 fine from the CLI without it."*
 
-**Trial expiry.** `GET /auth/me` → `tier: "expired"`, or a write op (`POST /topics/`,
-`POST /goals/{id}/briefings`) returns `403 TRIAL_EXPIRED` with `upgrade_url`. Behavior:
+**Trial expiry (existing model — no new code).** Detected off existing signals: a Pro-gated write
+(`POST /topics/`, `POST /goals/{id}/briefings`) returns an existing `*_FREE` code with
+`can_start_trial: false`, and `GET /subscription` reports `tier_flip_kind: "trial_expired"`. Behavior:
 
 - Surface once: *"Your Header trial ended. Upgrade in the web UI to keep this repo's briefing
-  fresh: `<claim_url>` (claim + upgrade) or `<upgrade_url>` if already claimed."*
-- **Fall back to public-topic enrichment** so the audit still runs enriched. Already-generated
-  custom briefings stay readable (backend decision — recommend read-yes / generate-no).
-- The skill **never** initiates payment — upgrade is UI-only.
+  fresh: `<claim_url>` (claim + upgrade) or the billing portal if already claimed."*
+- **Fall back to public-topic enrichment** so the audit still runs enriched. Custom-topic schedules
+  auto-pause server-side on lapse and auto-resume on upgrade (existing behavior).
+- The skill **never** initiates payment — upgrade is UI-only (`/billing/create-checkout`).
 
-**`/header account`** *(NEW subcommand)* — prints: account type (anonymous-unclaimed /
-anonymous-claimed / full), trial status + days left, the `claim_url`, bound topics for this repo,
-and the controls: `header-config set auto_register false` (stop creating), delete account (link to
-the UI or a `DELETE /auth/me` if the backend ships one). This is the user's console for the
-silently-created account — it's what makes "fully silent" acceptable.
+**`/header account`** *(mode routing → `header-auth status`)* — prints: account type
+(anonymous-unclaimed / anonymous-claimed / full), trial status, the `claim_url`, and the controls:
+`header-config set auto_register false` (stop creating), and an account delete (link to the UI, or a
+small `DELETE /api/v2/account` if the backend ships one). The user's console for the silently-created
+account — what makes silent setup defensible.
 
 ## 6. State & preamble signals
 
@@ -257,9 +264,11 @@ the session.
 
 ## 7. Phased plan
 
-- **Phase 0 — backend (blocking).** `POST /auth/anonymous` + auto-trial + claim code, `GET /auth/me`,
-  `/signup?code=` consumption, `TRIAL_EXPIRED` code + `upgrade_url`, abuse controls. Per the backend
-  spec. Nothing client-side ships until this is live behind a flag.
+- **Phase 0 — backend (blocking).** Only **two** new endpoints: `POST /auth/anonymous` (auto-starts
+  the existing 15-day trial, mints a `full` key, returns a claim code) + the `/signup?code=` Clerk
+  claim flow. Everything else reuses the existing API (`GET /subscription`, `*_FREE` /
+  `can_start_trial` / `tier_flip_kind`, `/billing/create-checkout`). Per the backend spec. Nothing
+  client-side ships until this is live.
 - **Phase 1a — tested foundation. ✅ DONE.** `header-auth` bin (`register`/`save-key`/`state`/
   `status`/`claim-url`, hermetically testable via `HEADER_AUTH_STUB`) + `test/auth.test.sh`;
   `header-config` keys `auto_register` (default `true`, egress → not team-shareable) + `enrich_mode`;
@@ -275,15 +284,10 @@ the session.
   deferred briefing, claim CTA); the "nothing leaves your machine" lingo rewrite (SKILL.md + README).
   **Not yet validated end-to-end** — the prose is model-instruction (not unit-testable) and the
   register call needs `POST /auth/anonymous` reachable. Graceful fallback: register fails → generic.
-- **Phase 2 — custom topic by default.** Move topic create + bind into the default flow; draft
-  `goal_description` from the audit's stack detection; retire the upsell wording in
-  `reference/topics.md`. Reuse `header-repo bind` + the freshness check.
-- **Phase 3 — deferred briefing.** Present-now / background-wait / surface-when-ready; second apply
-  pass; block fallback; other-harness "next run" path.
 - **Phase 4 — claim & lifecycle.** `/header account` mode routing ✅ (backed by `header-auth status`,
-  works offline); README + SKILL.md privacy rewrite ✅. **Remaining (need `GET /auth/me`):**
-  claim-nudge cadence (after ≥3 applied recs), trial-expiry messaging + public fallback, `llms.txt`
-  top-line lingo.
+  works offline); README + SKILL.md privacy rewrite ✅. **Remaining (read off existing
+  `GET /subscription`):** claim-nudge cadence (after ≥3 applied recs), trial-expiry messaging +
+  public fallback, `llms.txt` top-line lingo.
 
 ## 8. Open questions / follow-ups
 
