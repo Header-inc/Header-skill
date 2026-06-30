@@ -3,6 +3,28 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.36.1 — resolve the update before anything else runs
+
+The update prompt now fires **first**, immediately after the preamble — before
+first-run onboarding (welcome / language) and before the audit. The preamble
+already ran the update check and emitted `UPDATE_CHECK`, but the contract placed
+**First-run onboarding** ahead of **Staying up to date**, so the "update now?"
+prompt came after the welcome and language prompts. An out-of-date skill may not
+work against the API, so it should be settled before the skill does anything else.
+
+- **Reordered the SKILL.md flow:** Preamble → **Staying up to date** → First-run
+  onboarding → Configuration → audit. The "Staying up to date" section moved up to
+  sit directly after the preamble's value table.
+- **Tightened the wording.** The section intro now reads "This is the first thing
+  handled after the preamble — before first-run onboarding and before the audit…
+  resolve the update before doing anything else." Onboarding gained a matching note
+  that it runs only after the update check is resolved.
+- **No behavior change on non-interactive runs.** `UPDATE_AVAILABLE` is still
+  skipped when `INTERACTIVE: no`, and `UPDATE_REQUIRED` still only warns and
+  continues — scheduled runs are never blocked.
+
+Docs/contract-ordering only; no bin logic changed (all 17 suites still pass).
+
 ## 0.36.0 — a real composite setup grade (`A+`…`F`)
 
 The audit now headlines with a single glanceable mark — **"Setup grade: B+"** —

@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.36.0
+version: 0.36.1
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Also captures session learnings natively: '/header wrapup' (or '/header compound') reviews the session and writes the pitfalls/learnings worth keeping into committed .claude/memory/ — the compounding-memory flywheel, run by Header instead of a separate skill. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Run '/header wrapup' at session end — or '/header compound' anytime (mid-session after something breaks/works, or at the end) — to review the session and capture its learnings/pitfalls into committed .claude/memory/ so future sessions stop re-hitting them; triggers include wrap up, wrapup, session retro/wrap-up, capture learnings, what did we learn, note the pitfalls, compound, remember this for next time. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -124,49 +124,9 @@ If `HEADER_INSTALL: ok`, use the echoed values for the rest of the session:
 
 The echoed `DEFAULT_TOPIC` / `LANGUAGE` / `STALENESS_DAYS` already fold in **env var > `~/.header/config` > built-in default** — use them directly rather than re-reading env vars or the config file later.
 
-## First-run onboarding
-
-Runs **only with `INTERACTIVE: yes`**. On a scheduled / non-interactive run (`INTERACTIVE: no`), skip this section — print nothing, ask nothing.
-
-**Claude Code only:** the choice below uses the `AskUserQuestion` tool. Other harnesses present the same options as a numbered list and ask the user to reply with a number.
-
-### Welcome — before the audit
-
-If `WELCOME_SEEN: no`, print this once, then continue:
-
-> 👋 **Header** — I optimize AI coding agents. Each run I audit your harness (`CLAUDE.md`, model, dependencies) for prompt-config debt and supply-chain gaps, and check it against what's new in agentic coding. No account needed to start.
-
-```bash
-touch "${HEADER_HOME:-$HOME/.header}/.welcome-seen"
-```
-
-### Language — before the audit
-
-If `LANGUAGE: English` (the built-in default) **and** `LANGUAGE_PROMPTED: no`, ask **once** which language to render output in:
-
-> **Which language should output be rendered in?**
->
-> Briefing content stays English on the wire; the agent translates the presentation for you. Translation quality varies by language; proper nouns, code identifiers, and URLs stay verbatim.
-
-Options (label English as recommended):
-
-1. **English** — recommended, no translation.
-2. **Spanish** — agent translates the presentation.
-3. **Turkish** — agent translates the presentation.
-4. **Other** — ask the user which language to use.
-
-Persist the choice and touch the marker (`<HEADER_BIN>` is the preamble's echoed path):
-
-```bash
-<HEADER_BIN> set language "Chosen"
-touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
-```
-
-Replace `Chosen` with the user's pick. Persisting `English` explicitly is harmless. Always touch the marker so the prompt never fires again. Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
-
 ## Staying up to date
 
-Driven by the preamble's `UPDATE_CHECK` line. Handle it **right after the preamble, before the audit** — an out-of-date skill may not work against the API. If there was no `UPDATE_CHECK` line, skip this section. Both branches use `<HEADER_BIN>`.
+Driven by the preamble's `UPDATE_CHECK` line. **This is the first thing handled after the preamble — before first-run onboarding and before the audit** (an out-of-date skill may not work against the API, so resolve the update before doing anything else). If there was no `UPDATE_CHECK` line, skip this section. Both branches use `<HEADER_BIN>`.
 
 ### UPDATE_REQUIRED — non-optional
 
@@ -229,9 +189,49 @@ curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/instal
 rm -f "${HEADER_HOME:-$HOME/.header}/last-update-check" "${HEADER_HOME:-$HOME/.header}/update-snoozed"
 ```
 
-4. Tell the user "Updated to v{new}" plus the `message` (and `notes_url` if present), then continue with the audit. If the installer reported a failure it restored the previous version — say so and suggest retrying.
+4. Tell the user "Updated to v{new}" plus the `message` (and `notes_url` if present), then continue with onboarding and the audit. If the installer reported a failure it restored the previous version — say so and suggest retrying.
 
 The update takes effect on the **next** session — the current session keeps the already-loaded `SKILL.md` in context until then.
+
+## First-run onboarding
+
+Runs **only with `INTERACTIVE: yes`**, and **only after the update check above is resolved** (handle "Staying up to date" first). On a scheduled / non-interactive run (`INTERACTIVE: no`), skip this section — print nothing, ask nothing.
+
+**Claude Code only:** the choice below uses the `AskUserQuestion` tool. Other harnesses present the same options as a numbered list and ask the user to reply with a number.
+
+### Welcome — before the audit
+
+If `WELCOME_SEEN: no`, print this once, then continue:
+
+> 👋 **Header** — I optimize AI coding agents. Each run I audit your harness (`CLAUDE.md`, model, dependencies) for prompt-config debt and supply-chain gaps, and check it against what's new in agentic coding. No account needed to start.
+
+```bash
+touch "${HEADER_HOME:-$HOME/.header}/.welcome-seen"
+```
+
+### Language — before the audit
+
+If `LANGUAGE: English` (the built-in default) **and** `LANGUAGE_PROMPTED: no`, ask **once** which language to render output in:
+
+> **Which language should output be rendered in?**
+>
+> Briefing content stays English on the wire; the agent translates the presentation for you. Translation quality varies by language; proper nouns, code identifiers, and URLs stay verbatim.
+
+Options (label English as recommended):
+
+1. **English** — recommended, no translation.
+2. **Spanish** — agent translates the presentation.
+3. **Turkish** — agent translates the presentation.
+4. **Other** — ask the user which language to use.
+
+Persist the choice and touch the marker (`<HEADER_BIN>` is the preamble's echoed path):
+
+```bash
+<HEADER_BIN> set language "Chosen"
+touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
+```
+
+Replace `Chosen` with the user's pick. Persisting `English` explicitly is harmless. Always touch the marker so the prompt never fires again. Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
 
 ## Configuration
 
