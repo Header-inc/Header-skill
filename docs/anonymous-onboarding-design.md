@@ -265,12 +265,16 @@ the session.
   `header-config` keys `auto_register` (default `true`, egress → not team-shareable) + `enrich_mode`;
   `header-repo enrich-mode` per-repo value; tests extended (config, repo, binexit). No `SKILL.md`/flow
   change yet — the bins are dormant infra, fully unit-tested. `VERSION` unchanged (not a release).
-- **Phase 1b — wire the flow (with Phase 2, needs the backend base URL).** The §2.2 generic-vs-custom
-  prompt + the §2.2a new-or-existing-user branch; `SKILL.md` preamble emits `ENRICH_MODE`/`ACCOUNT`/
-  `AUTO_REGISTER` + table rows; **new** → `header-auth register`, **existing** → `header-auth save-key`;
-  CI/`HEADER_NONINTERACTIVE` guard. Lands together with topic creation (Phase 2) so the user-facing
-  flow ships coherent and integration-tested against staging. *Public-topic behavior is unchanged on
-  **generic** or when register is skipped/fails.*
+- **Phase 1b — preamble signals. ✅ DONE.** `SKILL.md` preamble emits `ENRICH_MODE`/`ACCOUNT`/
+  `AUTO_REGISTER` + table rows; +7 preamble assertions. Inert until the flow consumes them.
+- **Phase 2 + 3 — the choice flow + deferred briefing. ✍️ DRAFTED on the branch (needs backend
+  integration test).** `SKILL.md` "First-run enrichment choice" entry hook + reconciled the old
+  upsell to the existing-key path + telemetry-gate fold-in; `reference/topics.md` rewritten with the
+  full choice flow (§2.2 generic-vs-custom, §2.2a new-or-existing → `header-auth register` /
+  `save-key`, topic-from-stack create + bind, present-now / background-wait / surface-when-ready
+  deferred briefing, claim CTA); the "nothing leaves your machine" lingo rewrite (SKILL.md + README).
+  **Not yet validated end-to-end** — the prose is model-instruction (not unit-testable) and the
+  register call needs `POST /auth/anonymous` reachable. Graceful fallback: register fails → generic.
 - **Phase 2 — custom topic by default.** Move topic create + bind into the default flow; draft
   `goal_description` from the audit's stack detection; retire the upsell wording in
   `reference/topics.md`. Reuse `header-repo bind` + the freshness check.

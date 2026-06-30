@@ -2,13 +2,81 @@
 
 *Loaded on demand by the Header skill; not part of the always-loaded SKILL.md.*
 
-## After the audit: customize your topic
+## First-run enrichment choice
 
-Once the audit + recommendations are delivered **and the apply menu has resolved**, in interactive mode, offer to **tailor the enrichment topic to this repo**. This is its own separate question — never bundled as a second question inside the apply-menu `AskUserQuestion` call. It is the upsell — the briefing that enriched the audit came from a generic topic; a custom topic targets sources about *your* stack.
+The front door for a **new repo with no key** — referenced from SKILL.md ("First-run enrichment choice"). `<REPO>` is `header-repo`, `<AUTH>` is `header-auth`, both next to the preamble's `HEADER_BIN`.
+
+**Fires only when** all hold: `ENRICH_MODE: unset`, `INTERACTIVE: yes`, `HAS_KEY: no`, `AUTO_REGISTER` ≠ `false`, `REPO_TOPIC`/`TEAM_TOPIC` empty, `SIGNUP_STATE` ≠ `public-only`. If any fails, skip this section (the standard Step 0 resolution / "After the audit" offer / Telemetry consent apply instead).
+
+**Run the audit (Step 3) first** so the custom option can name the detected stack, then ask (`AskUserQuestion` on Claude Code; numbered plain text elsewhere) — asked **alone**, never bundled with the apply menu:
+
+> I can enrich these recommendations two ways. **Generic** — the public agentic-coding briefing; nothing about your code leaves the machine. **Custom — tuned to this codebase** (I detected *\<one-line stack\>*): I set up a free Header trial and build a briefing for *your* stack. A one-line stack summary leaves the machine to create it — no code, no file contents. Switch or delete anytime.
+>
+> 1. **Custom — tuned to this codebase** (recommended)  2. Generic  3. Always custom  4. Always generic
+
+Record the per-repo answer (and, on "Always …", the global default):
+
+```bash
+"<REPO>" enrich-mode custom            # or: generic   (this repo)
+"<HEADER_BIN>" set enrich_mode custom  # only on "Always …" (global default for new repos)
+```
+
+### Generic (options 2 / 4)
+
+`"<REPO>" enrich-mode generic`. Resolve the built-in public topics (SKILL.md Step 0, case 5), run Steps 1–2, present Step 4 enriched from them — exactly today's no-key behavior. Never register; nothing project-derived egresses. Continue to "Telemetry consent".
+
+### Custom (options 1 / 3)
+
+`"<REPO>" enrich-mode custom`. Custom needs a key — find out whether they already have one:
+
+> Quick one — are you already a Header user?
+>
+> 1. **New to Header** (recommended — I'll set up a free trial, no signup)  2. I have an account — I'll paste my API key
+
+**New →** register an anonymous trial account. Silent: only this device's id + os/arch/skill-version leave — no project data.
+
+```bash
+"<AUTH>" register
+```
+
+- **Exit 0** → a read+write key is saved to `~/.header/credentials` (umask 077) and the account is cached. Proceed.
+- **Exit 1** (offline / 5xx / rate-limited) → tell the user once that custom setup didn't go through, fall back to the **Generic** path for this run, and **leave `ENRICH_MODE` unset** (don't record anything) so the next run re-offers. Never block the audit.
+- **Exit 3** (a key already exists — shouldn't happen under this gate) → treat as already set up.
+
+**Existing →** point them at their key and save it with the same hardened write:
+
+> Open **Settings ▸ API Keys** at https://joinheader.com — create or copy a key with **read + write** access (`hdr_sk_…`; write is needed to create topics) — and paste it here.
+
+Offer to open the URL (portable `open` / `xdg-open` / `start` — see the snippet under "After the audit"). When they paste:
+
+```bash
+"<AUTH>" save-key "PASTED_KEY"
+```
+
+An empty or declined paste → the same fallback as a failed register (generic this run, leave `ENRICH_MODE` unset).
+
+**With a key now available**, build the repo's topic and defer the briefing:
+
+1. **Create the topic from the detected stack.** The Step 3 audit already inferred it — draft the `goal_description` for them; use the **default source group** for speed (offer source tailoring on a later run). See "Create a custom topic" in `reference/custom-briefings.md`. The response includes `first_briefing_id`; generation is **asynchronous** (~3–5 min). A `*_FREE` / cap code here → "Tier limits and error handling" (a fresh anonymous account is on a trial, so this is rare).
+
+2. **Bind it:** `"<REPO>" bind <new_topic_id> "<topic name>"`. Future runs resolve it as `REPO_TOPIC`.
+
+3. **Present the audit now; defer the briefing recs.** Render Step 4's coach + scorecard + non-briefing recommendations immediately. The briefing-derived section reads: *"📰 Building this repo's briefing (~3–5 min) — stack-specific recommendations will follow as soon as it's ready."* Background-wait on `first_briefing_id` (see "Polling IN_PROGRESS briefings", non-blocking pattern, in `reference/custom-briefings.md`). On completion, fetch it (`Accept: text/markdown`), cross-reference the **briefing-derived items only**, and surface them as a follow-up — *"🔁 Your repo's briefing is ready"* — with their own small apply prompt; record `"<REPO>" seen "<generated_at>"`. (Harnesses without a background timer: the briefing-derived recs land on the next run via the normal bound-repo path — say so in one line.)
+
+4. **Chained offers during the wait** (they depend on the topic existing) — bind is done; make the **schedule** and **team-config** offers exactly as in "After the audit" steps 2–3 below.
+
+5. **Claim CTA (one line).** Surface the conversion link so the trial is convertible: `"<AUTH>" claim-url` (empty for an existing/already-claimed account). *"Your topics live in a free Header trial — create a full account (keeps your key + topics, and you can browse briefings in the web UI): \<claim_url\>. Optional; works fine from the CLI without it."*
+
+Continue to "Telemetry consent". On a later run this repo has `ENRICH_MODE: custom` + a bound `REPO_TOPIC`, so Step 0 resolves it and the briefing already exists — no choice, no deferral.
+
+## After the audit: customize your topic (existing key)
+
+For a user who **already has a key** (`HAS_KEY: yes`) but no bound topic — the "First-run enrichment choice" gates on `HAS_KEY: no`, so it doesn't fire for them. Once the audit + recommendations are delivered **and the apply menu has resolved**, in interactive mode, offer to **tailor the enrichment topic to this repo**. This is its own separate question — never bundled as a second question inside the apply-menu `AskUserQuestion` call. The briefing that enriched the audit came from a generic topic; a custom topic targets sources about *your* stack.
 
 **Conditions to fire** (all must hold):
 
 - `INTERACTIVE: yes`
+- `HAS_KEY: yes` (a no-key new repo is handled by the first-run choice above, not here)
 - `TOPIC_OFFERED: no` for this repo
 - `SIGNUP_STATE` is **not** `public-only` (back-compat — honors older opt-out markers from 0.10.0/0.10.1; this skill no longer writes new ones)
 - `REPO_TOPIC` is empty (this repo isn't already bound to a custom topic)

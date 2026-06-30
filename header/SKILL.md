@@ -13,7 +13,7 @@ allowed-tools: Bash, AskUserQuestion
 
 # Header — audit & optimize the coding agent
 
-[Header](https://joinheader.com) is an optimization layer for AI coding agents. Every invocation of this skill runs a **local audit** of your agent harness — `CLAUDE.md`, model choice, dependencies, settings — for prompt-config debt and supply-chain gaps, and **enriches the recommendations** with the latest agentic-coding briefing for the resolved topic. The audit is local and read-only; nothing about your project leaves the machine. Briefings come from Header's public API (no auth) or a custom topic you own (API key).
+[Header](https://joinheader.com) is an optimization layer for AI coding agents. Every invocation of this skill runs a **local audit** of your agent harness — `CLAUDE.md`, model choice, dependencies, settings — for prompt-config debt and supply-chain gaps, and **enriches the recommendations** with the latest agentic-coding briefing for the resolved topic. **The audit is always 100% local** — no code, no file contents, no diffs ever leave the machine. Enrichment is your choice: **generic** briefings come from Header's public API (no auth, nothing project-derived egresses); **custom** briefings tune the feed to your stack, which sends a one-line stack summary (e.g. *"Python/FastAPI + React"*) — nothing else — to build the topic (API key; the skill can set up a free anonymous one).
 
 > This skill uses `curl`, so it runs in any agent with shell access (Claude Code, Cursor, Aider, OpenAI Codex CLI, Goose, etc.). Claude Code users may substitute `WebFetch` for the read-only GETs if they prefer.
 
@@ -263,6 +263,12 @@ Every invocation runs this flow. The audit is local and read-only; the briefing 
 - `wrapup` (also `wrap-up`, `wrap`) or `compound` → run the **session wrap-up / compound** flow (see "Session wrap-up & compound (`/header wrapup`, `/header compound`)"): review the session and capture its learnings/pitfalls into committed `.claude/memory/`. This does **not** run the audit — it's the session-end capture ritual. `wrapup` adds a short session recap first; `compound` is capture-only.
 
 Anything else (a topic name/UUID/briefing URL, or no argument) runs the full audit-led flow below.
+
+### First-run enrichment choice
+
+**Fires only when** `ENRICH_MODE: unset` **and** `INTERACTIVE: yes` **and** `HAS_KEY: no` **and** `AUTO_REGISTER` ≠ `false` **and** `REPO_TOPIC`/`TEAM_TOPIC` are empty **and** `SIGNUP_STATE` isn't `public-only`. Otherwise skip this — `ENRICH_MODE: generic` (or no key / opted out) uses the standard Step 0 resolution below; `ENRICH_MODE: custom` resolves the repo's bound topic.
+
+This is the front door for a new repo: ask **generic vs. codebase-tuned** enrichment once, and on custom set up a zero-friction account (anonymous trial for a new user, or the existing user's key) + a repo topic. Because the custom option names the detected stack and the new briefing can't enrich the run that creates it, this branch **runs Step 3 (the audit) first, presents the audit recommendations, and defers the briefing-derived recommendations to a background pass.** **Flow → `reference/topics.md` ("First-run enrichment choice").** Resolve it before continuing; `ENRICH_MODE: generic` falls through to Step 0, `custom` proceeds with the bound topic.
 
 ### Step 0 — Resolve the topic
 
@@ -531,13 +537,13 @@ On the built-in two-topic default, if **one** topic 404s, proceed with the other
 curl -sS -w "\n%{http_code}" https://joinheader.com/api/v2/topics/public/catalog
 ```
 
-## After the audit: customize your topic
+## After the audit: customize your topic (existing key)
 
-In an interactive run, once per repo, offer to point the briefing at the user's stack (plus the chained bind / schedule / team-config offers). **Flow → `reference/topics.md`.**
+For a user who **already has a key** (`HAS_KEY: yes`) but no `REPO_TOPIC`/`TEAM_TOPIC` yet: the "First-run enrichment choice" above doesn't fire for them (it gates on `HAS_KEY: no`), so make the offer here. In an interactive run, once per repo, offer to point the briefing at the user's stack (plus the chained bind / schedule / team-config offers). **Flow → `reference/topics.md`.** A **no-key** new repo is handled up front by the first-run choice instead — don't also offer here.
 
 ## Telemetry consent
 
-Ask **once**, only when `INTERACTIVE: yes`, `TELEMETRY_PROMPTED: no`, and the post-audit flow has resolved (one of: `SIGNUP_STATE` is `done` or `public-only`, OR `TOPIC_OFFERED: yes` for this repo).
+Ask **once**, only when `INTERACTIVE: yes`, `TELEMETRY_PROMPTED: no`, and the post-audit flow has resolved (one of: `SIGNUP_STATE` is `done` or `public-only`, OR `TOPIC_OFFERED: yes` for this repo, OR `ENRICH_MODE` is `custom`/`generic` for this repo — the first-run choice was made).
 
 > Help improve the Header skill? It can share **usage only** — which path ran, the outcome, and how many recommendations you applied. **Never** your code, file paths, repo names, or briefing content.
 >
