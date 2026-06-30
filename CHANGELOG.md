@@ -3,6 +3,47 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.37.0 — two setup grades: 📦 project (checked-in) vs 💻 local harness
+
+The setup grade conflated two different things and was never explicit about
+which. It graded the repo's **checked-in** config (`CLAUDE.md`, committed
+settings, rails) *and* the user's **local machine** setup (`~/.claude/CLAUDE.md`,
+global `~/.claude/settings.json`, the model you happen to run) in one number —
+so two people cloning the same repo could get different grades, and a global
+`bypassPermissions` in your home dir could tank a repo's security axis. The grade
+even claimed to be "a property of the repo config, not the machine" (0.36.0) while
+three signals leaked the machine in.
+
+`header-audit grade` now emits **two** grades, each over the same five axes:
+
+- **📦 Project setup** — the repo's checked-in agent config only. Reproducible on
+  any machine, reviewable in a PR. This is the headline (`GRADE` / `GRADE-AXIS` —
+  unchanged row names, so howsmyaicoding.com's "Setup grade B+" keeps working).
+- **💻 Local harness** — your machine: `~/.claude/CLAUDE.md` & `settings.json`, the
+  `settings.local.json` override, the model *you* run, package-tool versions
+  (`GRADE-LOCAL` / `GRADE-AXIS-LOCAL`). Machine-dependent by design; **never moves
+  the project grade.**
+
+How it's partitioned: a path under `~/.claude` (or any `settings.local.json`) is
+**local**, everything else under the repo is **project**. The `MODEL` row now
+carries a `<source>` (project = repo-pinned in committed settings; local =
+settings.local.json or your transcript), so a superseded model you run docks the
+*local* model axis while a repo that pins nothing keeps a clean project axis.
+`deps` splits too: the project axis docks an absent checked-in cooldown gate, the
+local axis docks a package tool too old to honor one (the machine-dependent half).
+`rails` are a repo property → `n/a` on the local grade. The project grade stays
+**static-config only** (transcript-independent — a fresh clone grades identically).
+
+Presentation: the audit tail renders two scorecards — 📦 project (always, the
+headline) and 💻 local harness (collapses to a one-liner when you have no local
+overrides, so the common case stays tight). Findings route by scope: a project
+finding → commit/PR; a local finding → fix your machine.
+
++14 audit assertions (local debt docks the local grade, never the project; a
+global bypass / heavy `~/.claude/CLAUDE.md` stays off the project axes; model
+source routing; rails n/a on local; the project grade is unchanged by local debt).
+SKILL.md / README / llms.txt updated to make the two scopes explicit.
+
 ## 0.36.2 — stop counting on-demand commands/subagents as always-loaded (a phantom F)
 
 The composite setup grade (0.36.0) could slam a genuinely-healthy repo to **F**

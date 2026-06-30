@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.36.2
+version: 0.37.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk. Each invocation runs the audit, enriched by the latest agentic-coding briefing relevant to your stack. Also captures session learnings natively: '/header wrapup' (or '/header compound') reviews the session and writes the pitfalls/learnings worth keeping into committed .claude/memory/ — the compounding-memory flywheel, run by Header instead of a separate skill. Public access needs no auth; authenticated workflows use an API key."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers include audit, audit my setup/agent/harness, optimize codebase, reduce token cost, supply-chain risk, dependency upgrade, CLAUDE.md or prompt debt, add a pre-commit hook / guardrails / determinism rails, test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header, /header-audit, or the legacy /header-briefing. Run '/header wrapup' at session end — or '/header compound' anytime (mid-session after something breaks/works, or at the end) — to review the session and capture its learnings/pitfalls into committed .claude/memory/ so future sessions stop re-hitting them; triggers include wrap up, wrapup, session retro/wrap-up, capture learnings, what did we learn, note the pitfalls, compound, remember this for next time. Pass a topic name, UUID, or briefing URL to swap the enrichment topic; otherwise the default agentic-coding topic is used. Run '/header fable-5' (or 'adopt') for the engine-adoption card — a grounded 'should you move your harness to Fable 5 / a newer model?' answer that hands off to a model+effort experiment (header-experiment mine --adopt); '/header opus-4.8' renders the Opus 4.8 card (the same-price move)."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -311,12 +311,12 @@ Local, read-only — nothing leaves the machine. Run **all seven** scans. `<AUDI
 <AUDIT> waste            # usage accounting from the same transcripts: unused MCP servers / skills, tool error rates, compaction pressure, skill context tax
 <AUDIT> rails            # determinism guardrails present|absent (pre-commit gate / test ratchet / compounding memory) — opinionated, additive
 <AUDIT> retro            # behavioral mining of your own sessions: edit-thrash, gotcha volume, git-workflow tells, ranked capability nudges (worktree / guardrail / compound) — the coach lead
-<AUDIT> grade            # composite setup grade (e.g. B+) over the 5 scorecard axes — composites harness+deps+rails internally; static-config only, deterministic
+<AUDIT> grade            # TWO setup grades over the 5 axes: 📦 project (checked-in config, the headline) + 💻 local harness (your machine) — composites harness+deps+rails, partitioned by scope; static-config, deterministic
 ```
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in the `summary`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. **Proven rows:** when the briefing carries cross-customer evidence for a pattern (a measured effect from the proven-changes library), write a 6-field row instead — `id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` — and `harness` re-emits the evidence as a `PROVEN` line (a proven row may reuse a built-in id to attach evidence to it; the scan de-duplicates by id, first wins). Keep regexes conservative (`grep -iE`); malformed lines (not exactly 3 or 6 tab fields, or a non-integer `n_repos`) are skipped. This is how the distribution wedge feeds new hypotheses — and proven library results — into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `ONDEMAND`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`, `RETRO-SCOPE`, `RETRO-INPUT`, `RETRO-WINDOW`, `RETRO-HARNESS`, `RETRO-THRASH`, `RETRO-FAILS`, `RETRO-GIT`, `RETRO-SHIP`, `RETRO-PEAK`, `RETRO-PLAN`, `RETRO-CORRECTION`, `RETRO-CORR`, `RETRO-GAP`, `RETRO-CAP`, `GRADE`, `GRADE-AXIS`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
+What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `ONDEMAND`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`, `RETRO-SCOPE`, `RETRO-INPUT`, `RETRO-WINDOW`, `RETRO-HARNESS`, `RETRO-THRASH`, `RETRO-FAILS`, `RETRO-GIT`, `RETRO-SHIP`, `RETRO-PEAK`, `RETRO-PLAN`, `RETRO-CORRECTION`, `RETRO-CORR`, `RETRO-GAP`, `RETRO-CAP`, `GRADE`, `GRADE-AXIS`, `GRADE-LOCAL`, `GRADE-AXIS-LOCAL`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
 
 ### Step 4 — Cross-reference and present
 
@@ -342,7 +342,7 @@ Built from `<AUDIT> retro` (+ your own session context). Heading: `## 🧭 Heade
 
 #### Audit tail — the config scorecard, demoted (still rendered)
 
-After the coach lead, render the **setup grade + spend + scorecard + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** Keep it tight (the ranked-list cap applies). The one-line **setup grade** (`header-audit grade`'s `GRADE` line) is the scorecard's headline — a single glanceable mark for "how's my setup?"; spend sits directly below it, where the "open with the money" rule applies (not at the top of the report).
+After the coach lead, render the **spend + two scorecards (📦 project, 💻 local) + `[Apply now]` / `[Apply with review]` config findings** exactly as the contract below specifies (its heading stays `## 📊 Header audit`). It is the *tail*, not the lead. The RETRO-CAP rail practices already live in the coach lead (step 4) — **don't re-surface them here.** Keep it tight (the ranked-list cap applies). The headline **setup grade** (`header-audit grade`'s `GRADE` line — the **📦 project** grade) answers "how's my setup?" for the repo's checked-in config; the **💻 local harness** grade (`GRADE-LOCAL`) sits beside it for your machine. Spend sits directly below the heading, where the "open with the money" rule applies (not at the top of the report).
 
 **Recent activity (diff-aware):** glance at recently-touched files (`git log --name-only --pretty=format: -15 2>/dev/null | sort -u`) and recent commit subjects (`git log --oneline -15 2>/dev/null`) to **weight audit recommendations** toward areas the user just changed. This is for the audit tail only — the **coach lead's "what shipped" comes from `RETRO-SHIP`** (a windowed count); don't narrate raw commit subjects from this glance up in the coach lead.
 
@@ -370,26 +370,45 @@ When a `MODEL` is known, cross-reference its model card / release notes before d
 ```markdown
 ## 📊 Header audit — <repo basename>
 
-**Setup grade: `<GRADE letter>`** — <one clause: the heaviest `GRADE-AXIS` deduction, e.g. "supply-chain gate + rails absent"; or "clean, current setup" at A/A+>.
-
 💰 **Spend** (this repo, last <COST-INPUT file count> transcripts — API-rate equivalent): **~$<SPEND-TOTAL usd> / <calls> calls**
 - `<model>` — $<usd> (<share>%) ← costliest
 - `<model>` — $<usd> (<share>%)
 
 <header-cost's price-source + freshness line>. <billing-mode note: API → real dollars; subscription → usage-limit headroom, the % is identical; unknown → say so>.
 
+### 📦 Project setup — **`<GRADE letter>`**
+
+<one clause: the heaviest project `GRADE-AXIS` deduction, e.g. "supply-chain gate + rails absent"; or "clean, current config" at A/A+>. *Grades the repo's checked-in agent config — reproducible on any machine.*
+
 | Axis | State |
 |---|---|
-| Model | `<MODEL>`<. Plus the MODEL-UPGRADE / MODEL-STALE note when one fired> |
-| Always-loaded context | <FILE+IMPORT sum> tokens across <n> files; skills frontmatter +<CONTEXT-TAX skills est_tokens> tokens (<count> skills); command/subagent registry +<CONTEXT-TAX registry est_tokens> tokens (<count> on-demand files) — the registry tax is the *only* per-turn cost of those files; their bodies (`ONDEMAND`) load on invocation, so never fold them into this sum |
-| Security | Bash: <allowlist / denylist / bypass / no explicit policy>; hooks: <n configured / none> |
-| Deps | <ECOSYSTEM names>; gates: <per non-n/a GATE: name present/absent><; TOOL too-old note if any> |
+| Model | <repo-pinned `<MODEL>` + the MODEL-UPGRADE / MODEL-STALE note when one fired; or "not pinned — graded under your local harness"> |
+| Always-loaded context | <project FILE+IMPORT sum> tokens across <n> files; skills frontmatter +<CONTEXT-TAX skills est_tokens> tokens (<count> skills); command/subagent registry +<CONTEXT-TAX registry est_tokens> tokens (<count> on-demand files) — the registry tax is the *only* per-turn cost of those files; their bodies (`ONDEMAND`) load on invocation, so never fold them into this sum |
+| Security | Bash (repo settings): <allowlist / denylist / bypass / no explicit policy>; hooks: <n configured / none> |
+| Deps | <ECOSYSTEM names>; gates: <per non-n/a GATE: name present/absent> |
 | Rails | <per non-n/a RAIL: name ✓ present / ✗ absent> |
+
+### 💻 Your local harness — **`<GRADE-LOCAL letter>`**
+
+<one clause: the heaviest `GRADE-AXIS-LOCAL` deduction; or collapse the whole section to one line when clean — see rules>. *Grades your machine (`~/.claude`, the model you run, tool versions) — never moves the project grade.*
+
+| Axis | State |
+|---|---|
+| Model | <the model you actually run (`~/.claude` / transcript) + the MODEL-STALE note if any; or "—"> |
+| Always-loaded context | <`~/.claude/CLAUDE.md` tokens; user-scope skills frontmatter tax> |
+| Security | Bash (`~/.claude/settings.json`): <allowlist / denylist / bypass / none> |
+| Deps | <package-tool versions: the `TOOL too-old` note, or "current"> |
+| Rails | n/a — determinism rails are a repo property |
 ```
 
 Hard rules:
 
-- **Setup grade** — the line directly under the heading shows the **letter only** from `header-audit grade`'s `GRADE <letter> <score> 100` line, rendered as `**Setup grade: <letter>**`. **Drop the numeric `<score>`/100** — the front-end (howsmyaicoding.com) shows just the letter; match it. **Never** model-assign or recompute the letter — it is deterministic by design (the website's "Setup grade B+" is this letter). Follow it with one short clause naming the heaviest `GRADE-AXIS` deduction (or "clean, current setup" at A/A+). The `GRADE-AXIS` breakdown rows (and the underlying score) are the *why* — surface them only if the user asks "why that grade?". Omit the grade line only if the scan emitted no `GRADE` row at all.
+- **Two grades, explicitly scoped** — the audit grades two distinct things and **must keep them separate**:
+  - **📦 Project setup** = the repo's **checked-in** agent config (`CLAUDE.md`, `AGENTS.md`, committed `.claude/settings.json`, `.claude/commands|agents`, `.mcp.json`, editor rules, `.npmrc` gate, determinism rails). Reproducible on any machine, reviewable in a PR. Its `GRADE` letter is **the headline** — the one howsmyaicoding.com shows as "Setup grade B+".
+  - **💻 Your local harness** = **your machine**, not committed (`~/.claude/CLAUDE.md` & settings, the `settings.local.json` override, the model *you* run, package-tool versions). Its `GRADE-LOCAL` letter is machine-dependent by design and **never moves the project grade**.
+  - Route fixes by scope: a 📦 project finding → commit/PR; a 💻 local finding → fix your machine. Never imply a local issue is the repo's fault (or vice-versa).
+- **Grade letters** — show the **letter only** from `GRADE <letter> <score> 100` (project) and `GRADE-LOCAL <letter> <score> 100` (local). **Drop the numeric `<score>`/100.** **Never** model-assign or recompute either letter — both are deterministic by design. Follow each with one short clause naming the heaviest `GRADE-AXIS` / `GRADE-AXIS-LOCAL` deduction. The breakdown rows are the *why* — surface them only if the user asks "why that grade?". Omit a grade section only if its `GRADE`/`GRADE-LOCAL` row is absent.
+- **Collapse a clean local harness** — if `GRADE-LOCAL` is `A`/`A+` **and** every `GRADE-AXIS-LOCAL` deduction is `0`, replace the entire `### 💻 Your local harness` section (heading + table) with a single line: `💻 **Your local harness: <letter>** — no local overrides detected.` Render the full local table only when something there actually deducts. (The 📦 project table always shows all five axes.)
 - **Spend block** — only when the scope + harness sanity check above passes (`COST-SCOPE repo` + `COST-HARNESS claude`). Otherwise replace the entire block with the single line that check prescribes (background-only global figure, harness-mismatch wording, or the no-data note) — never render the breakdown.
 - **The table is fixed** — exactly these five axes, this order, as a GitHub-flavored markdown table (not a box-drawing table, not prose, not a different row set). An axis with nothing to report reads `—`. **Each cell is one short clause** — no paragraphs; detail belongs in the ranked list, not in the row.
 - **Skip `n/a` rows** (gates, rails) everywhere, per the scan contracts.
@@ -538,7 +557,7 @@ The premise — *"prompts are technical debt too"*: harness instructions are wri
 - `IMPORT <parent> <imported-path>` — an `@import` edge. Claude Code (and AGENTS.md) load an `@path` line's target inline, every turn, so the auditor follows imports and emits the imported file as its own `FILE` row. **Include imported files in the always-loaded sum** — the previous scan undercounted by ignoring them.
 - `NESTED <path> <bytes> <est_tokens>` — a subdir `CLAUDE.md`/`AGENTS.md`. Loaded **on demand** when the agent works in that subtree, *not* every turn — so count it apart from the always-loaded total (it still rots; flag debt the same way).
 - `ONDEMAND <path> <bytes> <est_tokens>` — a slash-command (`.claude/commands/*.md`) or subagent (`.claude/agents/*.md`). Its **body loads only when the command/agent is invoked**, never every turn — so it is **not** an always-loaded file: never add `<est_tokens>` to the per-turn sum (counting these bodies as always-loaded was a real over-count that could pin the grade to F on a repo with many commands/agents). It is still scanned for prompt-debt `HIT`s and reported for trimming. The genuine per-turn cost of these files is only their registry frontmatter — the `CONTEXT-TAX registry` row.
-- `MODEL <value>` — the model the harness runs: declared in `.claude/settings.json`, else the most recent primary model in the user's transcripts (`~/.claude/projects`). So `MODEL` / `MODEL-STALE` / `MODEL-UPGRADE` fire even when the user pins nothing and rides the default alias.
+- `MODEL <value> <source>` — the model the harness runs, plus where it came from: `project` = pinned in committed `.claude/settings.json` (ships with the repo); `local` = a `settings.local.json` override or the most recent primary model in the user's transcripts (`~/.claude/projects`). So `MODEL` / `MODEL-STALE` / `MODEL-UPGRADE` fire even when nothing is pinned, and `grade` uses the source to put the model axis on the **project** grade (repo-pinned) or the **local** grade (what you run).
 - `MODEL-STALE <value> <why>` — the model id names a **superseded tier** (Claude 3.x/2.x/instant; early Opus 4.0/4.1). Pure hypothesis-generation: cross-reference the briefing for the current recommended tier and surface a model-migration `[Experiment]`. Conservative by design — current ids aren't flagged.
 - `MODEL-UPGRADE <value> <recommended> <why>` — a newer model has shipped above the current engine, **priced honestly**: pre-4.8 Opus tiers get the *same-price* move (Opus 4.5/4.6/4.7 → Opus 4.8); Opus 4.8 gets the tier above (→ Fable 5, **2× token price** — the `<why>` says so). An **opportunity, not debt** (distinct from `MODEL-STALE`): offer the **engine-adoption card** (`/header fable-5` / `/header opus-4.8`, matching the recommended model) for the grounded case + caveats, then `header-experiment mine --adopt` to prove it on the repo. Conservative — never fires on the top tier (Fable 5) or a superseded tier.
 - `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern (built-in or briefing-supplied). Run `<AUDIT> patterns` to list the ids and why each is debt.
@@ -652,12 +671,17 @@ The **coach** scan: behavioral mining of the user's OWN sessions — the signals
 
 ### `header-audit grade`
 
-The **composite setup grade** — one glanceable mark (e.g. `B+`) summarizing the five scorecard axes, so the report can answer "how's my setup?" before the detail. Re-runs `harness` + `deps` + `rails` internally (cheap, read-only) and reduces their findings to a single letter. **Static-config only:** the transcript-mined scans (`cost` / `waste` / `retro`) are excluded, so the grade is stable whether or not the repo has session history — and identical run-to-run, model-to-model, because it is **computed in the bin, never model-assigned**. Output lines:
+**TWO composite setup grades** — glanceable marks (e.g. `B+`) over the five scorecard axes, answering "how's my setup?" before the detail. The split is the point: **what you grade must be explicit.**
 
-- `GRADE-AXIS <axis> <delta> <note>` — the per-axis deduction (five rows, fixed order: `context` / `model` / `security` / `deps` / `rails`); `delta` is `-N` or `0`, with a one-clause reason. The breakdown behind the letter — surface it only if the user asks "why that grade?".
-- `GRADE <letter> <score> 100` — the composite (start 100, deduct per finding, clamp 0–100), mapped to a standard `+`/`-` band (`A+` … `F`). Render the **letter only** as the scorecard headline — drop the `<score>` (see the contract above); the score stays in the line for the breakdown + tests, not the user-facing render.
+- **📦 Project setup** grades the repo's **checked-in** agent config — `CLAUDE.md`, `AGENTS.md`, committed `.claude/settings.json`, `.claude/commands|agents`, `.mcp.json`, editor rules, the `.npmrc` cooldown gate, determinism rails. A property of the repo: it travels with the code, is reviewable in a PR, and grades **identically on any machine**. This is the headline (howsmyaicoding.com's "Setup grade B+").
+- **💻 Local harness** grades **your machine** — `~/.claude/CLAUDE.md` & `settings.json`, the `settings.local.json` override, the model *you* run (transcript/local), package-tool versions. Machine-dependent by design; reported alongside, **never folded into the project grade**.
 
-**What it weighs** (a stability contract — the same inputs always yield the same grade, so the bands/weights don't drift between runs): always-loaded context tokens (tiered) + prompt-debt `HIT`s + `STALE-REF`s · a `MODEL-STALE` superseded tier (a `MODEL-UPGRADE` *opportunity* is **not** penalized — being on a current tier never costs points) · a weak Bash posture (`bypass` / `denylist`; "no explicit policy" is fine for local dev and doesn't deduct) · absent supply-chain cooldown gates · absent determinism rails (weighed **light** — opinionated house guardrails, not measured on your repo). A clean, current, lean setup lands at `A`/`A+`; debt and risk pull it down. Package-tool versions (`TOOL too-old`) are a scorecard note, **not** a graded axis — grading them would make the mark machine-dependent.
+Re-runs `harness` + `deps` + `rails` internally (cheap, read-only) and **partitions each finding by scope** — a path under `~/.claude` (or a `settings.local.json`) is local, everything else under the repo is project; `MODEL` carries its own source. **Static-config only:** the transcript-mined scans (`cost` / `waste` / `retro`) are excluded, so the **project** grade is stable whether or not the repo has session history — and identical run-to-run, model-to-model, because it is **computed in the bin, never model-assigned**. Output lines:
+
+- `GRADE-AXIS <axis> <delta> <note>` / `GRADE <letter> <score> 100` — the **project** grade: per-axis deductions (five rows, fixed order: `context` / `model` / `security` / `deps` / `rails`) then the composite (start 100, deduct, clamp 0–100, map to an `A+`…`F` band). Render the **letter only** as the headline; the `<score>` stays in the line for the breakdown + tests.
+- `GRADE-AXIS-LOCAL <axis> <delta> <note>` / `GRADE-LOCAL <letter> <score> 100` — the **local harness** grade, same five axes and formulas applied to the local-scope findings. `rails` is always `n/a` here (a repo property). Collapse the whole local section to one line when it's clean (see the scorecard contract).
+
+**What each axis weighs** (a stability contract — same inputs always yield the same grade, so the bands/weights don't drift between runs): **context** = always-loaded tokens (tiered) + prompt-debt `HIT`s + `STALE-REF`s (project: repo files; local: `~/.claude`) · **model** = a `MODEL-STALE` superseded tier (a `MODEL-UPGRADE` *opportunity* is **not** penalized), graded on whichever scope owns the model (repo-pinned → project; the model you run → local) · **security** = a weak Bash posture (`bypass` / `denylist`; "no explicit policy" is fine and doesn't deduct), per scope's settings · **deps** = project docks an absent checked-in cooldown gate, local docks a package-tool too old to honor one (the machine-dependent half lives on the local grade — never the project one) · **rails** = absent determinism guardrails, weighed **light**; project-only. A clean, current, lean setup lands at `A`/`A+`; debt and risk pull it down.
 
 ### Record findings
 

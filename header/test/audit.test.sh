@@ -493,6 +493,38 @@ Hod2="$(HOME="$sb_od2" "$AU" harness --repo "$rod2")"
 assert_contains "$Hod2" "ONDEMAND	$rod2/.claude/agents/rev.md" "the subagent emits ONDEMAND"
 assert_contains "$Hod2" "	role-puffery	" "an ONDEMAND subagent body is still scanned for prompt debt"
 
+# ── grade is split: PROJECT (checked-in) vs LOCAL (your machine harness) ──
+# Local config must NOT move the project grade (it's a reproducible property of the
+# repo); project config must NOT move the local grade. That separation is the point.
+sb_sc="$(make_sandbox)"; rsc="$sb_sc/repo"; mkdir -p "$rsc/.claude" "$sb_sc/.claude"
+printf '# Lean\nUse tabs.\n' > "$rsc/CLAUDE.md"
+head -c 60000 /dev/zero | tr '\0' x > "$sb_sc/.claude/CLAUDE.md"   # bloated GLOBAL memory file → LOCAL
+printf '{ "permissions": { "defaultMode": "bypassPermissions" } }\n' > "$sb_sc/.claude/settings.json"  # GLOBAL bypass → LOCAL
+Gsc="$(HOME="$sb_sc" "$AU" grade --repo "$rsc")"
+assert_contains "$Gsc" $'GRADE-LOCAL\t' "grade emits a separate local-harness grade"
+for ax in context model security deps rails; do
+  assert_contains "$Gsc" "GRADE-AXIS-LOCAL	$ax	" "local grade emits the $ax axis row"
+done
+assert_contains "$Gsc" $'GRADE-AXIS-LOCAL\tsecurity\t-18\tBash permissions bypassed' \
+  "global ~/.claude bypassPermissions docks the LOCAL security axis"
+assert_contains "$Gsc" $'GRADE-AXIS-LOCAL\tcontext\t-9\t' \
+  "a heavy ~/.claude/CLAUDE.md docks the LOCAL context axis"
+assert_contains "$Gsc" $'GRADE-AXIS-LOCAL\trails\t0\tn/a' \
+  "rails are a repo property — n/a on the local harness grade"
+# the PROJECT grade is untouched by all that local debt
+assert_contains "$Gsc" $'GRADE-AXIS\tcontext\t0\t0.0k' "local memory bloat does NOT inflate the project context axis"
+assert_contains "$Gsc" $'GRADE-AXIS\tsecurity\t0\t' "a global bypass does NOT dock the project security axis"
+assert_contains "$Gsc" $'GRADE\tA\t' "local-harness debt does not pull the project grade out of the A band"
+# model scope: a transcript-only model is the one YOU run → LOCAL, not project
+sb_md="$(make_sandbox)"; rmd="$sb_md/repo"; mkdir -p "$rmd/.claude"
+printf '# P\nUse tabs.\n' > "$rmd/CLAUDE.md"
+mdkey="$(printf '%s' "$rmd" | sed 's/[^A-Za-z0-9]/-/g')"; mdproj="$sb_md/.claude/projects/$mdkey"; mkdir -p "$mdproj"
+printf '{"message":{"model":"claude-opus-4-1-20250805"}}\n' > "$mdproj/s.jsonl"
+Gmd="$(HOME="$sb_md" "$AU" grade --repo "$rmd")"
+assert_contains "$Gmd" $'GRADE-AXIS\tmodel\t0\t' "an un-pinned repo keeps the PROJECT model axis clean"
+assert_contains "$Gmd" $'GRADE-AXIS-LOCAL\tmodel\t-12\ton a superseded tier' \
+  "the model you actually run (transcript) docks the LOCAL model axis, not the project"
+
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "unknown subcommand → exit 1"

@@ -16,7 +16,8 @@
 #         ONDEMAND   <path>  <bytes>  <est_tokens>      (slash-command / subagent body — loads
 #                    only when invoked, NOT summed as always-loaded; still trim/debt-scanned.
 #                    The per-turn cost is only its registry frontmatter — see CONTEXT-TAX.)
-#         MODEL      <value>                            (settings, else most recent transcript)
+#         MODEL      <value>  <source>                  (source: project=repo-pinned in committed
+#                    settings.json; local=settings.local.json override or most-recent transcript)
 #         MODEL-STALE <value>  <why>                    (model id is a superseded tier)
 #         MODEL-UPGRADE <value>  <recommended>  <why>   (newer same-family model shipped)
 #         HIT        <path>  <lineno>  <pattern_id>  <excerpt>
@@ -101,17 +102,28 @@
 #       `gate` for supply-chain. Reads header/scaffold/ templates.
 #
 #   header-audit grade [--repo DIR]
-#       Composite, deterministic SETUP GRADE over the five scorecard axes
-#       (context / model / security / deps / rails) — the single glanceable mark
-#       the audit headlines with ("Setup grade B+"). Re-runs harness+deps+rails
-#       (cheap, read-only) and reduces their findings to one +/- letter grade.
-#       STATIC-CONFIG ONLY: the transcript-mined scans (cost/waste/retro) are
-#       excluded so the grade is stable whether or not the repo has session
-#       history. Start at 100, deduct per finding, clamp 0..100, map to a +/-
-#       band. The weights + bands are a STABILITY CONTRACT (changing one moves
+#       TWO composite, deterministic SETUP GRADES over the five scorecard axes
+#       (context / model / security / deps / rails), split by what is being graded:
+#         · PROJECT — the repo's checked-in agent config (CLAUDE.md, AGENTS.md,
+#           committed .claude/settings.json, .mcp.json, editor rules, .npmrc gate,
+#           determinism rails). Reproducible across machines — a property of the
+#           repo. This is the headline "Setup grade B+".
+#         · LOCAL — your machine harness (~/.claude/CLAUDE.md & settings, the
+#           settings.local.json override, the model YOU run, package-tool versions).
+#           Machine-dependent by design; reported alongside, never folded into the
+#           project grade.
+#       Re-runs harness+deps+rails (cheap, read-only), partitions each finding by
+#       scope (path under ~/.claude or a settings.local.json = local; else project;
+#       MODEL carries its own source), and reduces each scope to one +/- letter
+#       grade. STATIC-CONFIG ONLY: the transcript-mined scans (cost/waste/retro)
+#       are excluded so the PROJECT grade is identical whether or not the repo has
+#       session history. Start at 100, deduct per finding, clamp 0..100, map to a
+#       +/- band. The weights + bands are a STABILITY CONTRACT (changing one moves
 #       every user's grade), so they live here — computed, never model-assigned.
-#         GRADE-AXIS <axis>  <delta>  <note>   (per-axis deduction; 5 rows)
-#         GRADE      <letter>  <score>  100     (the composite; 100 = clean)
+#         GRADE-AXIS       <axis>  <delta>  <note>   (project, per-axis; 5 rows)
+#         GRADE            <letter>  <score>  100     (project composite; 100 = clean)
+#         GRADE-AXIS-LOCAL <axis>  <delta>  <note>   (local harness, per-axis; 5 rows)
+#         GRADE-LOCAL      <letter>  <score>  100     (local harness composite)
 #
 # CANONICAL LEDGER KEYS — every line that can become a recommendation carries a
 # final tab field `key=<canonical-key>`, derived deterministically from the
@@ -617,17 +629,25 @@ case "$sub" in
   harness)
     # Model, if declared in Claude Code settings — plus a staleness flag when the
     # id names a superseded tier (model migrations are the moat's first learning).
-    m=""
+    m=""; msrc=""
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json"; do
       [ -f "$s" ] || continue
       m="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$s" 2>/dev/null | head -1)"
-      [ -n "$m" ] && break
+      if [ -n "$m" ]; then
+        # A model pinned in committed settings.json ships with the repo → PROJECT
+        # scope; settings.local.json is a gitignored local override → LOCAL.
+        case "$s" in *settings.local.json) msrc="local" ;; *) msrc="project" ;; esac
+        break
+      fi
     done
     # Fall back to the most recent model actually run (transcripts) when nothing is
     # pinned, so the MODEL line and the staleness / upgrade flags fire for users who
-    # ride the default alias — matching the card / `mine --adopt` detection.
-    em="$m"; [ -n "$em" ] || em="$(_recent_transcript_model)"
-    [ -n "$em" ] && printf 'MODEL\t%s\n' "$em"
+    # ride the default alias — matching the card / `mine --adopt` detection. That is
+    # the model YOU run, not one the repo dictates → LOCAL scope. The trailing
+    # source field lets `grade` attribute the model axis to the right grade.
+    em="$m"
+    if [ -z "$em" ]; then em="$(_recent_transcript_model)"; [ -n "$em" ] && msrc="local"; fi
+    [ -n "$em" ] && printf 'MODEL\t%s\t%s\n' "$em" "$msrc"
     [ -n "$em" ] && _model_staleness "$em"
     [ -n "$em" ] && _model_upgrade "$em"
     # Bash tool security posture (whitelist > blacklist; blacklists are
@@ -1420,53 +1440,84 @@ EOF
       "$0" harness --repo "$REPO" 2>/dev/null
       "$0" deps    --repo "$REPO" 2>/dev/null
       "$0" rails   --repo "$REPO" 2>/dev/null
-    } | awk -F"$TAB" '
+    } | awk -F"$TAB" -v home="$HOME" '
       function clamp(x) { return x < 0 ? 0 : (x > 100 ? 100 : x) }
       function d(x)     { return x == 0 ? "0" : "-" x }    # render a deduction
-      $1 == "FILE"          { ctx_tok += $4 + 0 }
-      $1 == "HIT"           { hits++ }
-      $1 == "STALE-REF"     { stale++ }
-      $1 == "MODEL-STALE"   { model_stale = 1 }
-      $1 == "MODEL-UPGRADE" { model_up = 1 }
-      $1 == "SECURITY" && $2 == "bash" {
-        # worst posture wins; an allow-list (even alongside a deny) counts as OK.
-        rank = ($3 ~ /bypass/) ? 3 : (($3 ~ /allowlist/) ? 0 : (($3 ~ /denylist/) ? 2 : 0))
-        if (rank > sec_rank) sec_rank = rank
+      function band(s)  { return s>=97?"A+":s>=93?"A":s>=90?"A-":s>=87?"B+":s>=83?"B":s>=80?"B-":s>=77?"C+":s>=73?"C":s>=70?"C-":s>=67?"D+":s>=63?"D":s>=60?"D-":"F" }
+      # Scope a path: a file under the user-global ~/.claude, or a gitignored
+      # settings.local.json override, is LOCAL (your machine); everything else the
+      # scan reaches under the repo is PROJECT (checked-in, travels with the repo).
+      function scope_of(p) {
+        if (p ~ /\/settings\.local\.json$/)                 return "local"
+        if (home != "" && index(p, home "/.claude/") == 1)  return "local"
+        return "project"
       }
-      $1 == "GATE" && $3 == "absent"  { gates++ }
-      $1 == "RAIL" && $3 == "absent"  { rails_absent++ }
+      $1 == "FILE"          { ctx[scope_of($2)] += $4 + 0 }
+      $1 == "HIT"           { hits[scope_of($2)]++ }
+      $1 == "STALE-REF"     { stale[scope_of($2)]++ }
+      # MODEL carries its source (project=repo-pinned, local=settings.local/transcript);
+      # the staleness/upgrade flags that follow inherit it.
+      $1 == "MODEL"         { msrc = ($3 == "local" ? "local" : "project") }
+      $1 == "MODEL-STALE"   { model_stale[msrc] = 1 }
+      $1 == "MODEL-UPGRADE" { model_up[msrc] = 1 }
+      $1 == "SECURITY" && $2 == "bash" {
+        # worst posture wins, per scope; an allow-list (even alongside a deny) is OK.
+        sc = scope_of($4)
+        rank = ($3 ~ /bypass/) ? 3 : (($3 ~ /allowlist/) ? 0 : (($3 ~ /denylist/) ? 2 : 0))
+        if (rank > sec[sc]) sec[sc] = rank
+      }
+      $1 == "GATE" && $3 == "absent"  { gates["project"]++ }       # the cooldown gate is a checked-in .npmrc
+      $1 == "RAIL" && $3 == "absent"  { rails_absent["project"]++ } # determinism rails are repo guardrails
+      $1 == "TOOL" && $4 == "too-old" { toolold["local"]++ }       # the machine package-tool version is LOCAL
       END {
-        # context: always-loaded tokens (tiered) + prompt-debt hits + stale refs
-        t = ctx_tok
-        cd = (t > 30000) ? 22 : ((t > 15000) ? 15 : ((t > 8000) ? 9 : ((t > 4000) ? 4 : 0)))
-        hd = hits * 2;  if (hd > 8) hd = 8
-        sd = stale * 2; if (sd > 6) sd = 6
-        ctxd = cd + hd + sd
-        # model: only a SUPERSEDED tier is debt. A newer model shipping (MODEL-UPGRADE)
-        # is an opportunity, not debt — never penalize being on a current tier.
-        md = model_stale ? 12 : 0
-        # security: only an actively weak Bash posture deducts (no policy is fine for local dev)
-        secd = (sec_rank == 3) ? 18 : ((sec_rank == 2) ? 8 : 0)
-        # deps: each absent supply-chain cooldown gate (the machine package-tool
-        # version is a scorecard note, not a graded axis — it would make the grade
-        # machine-dependent rather than a property of the repo config)
-        depd = gates * 7
-        # rails: opinionated house guardrails — weigh light (anti-upsell discipline)
-        raild = rails_absent * 2; if (raild > 6) raild = 6
-        score = clamp(100 - ctxd - md - secd - depd - raild)
-        g = score>=97?"A+":score>=93?"A":score>=90?"A-":score>=87?"B+":score>=83?"B":score>=80?"B-":score>=77?"C+":score>=73?"C":score>=70?"C-":score>=67?"D+":score>=63?"D":score>=60?"D-":"F"
-        ctxk = sprintf("%.1fk", ctx_tok / 1000)
-        printf "GRADE-AXIS\tcontext\t%s\t%s always-loaded tokens%s%s\n", d(ctxd), ctxk,
-          (hits ? sprintf(", %d debt hit(s)", hits) : ""), (stale ? sprintf(", %d stale ref(s)", stale) : "")
-        printf "GRADE-AXIS\tmodel\t%s\t%s\n", d(md),
-          (model_stale ? "on a superseded tier" : (model_up ? "a newer model is available (optional)" : "current tier"))
-        printf "GRADE-AXIS\tsecurity\t%s\t%s\n", d(secd),
-          (sec_rank == 3 ? "Bash permissions bypassed (no gating)" : (sec_rank == 2 ? "Bash deny-list (bypassable)" : "allow-list or local-only"))
-        printf "GRADE-AXIS\tdeps\t%s\t%s\n", d(depd),
-          (gates ? sprintf("%d supply-chain gate(s) absent", gates) : "supply-chain gates present or n/a")
-        printf "GRADE-AXIS\trails\t%s\t%s\n", d(raild),
-          (rails_absent ? sprintf("%d determinism rail(s) absent", rails_absent) : "determinism rails present or n/a")
-        printf "GRADE\t%s\t%d\t100\n", g, score
+        split("project local", SC, " ")
+        for (i = 1; i <= 2; i++) {
+          s = SC[i]
+          # context: always-loaded tokens (tiered) + prompt-debt hits + stale refs
+          t = ctx[s] + 0
+          cd = (t > 30000) ? 22 : ((t > 15000) ? 15 : ((t > 8000) ? 9 : ((t > 4000) ? 4 : 0)))
+          hd = (hits[s] + 0) * 2;  if (hd > 8) hd = 8
+          sd = (stale[s] + 0) * 2; if (sd > 6) sd = 6
+          ctxd[s] = cd + hd + sd
+          # model: only a SUPERSEDED tier is debt; a newer model shipping (UPGRADE)
+          # is an opportunity, never penalized.
+          md[s] = model_stale[s] ? 12 : 0
+          # security: only an actively weak Bash posture deducts (no policy is fine)
+          secd[s] = (sec[s] == 3) ? 18 : ((sec[s] == 2) ? 8 : 0)
+          # deps: PROJECT docks an absent checked-in cooldown gate; LOCAL docks a
+          # machine package-tool too old to honor one (the machine-dependent half,
+          # which is why it lives in the LOCAL grade and never the project one).
+          depd[s] = (s == "project") ? (gates[s] + 0) * 7 : (toolold[s] + 0) * 4
+          # rails: opinionated house guardrails (weighed light). A repo property —
+          # n/a for the local harness, so it never deducts there.
+          raild[s] = (s == "project") ? ((rails_absent[s] + 0) * 2 > 6 ? 6 : (rails_absent[s] + 0) * 2) : 0
+          score[s] = clamp(100 - ctxd[s] - md[s] - secd[s] - depd[s] - raild[s])
+        }
+        # project rows keep the original GRADE / GRADE-AXIS names (backward-compatible
+        # headline); local rows are the parallel -LOCAL set.
+        emit("project", "GRADE-AXIS",       "GRADE")
+        emit("local",   "GRADE-AXIS-LOCAL", "GRADE-LOCAL")
+      }
+      function emit(s, axrow, grow,   ck) {
+        ck = sprintf("%.1fk", (ctx[s] + 0) / 1000)
+        printf "%s\tcontext\t%s\t%s always-loaded tokens%s%s\n", axrow, d(ctxd[s]), ck,
+          ((hits[s] + 0) ? sprintf(", %d debt hit(s)", hits[s]) : ""), ((stale[s] + 0) ? sprintf(", %d stale ref(s)", stale[s]) : "")
+        printf "%s\tmodel\t%s\t%s\n", axrow, d(md[s]),
+          (model_stale[s] ? "on a superseded tier" : (model_up[s] ? "a newer model is available (optional)" : "current tier"))
+        printf "%s\tsecurity\t%s\t%s\n", axrow, d(secd[s]),
+          (sec[s] == 3 ? "Bash permissions bypassed (no gating)" : (sec[s] == 2 ? "Bash deny-list (bypassable)" : "allow-list or local-only"))
+        if (s == "project")
+          printf "%s\tdeps\t%s\t%s\n", axrow, d(depd[s]),
+            ((gates[s] + 0) ? sprintf("%d supply-chain gate(s) absent", gates[s]) : "supply-chain gates present or n/a")
+        else
+          printf "%s\tdeps\t%s\t%s\n", axrow, d(depd[s]),
+            ((toolold[s] + 0) ? sprintf("%d package tool(s) too old to honor a cooldown gate", toolold[s]) : "package tooling current or n/a")
+        if (s == "project")
+          printf "%s\trails\t%s\t%s\n", axrow, d(raild[s]),
+            ((rails_absent[s] + 0) ? sprintf("%d determinism rail(s) absent", rails_absent[s]) : "determinism rails present or n/a")
+        else
+          printf "%s\trails\t0\tn/a — determinism rails are a repo property\n", axrow
+        printf "%s\t%s\t%d\t100\n", grow, band(score[s]), score[s]
       }
     '
     ;;
