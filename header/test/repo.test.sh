@@ -75,6 +75,29 @@ assert_eq "no" \
   "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" flag schedule-offered)" \
   "flags are independent by name — schedule-offered unaffected by topic-offered"
 
+# ── per-repo enrich-mode value (custom|generic) ───────────────
+sb="$(make_sandbox)"
+assert_eq "" "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode)" \
+  "enrich-mode is empty before anything is recorded"
+HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode custom
+assert_eq "custom" \
+  "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode)" \
+  "enrich-mode round-trips the stored value"
+assert_eq "" "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-b" "$RP" enrich-mode)" \
+  "enrich-mode is per-repo — a different key sees nothing"
+HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode generic
+assert_eq "generic" \
+  "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode)" \
+  "enrich-mode can be overwritten (custom → generic)"
+rc=0; HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode bogus >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "enrich-mode rejects a value outside custom|generic"
+# repo_memory off → enrich-mode set is a no-op
+sb="$(make_sandbox)"
+HEADER_HOME="$sb/.header" "$HC" set repo_memory false
+HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode custom
+assert_eq "" "$(HEADER_HOME="$sb/.header" HEADER_REPO_KEY="proj-a" "$RP" enrich-mode)" \
+  "repo_memory off → enrich-mode set persists nothing"
+
 # ── git remote normalization (real git) ───────────────────────
 sb="$(make_sandbox)"; repo="$sb/work"; mkdir -p "$repo"
 git -C "$repo" init -q

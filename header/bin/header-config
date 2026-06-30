@@ -44,7 +44,10 @@ TEAM_ALLOWED="default_topic staleness_days schedule_frequency_days language"
 # `experiment_sync` controls identified egress to the account, and
 # `aggregate_submit` controls anonymized egress to the cross-customer library —
 # a committed file must not be able to flip either on for every teammate.
-TEAM_SENSITIVE="telemetry auto_update auto_tune update_check experiment_sync aggregate_submit"
+# `auto_register` / `enrich_mode` gate anonymous-account creation + the
+# codebase-tuned enrichment that egresses a stack summary, so a committed file
+# must not be able to opt a whole team into either.
+TEAM_SENSITIVE="telemetry auto_update auto_tune update_check experiment_sync aggregate_submit auto_register enrich_mode"
 
 # Terse header, written once when a file is first created. Defaults are NOT
 # documented here on purpose — lookup_default() is the single source of truth.
@@ -78,12 +81,14 @@ lookup_default() {
     repo_memory)             echo "true" ;;     # remember a repo's bound topic across sessions
     experiment_sync)         echo "off" ;;      # off (default): never syncs — matches the telemetry/consent posture. auto: when an API key is present, sync each experiment edit to the account. Opt in explicitly.
     aggregate_submit)        echo "off" ;;      # on: after each analyze, submit the ANONYMIZED effect size to the cross-customer library. off (default): never.
+    auto_register)           echo "true" ;;     # true (default): the skill may offer codebase-tuned enrichment, which mints an anonymous trial account. false: never register; generic public topics only. Any non-`false` value enables.
+    enrich_mode)             echo "" ;;         # global default for the generic-vs-custom enrichment choice: custom | generic | "" (unset → ask per repo). A per-repo `header-repo enrich-mode` value wins over this.
     *)                       echo "" ;;
   esac
 }
 
 # Keys recognized by `list` and `defaults` (the personal config surface).
-KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory experiment_sync aggregate_submit"
+KNOWN_KEYS="default_topic language staleness_days auto_update update_check ledger telemetry auto_tune repo_memory experiment_sync aggregate_submit auto_register enrich_mode"
 
 valid_key() { printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_]+$'; }
 # A topic id is a UUID or bare slug — hyphens allowed (config keys are not).
@@ -147,6 +152,9 @@ case "${1:-}" in
     fi
     if [ "$KEY" = "aggregate_submit" ]; then
       case "$VALUE" in on|off) ;; *) echo "header-config: aggregate_submit must be on|off; using off" >&2; VALUE="off" ;; esac
+    fi
+    if [ "$KEY" = "enrich_mode" ]; then
+      case "$VALUE" in custom|generic) ;; *) echo "header-config: enrich_mode must be custom|generic; clearing (will ask per repo)" >&2; VALUE="" ;; esac
     fi
     upsert "$CONFIG_FILE" "$CONFIG_HEADER" "$KEY" "$VALUE"
     ;;

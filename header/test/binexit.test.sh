@@ -14,7 +14,7 @@ B="$SKILL_DIR/bin"
 export HEADER_HOME="$(make_sandbox)/.header"; mkdir -p "$HEADER_HOME"
 
 # ── --help is a success action → exit 0 on every tool ─────────
-for t in header-audit header-config header-cost header-experiment \
+for t in header-audit header-auth header-config header-cost header-experiment \
          header-ledger header-repo header-telemetry header-update-check; do
   "$B/$t" --help >/dev/null 2>&1 </dev/null; rc=$?
   assert_exit 0 "$rc" "$t --help exits 0 (help is success, not a usage error)"
@@ -23,7 +23,7 @@ done
 # ── genuine misuse still errors (we only normalized explicit --help) ──
 # header-update-check takes no subcommands, so it's excluded — any arg is a
 # no-op check run that legitimately exits 0.
-for t in header-audit header-config header-cost header-experiment \
+for t in header-audit header-auth header-config header-cost header-experiment \
          header-ledger header-repo header-telemetry; do
   "$B/$t" zzz-not-a-subcommand >/dev/null 2>&1 </dev/null; rc=$?
   assert_exit 1 "$rc" "$t unknown subcommand still exits 1"

@@ -24,6 +24,10 @@ assert_eq "false" "$(HEADER_HOME="$sb/.header" "$HC" get auto_tune)" \
   "get auto_tune on missing file → default false"
 assert_eq "true" "$(HEADER_HOME="$sb/.header" "$HC" get repo_memory)" \
   "get repo_memory on missing file → default true"
+assert_eq "true" "$(HEADER_HOME="$sb/.header" "$HC" get auto_register)" \
+  "get auto_register on missing file → default true"
+assert_eq "" "$(HEADER_HOME="$sb/.header" "$HC" get enrich_mode)" \
+  "get enrich_mode on missing file → empty default (ask per repo)"
 
 # ── set then get; header written on first create ──────────────
 HEADER_HOME="$sb/.header" "$HC" set language Turkish
@@ -101,6 +105,25 @@ assert_eq "off" "$(HEADER_HOME="$sbT/.header" "$HC" get telemetry)" \
 HEADER_HOME="$sbT/.header" "$HC" set telemetry anonymous
 assert_eq "anonymous" "$(HEADER_HOME="$sbT/.header" "$HC" get telemetry)" \
   "set telemetry anonymous → anonymous"
+
+# ── enrich_mode value is whitelisted (invalid → cleared) ──────
+HEADER_HOME="$sbT/.header" "$HC" set enrich_mode custom
+assert_eq "custom" "$(HEADER_HOME="$sbT/.header" "$HC" get enrich_mode)" \
+  "set enrich_mode custom → custom"
+HEADER_HOME="$sbT/.header" "$HC" set enrich_mode bogus 2>/dev/null
+assert_eq "" "$(HEADER_HOME="$sbT/.header" "$HC" get enrich_mode)" \
+  "set enrich_mode to an invalid value → cleared (ask per repo)"
+# auto_register accepts false (the opt-out); any non-false enables
+HEADER_HOME="$sbT/.header" "$HC" set auto_register false
+assert_eq "false" "$(HEADER_HOME="$sbT/.header" "$HC" get auto_register)" \
+  "auto_register false round-trips (the opt-out)"
+
+# ── auto_register / enrich_mode are egress → refused in team config ──
+sbE="$(make_sandbox)"
+for bad in auto_register enrich_mode; do
+  HEADER_HOME="$sbE/.header" HEADER_TEAM_DIR="$sbE/repo" "$HC" team-set "$bad" custom >/dev/null 2>&1; rc=$?
+  assert_exit 1 "$rc" "team-set refuses the egress key '$bad'"
+done
 
 # ── team config: allow-list, block-list, isolation ────────────
 # HEADER_TEAM_DIR pins the committed file to the sandbox so the real repo is

@@ -21,6 +21,9 @@
 #   header-repo list                 every remembered repo → topic (latest wins)
 #   header-repo seen [value]         get, or set, the last-seen briefing marker
 #                                    for this repo (used for freshness checks)
+#   header-repo enrich-mode [value]  get, or set, this repo's enrichment choice
+#                                    (custom|generic) — the answer to the
+#                                    generic-vs-custom prompt, remembered per repo
 #   header-repo flag <name> [set]    get (prints yes|no), or set, a per-repo
 #                                    onboarding flag (e.g. topic-offered,
 #                                    schedule-offered) so an offer is made once
@@ -35,6 +38,7 @@ STATE_DIR="${HEADER_HOME:-$HOME/.header}"
 REPOS="$STATE_DIR/repos.jsonl"
 SEEN_DIR="$STATE_DIR/repo-seen"
 FLAGS_DIR="$STATE_DIR/repo-flags"
+MODE_DIR="$STATE_DIR/repo-mode"
 
 json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
@@ -70,6 +74,14 @@ seen_file() {
   local h
   h="$(repo_key | cksum | cut -d' ' -f1)"
   printf '%s/%s\n' "$SEEN_DIR" "$h"
+}
+
+# mode_file — per-repo enrichment-choice marker path (custom|generic). Same
+# repo-key hashing as seen_file so any remote/path is safe as a filename.
+mode_file() {
+  local h
+  h="$(repo_key | cksum | cut -d' ' -f1)"
+  printf '%s/%s\n' "$MODE_DIR" "$h"
 }
 
 # flag_file — per-repo onboarding-flag marker path. <name> is a controlled,
@@ -151,6 +163,21 @@ case "$cmd" in
     fi
     ;;
 
+  enrich-mode)
+    # Per-repo answer to the generic-vs-custom enrichment prompt. Mirrors `seen`:
+    # no arg → print the stored value (empty if unset); arg → store it. A `set`
+    # respects repo_memory (off → no persistence), like `bind`.
+    mf="$(mode_file)"
+    if [ $# -gt 0 ] && [ -n "${1:-}" ]; then
+      case "$1" in custom|generic) ;; *) echo "header-repo: enrich-mode must be custom|generic" >&2; exit 1 ;; esac
+      enabled || exit 0
+      mkdir -p "$MODE_DIR"
+      printf '%s\n' "$1" > "$mf"
+    else
+      [ -f "$mf" ] && cat "$mf" || true
+    fi
+    ;;
+
   flag)
     name="${1:-}"; shift 2>/dev/null || true
     [ -n "$name" ] || { echo "header-repo: flag <name> required" >&2; exit 1; }
@@ -164,11 +191,11 @@ case "$cmd" in
     ;;
 
   -h|--help)
-    echo "Usage: header-repo {key|bind|get|clear|list|seen|flag} ..."
+    echo "Usage: header-repo {key|bind|get|clear|list|seen|enrich-mode|flag} ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-repo {key|bind|get|clear|list|seen|flag} ..." >&2
+    echo "Usage: header-repo {key|bind|get|clear|list|seen|enrich-mode|flag} ..." >&2
     exit 1
     ;;
 esac
