@@ -13,6 +13,9 @@
 #         FILE       <path>  <bytes>  <est_tokens>      (always-loaded harness file)
 #         IMPORT     <parent>  <imported-path>          (@import edge; child is always-loaded)
 #         NESTED     <path>  <bytes>  <est_tokens>      (subdir CLAUDE.md/AGENTS.md; on-demand)
+#         ONDEMAND   <path>  <bytes>  <est_tokens>      (slash-command / subagent body — loads
+#                    only when invoked, NOT summed as always-loaded; still trim/debt-scanned.
+#                    The per-turn cost is only its registry frontmatter — see CONTEXT-TAX.)
 #         MODEL      <value>                            (settings, else most recent transcript)
 #         MODEL-STALE <value>  <why>                    (model id is a superseded tier)
 #         MODEL-UPGRADE <value>  <recommended>  <why>   (newer same-family model shipped)
@@ -242,9 +245,15 @@ done
 
 scan_file() {
   f="$1"
+  # Row type: FILE = always-loaded harness file (the `grade` context axis sums it
+  # as per-turn tokens). ONDEMAND = a slash-command / subagent whose BODY loads
+  # only when invoked — size it and pattern-scan it for trim/debt, but the grade
+  # must NOT count it as always-loaded (only its registry frontmatter is paid each
+  # turn, reported via CONTEXT-TAX like a skill's tax). Defaults to FILE.
+  rowtype="${2:-FILE}"
   [ -f "$f" ] || return 0
   bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; [ -n "$bytes" ] || bytes=0
-  printf 'FILE\t%s\t%s\t%s\tkey=trim-%s\n' "$f" "$bytes" "$(( bytes / 4 ))" "$(_relslug "$f")"
+  printf '%s\t%s\t%s\t%s\tkey=trim-%s\n' "$rowtype" "$f" "$bytes" "$(( bytes / 4 ))" "$(_relslug "$f")"
   _patterns | while IFS="$TAB" read -r id rx why; do
     [ -n "${id:-}" ] || continue
     grep -niE "$rx" "$f" 2>/dev/null | while IFS=: read -r ln rest; do
@@ -662,10 +671,30 @@ SIG
       "$REPO/.github/copilot-instructions.md"; do
       scan_file "$f"
     done
-    # Globbed harness files (commands, subagents). Guard each — no nullglob in sh.
+    # Globbed harness files (slash-commands, subagents). Their BODY is ON-DEMAND —
+    # loaded only when the command/agent is invoked, never every turn — so scan
+    # them for trim/debt but emit ONDEMAND, which the `grade` context axis excludes
+    # from the always-loaded token sum. (Counting full bodies here was the bug that
+    # summed dozens of these files into a phantom 30k-token "always-loaded" load and
+    # pinned the grade to F.) Only the registry frontmatter is a per-turn cost — see
+    # the CONTEXT-TAX registry accounting in `waste`. Guard each — no nullglob in sh.
     for f in "$REPO"/.claude/commands/*.md "$REPO"/.claude/agents/*.md; do
-      [ -f "$f" ] && scan_file "$f"
+      [ -f "$f" ] && scan_file "$f" ONDEMAND
     done
+    # Registry tax: the per-turn cost of those on-demand files is only their
+    # frontmatter (name + description), injected into the command/agent registry
+    # each session. Counted here in `harness` — a STATIC, transcript-independent
+    # property, so it reports on a fresh clone too — and emitted as CONTEXT-TAX,
+    # NOT summed into the always-loaded FILE total above. Same frontmatter proxy
+    # as the skill tax; informational, never graded (the grade sums only FILE).
+    reg_total=0; reg_count=0
+    for f in "$REPO"/.claude/commands/*.md "$REPO"/.claude/agents/*.md; do
+      [ -f "$f" ] || continue
+      fmb="$(awk '/^---$/{c++; next} c==1{n += length($0) + 1} c>=2{exit} END{print n+0}' "$f")"
+      [ "${fmb:-0}" -gt 0 ] || continue
+      reg_total=$(( reg_total + fmb )); reg_count=$(( reg_count + 1 ))
+    done
+    [ "$reg_count" -gt 0 ] && printf 'CONTEXT-TAX\tregistry\t%s\t%s\t%s\tkey=registry-context-tax\n' "$reg_count" "$reg_total" "$(( reg_total / 4 ))"
     # Hooks — arbitrary shell on agent events. A bigger unguarded execution +
     # supply-chain surface than the Bash list, and previously unscanned.
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \

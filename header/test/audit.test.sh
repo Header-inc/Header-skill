@@ -456,6 +456,43 @@ assert_contains "$Gbad" $'GRADE-AXIS\tsecurity\t-18\tBash permissions bypassed' 
 assert_contains "$Gbad" $'GRADE-AXIS\tmodel\t-12\ton a superseded tier' \
   "a Claude 3.x model docks the model axis as superseded debt"
 
+# ── on-demand files (slash-commands / subagents) are NOT always-loaded ──
+# Regression: counting every .claude/{commands,agents}/*.md BODY as an always-loaded
+# FILE summed dozens of on-demand files into a phantom 30k+ "always-loaded" load and
+# pinned the grade to F. They must emit ONDEMAND (excluded from the per-turn sum and
+# the grade); only their registry frontmatter is a per-turn CONTEXT-TAX.
+sb_od="$(make_sandbox)"; rod="$sb_od/repo"; mkdir -p "$rod/.claude/commands" "$rod/.claude/agents"
+printf '# Lean\nUse tabs.\n' > "$rod/CLAUDE.md"
+printf '{ "model": "claude-opus-4-8" }\n' > "$rod/.claude/settings.json"
+i=1; while [ "$i" -le 20 ]; do
+  { printf -- '---\nname: cmd%s\ndescription: does thing %s\n---\n' "$i" "$i"; head -c 1500 /dev/zero | tr '\0' x; printf '\n'; } > "$rod/.claude/commands/cmd$i.md"
+  i=$((i + 1))
+done
+i=1; while [ "$i" -le 18 ]; do
+  { printf -- '---\nname: ag%s\ndescription: agent %s\n---\n' "$i" "$i"; head -c 1500 /dev/zero | tr '\0' x; printf '\n'; } > "$rod/.claude/agents/ag$i.md"
+  i=$((i + 1))
+done
+Hod="$(HOME="$sb_od" "$AU" harness --repo "$rod")"
+assert_contains "$Hod" "ONDEMAND	$rod/.claude/commands/cmd1.md" "a slash-command body emits ONDEMAND"
+assert_contains "$Hod" "ONDEMAND	$rod/.claude/agents/ag1.md"   "a subagent body emits ONDEMAND"
+assert_not_contains "$Hod" "FILE	$rod/.claude/commands/cmd1.md" "a slash-command is NOT an always-loaded FILE"
+assert_not_contains "$Hod" "FILE	$rod/.claude/agents/ag1.md"   "a subagent is NOT an always-loaded FILE"
+assert_contains "$Hod" $'CONTEXT-TAX\tregistry\t38\t' "harness reports the registry frontmatter tax (38 on-demand files)"
+# the grade is NOT inflated by ~57k bytes of on-demand bodies: context axis stays 0, no F.
+# (static-config grade → identical with or without transcripts; a fresh clone grades the same.)
+God="$(HOME="$sb_od" "$AU" grade --repo "$rod")"
+assert_contains "$God" $'GRADE-AXIS\tcontext\t0\t0.0k always-loaded tokens' \
+  "on-demand bodies are excluded from the grade's always-loaded context (no phantom F)"
+case "$God" in *"	F	"*) od_f=yes ;; *) od_f=no ;; esac
+assert_eq "no" "$od_f" "a lean repo with many commands/subagents does NOT grade F"
+# ONDEMAND bodies are still scanned for prompt debt (puffery in a subagent → HIT)
+sb_od2="$(make_sandbox)"; rod2="$sb_od2/repo"; mkdir -p "$rod2/.claude/agents"
+printf '# P\nUse tabs.\n' > "$rod2/CLAUDE.md"
+printf -- '---\nname: rev\ndescription: reviewer\n---\nYou are a senior expert engineer with deep experience.\n' > "$rod2/.claude/agents/rev.md"
+Hod2="$(HOME="$sb_od2" "$AU" harness --repo "$rod2")"
+assert_contains "$Hod2" "ONDEMAND	$rod2/.claude/agents/rev.md" "the subagent emits ONDEMAND"
+assert_contains "$Hod2" "	role-puffery	" "an ONDEMAND subagent body is still scanned for prompt debt"
+
 # ── unknown subcommand → exit 1 ───────────────────────────────
 HOME="$sb" "$AU" bogus >/dev/null 2>&1; rc=$?
 assert_exit 1 "$rc" "unknown subcommand → exit 1"

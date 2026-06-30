@@ -3,6 +3,40 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.36.2 — stop counting on-demand commands/subagents as always-loaded (a phantom F)
+
+The composite setup grade (0.36.0) could slam a genuinely-healthy repo to **F**
+on the context axis. The cause: `header-audit harness` emitted a full
+always-loaded `FILE` row for **every** `.claude/commands/*.md` and
+`.claude/agents/*.md`, and the grade sums all `FILE` tokens as per-turn context.
+A repo with a few dozen slash-commands/subagents summed their bodies into a
+phantom 30k+ "always-loaded" load — pinning the context axis at its −22 ceiling
+and the grade at F. But slash-command and subagent **bodies are on-demand**: they
+load only when invoked, never every turn. The audit even narrated the
+contradiction ("Setup grade: F … but that's inflated: the scanner counts N
+on-demand files as always-loaded") — a headline grade that needs a walk-back
+paragraph has failed at being glanceable.
+
+- **New `ONDEMAND` row.** Command/subagent files now emit `ONDEMAND <path>
+  <bytes> <est_tokens>` instead of `FILE`. The grade's `FILE`-token sum excludes
+  them, so their bodies no longer inflate the always-loaded context axis. They are
+  still pattern-scanned for prompt debt (e.g. role-puffery in a subagent → `HIT`)
+  and still reported for trimming — only the always-loaded *accounting* changed.
+- **New `CONTEXT-TAX registry` row.** The genuine per-turn cost of those files is
+  only their registry frontmatter (name + description), injected into the
+  command/agent registry each session — the same treatment skills already get.
+  Counted in `harness` (static config), so it reports on a **fresh clone** with no
+  transcripts, and goes on the scorecard next to the skills tax. Never graded.
+- **Grade stays transcript-independent.** `grade` still composites only
+  `harness + deps + rails` (static config) — a freshly-cloned repo grades
+  byte-identically with or without session history. This fix lives entirely on
+  that static path, so it applies to clean clones too. A lean repo with many
+  commands/subagents now lands in its honest band (A/B), not F.
+
++9 audit assertions (ONDEMAND not FILE; bodies still debt-scanned; registry tax
+counted; context axis 0 and no F on a command-heavy repo). Docs: the `FILE` /
+`ONDEMAND` / `CONTEXT-TAX registry` row contract in SKILL.md updated to match.
+
 ## 0.36.1 — resolve the update before anything else runs
 
 The update prompt now fires **first**, immediately after the preamble — before
