@@ -3,6 +3,31 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.37.1 — the always-loaded context tax moves to `harness`, split by scope
+
+Finishes the scope-clean context picture 0.37.0 started. The skills context tax
+was the one always-loaded signal still living in `waste` — which short-circuits on
+"no transcripts," so it silently vanished on a fresh clone, and it lumped repo- and
+user-scope skills into one number that couldn't route to the right grade.
+
+- **Moved skills `SKILL-TAX` / `CONTEXT-TAX` from `waste` → `harness`.** It's static
+  config (frontmatter byte counts), so it belongs on the transcript-independent scan
+  and now reports on a fresh clone, exactly like the registry tax.
+- **Split every context tax by install scope.** `CONTEXT-TAX` gained a `<scope>`
+  field — `CONTEXT-TAX <kind> <scope> <count> <bytes> <est_tokens>`, `kind` ∈
+  `skills`|`registry`, `scope` ∈ `repo`|`user`. **repo → 📦 project context;
+  user → 💻 local context.** Registry tax also now covers user-scope
+  `~/.claude/commands|agents`, so the local context row is complete. Keys are
+  scope-suffixed (`skill-context-tax-repo`, `registry-context-tax-user`, …).
+- **Scorecard rows updated:** the 📦 project context line shows repo-scope skills +
+  registry tax; the 💻 local context line shows user-scope skills + registry tax.
+  Neither is graded (the grade still sums only `FILE`) — this is the *reported*
+  picture, now scope-clean end to end.
+
+No grade-math change (CONTEXT-TAX was never summed into a grade). +9 audit
+assertions for the scoped tax; the 3 waste tax assertions moved with it. Bin
+comment + SKILL.md / README / llms.txt updated to file the tax under `harness`.
+
 ## 0.37.0 — two setup grades: 📦 project (checked-in) vs 💻 local harness
 
 The setup grade conflated two different things and was never explicit about

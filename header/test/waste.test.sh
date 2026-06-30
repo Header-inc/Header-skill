@@ -59,10 +59,12 @@ assert_contains "$W" $'SKILL-USE\tusedskill\t1'           "Skill invocations are
 assert_contains "$W" $'SKILL-UNUSED\tdeadskill\t'         "a repo-installed skill never invoked here is flagged"
 assert_not_contains "$W" $'SKILL-UNUSED\tusedskill'       "an invoked skill is not flagged"
 assert_contains "$W" $'COMPACTIONS\t1\t'                  "summary + boundary markers count as ONE compaction (max, not sum)"
-assert_contains "$W" $'SKILL-TAX\tdeadskill\trepo\t'      "every installed skill reports its frontmatter tax"
-assert_contains "$W" $'CONTEXT-TAX\tskills\t2\t'          "the context tax sums across installed skills"
+# (the always-loaded skill / registry context tax moved to `harness` in 0.37.1 —
+# see audit.test.sh; waste no longer emits SKILL-TAX / CONTEXT-TAX.)
+assert_not_contains "$W" $'SKILL-TAX\t'   "the skill frontmatter tax is no longer a waste row (moved to harness)"
+assert_not_contains "$W" $'CONTEXT-TAX\t' "the context tax is no longer a waste row (moved to harness)"
 
-# user-scope skills: taxed, never flagged unused (they serve other repos).
+# user-scope skills: never flagged unused (they serve other repos).
 mkdir -p "$sb/home/.claude/skills/globalskill"
 cat > "$sb/home/.claude/skills/globalskill/SKILL.md" <<'MD'
 ---
@@ -72,9 +74,7 @@ description: serves every project on the machine
 body
 MD
 W2="$(HOME="$sb/home" "$AU" waste --repo "$repo")"
-assert_contains "$W2" $'SKILL-TAX\tglobalskill\tuser\t' "user-scope skills report their always-loaded tax"
 assert_not_contains "$W2" $'SKILL-UNUSED\tglobalskill'  "user-scope skills are never flagged unused"
-assert_contains "$W2" $'CONTEXT-TAX\tskills\t3\t'       "the tax total includes user-scope skills"
 
 # --since filters out lines before the cutoff.
 W3="$(HOME="$sb/home" "$AU" waste --repo "$repo" --since 2026-06-01T10:00:04Z)"
@@ -105,7 +105,6 @@ assert_contains "$W" $'MCP-UNUSED\tbeta\t'"$repo/.mcp.json"$'\tkey=waste-mcp-bet
   "MCP-UNUSED pre-mints key=waste-mcp-<server>"
 assert_contains "$W" $'SKILL-UNUSED\tdeadskill\t'"$repo/.claude/skills/deadskill"$'\tkey=waste-skill-deadskill' \
   "SKILL-UNUSED pre-mints key=waste-skill-<name>"
-assert_contains "$W" "key=skill-context-tax" "CONTEXT-TAX carries the canonical skill-context-tax key"
 assert_not_contains "$(printf '%s\n' "$W" | grep '^TOOL-USE')" "key=" \
   "TOOL-USE rows are evidence, not recommendations — no key"
 

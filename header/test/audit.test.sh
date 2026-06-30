@@ -477,7 +477,7 @@ assert_contains "$Hod" "ONDEMAND	$rod/.claude/commands/cmd1.md" "a slash-command
 assert_contains "$Hod" "ONDEMAND	$rod/.claude/agents/ag1.md"   "a subagent body emits ONDEMAND"
 assert_not_contains "$Hod" "FILE	$rod/.claude/commands/cmd1.md" "a slash-command is NOT an always-loaded FILE"
 assert_not_contains "$Hod" "FILE	$rod/.claude/agents/ag1.md"   "a subagent is NOT an always-loaded FILE"
-assert_contains "$Hod" $'CONTEXT-TAX\tregistry\t38\t' "harness reports the registry frontmatter tax (38 on-demand files)"
+assert_contains "$Hod" $'CONTEXT-TAX\tregistry\trepo\t38\t' "harness reports the repo-scope registry frontmatter tax (38 on-demand files)"
 # the grade is NOT inflated by ~57k bytes of on-demand bodies: context axis stays 0, no F.
 # (static-config grade → identical with or without transcripts; a fresh clone grades the same.)
 God="$(HOME="$sb_od" "$AU" grade --repo "$rod")"
@@ -492,6 +492,30 @@ printf -- '---\nname: rev\ndescription: reviewer\n---\nYou are a senior expert e
 Hod2="$(HOME="$sb_od2" "$AU" harness --repo "$rod2")"
 assert_contains "$Hod2" "ONDEMAND	$rod2/.claude/agents/rev.md" "the subagent emits ONDEMAND"
 assert_contains "$Hod2" "	role-puffery	" "an ONDEMAND subagent body is still scanned for prompt debt"
+
+# ── always-loaded context tax lives in HARNESS (static), split by install scope ──
+# Skills + command/subagent registry frontmatter is always-loaded; it's static config,
+# so it's emitted by `harness` (reports on a fresh clone, transcript-independent) and
+# split repo→📦 project / user→💻 local so the two-grade scorecard stays scope-clean.
+sb_tx="$(make_sandbox)"; rtx="$sb_tx/repo"
+mkdir -p "$rtx/.claude/commands" "$rtx/.claude/skills/reposkill" \
+         "$sb_tx/.claude/commands" "$sb_tx/.claude/skills/userskill"
+printf '# P\nUse tabs.\n' > "$rtx/CLAUDE.md"
+printf -- '---\nname: rc\ndescription: a repo command\n---\nbody\n' > "$rtx/.claude/commands/rc.md"
+printf -- '---\nname: reposkill\ndescription: a repo-scope skill\n---\nbody\n' > "$rtx/.claude/skills/reposkill/SKILL.md"
+printf -- '---\nname: uc\ndescription: a user command\n---\nbody\n' > "$sb_tx/.claude/commands/uc.md"
+printf -- '---\nname: userskill\ndescription: a global skill\n---\nbody\n' > "$sb_tx/.claude/skills/userskill/SKILL.md"
+Htx="$(HOME="$sb_tx" "$AU" harness --repo "$rtx")"
+assert_contains "$Htx" $'CONTEXT-TAX\tregistry\trepo\t1\t'  "repo-scope command registry tax → 📦 project context"
+assert_contains "$Htx" $'CONTEXT-TAX\tregistry\tuser\t1\t'  "user-scope command registry tax → 💻 local context"
+assert_contains "$Htx" $'CONTEXT-TAX\tskills\trepo\t1\t'    "repo-scope skill frontmatter tax → 📦 project context"
+assert_contains "$Htx" $'CONTEXT-TAX\tskills\tuser\t1\t'    "user-scope skill frontmatter tax → 💻 local context"
+assert_contains "$Htx" $'SKILL-TAX\treposkill\trepo\t'      "per-skill SKILL-TAX carries its install scope (repo)"
+assert_contains "$Htx" $'SKILL-TAX\tuserskill\tuser\t'      "per-skill SKILL-TAX carries its install scope (user)"
+assert_contains "$Htx" "key=skill-context-tax-repo"        "scoped CONTEXT-TAX keys are scope-suffixed"
+assert_contains "$Htx" "key=registry-context-tax-user"     "scoped CONTEXT-TAX keys are scope-suffixed"
+# it does NOT depend on transcripts (the whole reason for the move): a fresh clone reports it
+assert_contains "$Htx" $'CONTEXT-TAX\tskills\trepo\t' "the context tax reports without any transcripts (fresh clone)"
 
 # ── grade is split: PROJECT (checked-in) vs LOCAL (your machine harness) ──
 # Local config must NOT move the project grade (it's a reproducible property of the

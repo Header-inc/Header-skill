@@ -24,6 +24,11 @@
 #         STALE-REF  <path>  <lineno>  <ref>  <why>     (referenced path / @import not found)
 #         HOOK       <event>  <command-excerpt>  <file> (shell run on an agent event)
 #         SKILL      <name>  <path>  <has-bin>  <scope> (installed skill: supply-chain surface)
+#         SKILL-TAX  <name>  <scope>  <bytes>  <est_tokens>   (skill frontmatter loaded
+#                    every session; scope = repo|user)
+#         CONTEXT-TAX <kind>  <scope>  <count>  <bytes>  <est_tokens>   (always-loaded
+#                    registry/skill frontmatter tax; kind = registry|skills, scope =
+#                    repo|user; STATIC, scope-split — repo→project, user→local; never graded)
 #         SECURITY / SECURITY-DETAIL                    (Bash-tool permission posture)
 #         PROVEN     <pattern_id>  <effect>  <n_repos>  <ci>   (cross-customer
 #                    library evidence for a pattern, from a 6-field patterns.tsv
@@ -79,10 +84,8 @@
 #         SKILL-UNUSED  <name> <path>                  (repo-installed skill, 0 uses here)
 #         ERROR-RATE    <tool> <errors> <calls> <pct>  (>=10 calls and >=20% errors)
 #         COMPACTIONS   <count> <files>                (context-pressure signal)
-#         SKILL-TAX     <name> <scope> <bytes> <est_tokens>   (frontmatter loaded
-#                                                       every session, repo + user scope)
-#         CONTEXT-TAX   skills <count> <bytes> <est_tokens>   (the SKILL-TAX sum)
 #         NOTE          waste <reason>                 (no transcripts / no input)
+#         (the always-loaded SKILL-TAX / CONTEXT-TAX rows moved to `harness` — see above)
 #
 #   header-audit patterns          list the built-in (+ briefing-supplied) patterns
 #   header-audit gate <npm|pip> [days]
@@ -697,24 +700,46 @@ SIG
     # from the always-loaded token sum. (Counting full bodies here was the bug that
     # summed dozens of these files into a phantom 30k-token "always-loaded" load and
     # pinned the grade to F.) Only the registry frontmatter is a per-turn cost — see
-    # the CONTEXT-TAX registry accounting in `waste`. Guard each — no nullglob in sh.
+    # the CONTEXT-TAX registry accounting below. Guard each — no nullglob in sh.
     for f in "$REPO"/.claude/commands/*.md "$REPO"/.claude/agents/*.md; do
       [ -f "$f" ] && scan_file "$f" ONDEMAND
     done
-    # Registry tax: the per-turn cost of those on-demand files is only their
-    # frontmatter (name + description), injected into the command/agent registry
-    # each session. Counted here in `harness` — a STATIC, transcript-independent
-    # property, so it reports on a fresh clone too — and emitted as CONTEXT-TAX,
-    # NOT summed into the always-loaded FILE total above. Same frontmatter proxy
-    # as the skill tax; informational, never graded (the grade sums only FILE).
-    reg_total=0; reg_count=0
-    for f in "$REPO"/.claude/commands/*.md "$REPO"/.claude/agents/*.md; do
-      [ -f "$f" ] || continue
-      fmb="$(awk '/^---$/{c++; next} c==1{n += length($0) + 1} c>=2{exit} END{print n+0}' "$f")"
-      [ "${fmb:-0}" -gt 0 ] || continue
-      reg_total=$(( reg_total + fmb )); reg_count=$(( reg_count + 1 ))
+    # ---- Always-loaded context tax (scope-split, static) ----
+    # On-demand things — slash-commands, subagents, installed skills — cost nothing
+    # per turn for their BODIES (loaded on invocation), but their frontmatter
+    # (name + description) is injected into the command/agent/skill registry every
+    # session. That frontmatter IS always-loaded, so account for it here in `harness`
+    # (STATIC config — reports on a fresh clone, transcript-independent), emitted as
+    # CONTEXT-TAX: NOT summed into the FILE total and never graded (the grade sums
+    # only FILE). Split by install scope so the two-grade scorecard stays clean —
+    #   repo → 📦 project always-loaded context;  user → 💻 local always-loaded context.
+    for kind_scope in "registry:repo:$REPO/.claude" "registry:user:$HOME/.claude" \
+                      "skills:repo:$REPO/.claude/skills" "skills:user:$HOME/.claude/skills"; do
+      kind="${kind_scope%%:*}"; _r="${kind_scope#*:}"; scope="${_r%%:*}"; dir="${_r#*:}"
+      tx_total=0; tx_count=0
+      case "$kind" in
+        registry)
+          kpfx="registry-context-tax"
+          for f in "$dir"/commands/*.md "$dir"/agents/*.md; do
+            [ -f "$f" ] || continue
+            fmb="$(awk '/^---$/{c++; next} c==1{n += length($0) + 1} c>=2{exit} END{print n+0}' "$f")"
+            [ "${fmb:-0}" -gt 0 ] || continue
+            tx_total=$(( tx_total + fmb )); tx_count=$(( tx_count + 1 ))
+          done ;;
+        skills)
+          kpfx="skill-context-tax"
+          [ -d "$dir" ] || continue
+          for sk in "$dir"/*/; do
+            [ -f "${sk}SKILL.md" ] || continue
+            fmb="$(awk '/^---$/{c++; next} c==1{n += length($0) + 1} c>=2{exit} END{print n+0}' "${sk}SKILL.md")"
+            [ "${fmb:-0}" -gt 0 ] || continue
+            printf 'SKILL-TAX\t%s\t%s\t%s\t%s\n' "$(basename "$sk")" "$scope" "$fmb" "$(( fmb / 4 ))"
+            tx_total=$(( tx_total + fmb )); tx_count=$(( tx_count + 1 ))
+          done ;;
+      esac
+      [ "$tx_count" -gt 0 ] && printf 'CONTEXT-TAX\t%s\t%s\t%s\t%s\t%s\tkey=%s-%s\n' \
+        "$kind" "$scope" "$tx_count" "$tx_total" "$(( tx_total / 4 ))" "$kpfx" "$scope"
     done
-    [ "$reg_count" -gt 0 ] && printf 'CONTEXT-TAX\tregistry\t%s\t%s\t%s\tkey=registry-context-tax\n' "$reg_count" "$reg_total" "$(( reg_total / 4 ))"
     # Hooks — arbitrary shell on agent events. A bigger unguarded execution +
     # supply-chain surface than the Bash list, and previously unscanned.
     for s in "$REPO/.claude/settings.json" "$REPO/.claude/settings.local.json" \
@@ -1077,23 +1102,9 @@ SIG
       }
     '
 
-    # Always-loaded skill tax: every installed skill ships its frontmatter
-    # (name + description) into context each session, used or not. Reported for
-    # BOTH scopes — a user-scope skill is not flagged unused here, but its
-    # context cost in this repo is real. bytes/4, same proxy as FILE rows.
-    tax_total=0; tax_count=0
-    for scope_dir in "$REPO/.claude/skills:repo" "$HOME/.claude/skills:user"; do
-      d="${scope_dir%:*}"; scope="${scope_dir##*:}"
-      [ -d "$d" ] || continue
-      for sk in "$d"/*/; do
-        [ -f "${sk}SKILL.md" ] || continue
-        fmb="$(awk '/^---$/{c++; next} c==1{n += length($0) + 1} c>=2{exit} END{print n+0}' "${sk}SKILL.md")"
-        [ "${fmb:-0}" -gt 0 ] || continue
-        printf 'SKILL-TAX\t%s\t%s\t%s\t%s\n' "$(basename "$sk")" "$scope" "$fmb" "$(( fmb / 4 ))"
-        tax_total=$(( tax_total + fmb )); tax_count=$(( tax_count + 1 ))
-      done
-    done
-    [ "$tax_count" -gt 0 ] && printf 'CONTEXT-TAX\tskills\t%s\t%s\t%s\tkey=skill-context-tax\n' "$tax_count" "$tax_total" "$(( tax_total / 4 ))"
+    # (The always-loaded skill / registry context tax moved to `harness` in 0.37.1
+    # — it's STATIC config, so it belongs on the transcript-independent scan and now
+    # reports on a fresh clone, split by scope. See the CONTEXT-TAX block there.)
     ;;
 
   retro)
