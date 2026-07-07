@@ -74,7 +74,7 @@ that makes all of them reachable by default.
 - Abuse controls on `POST /auth/anonymous` (the spam magnet is account *creation*; the trial itself
   stays standard).
 
-**Everything else reuses the existing API** — no new surface: `GET /subscription` for tier/trial
+**Everything else reuses the existing API** — no new surface: `GET /billing/subscription` for tier/trial
 state (`trial_active` / `trial_ends_at` / `can_start_trial` / `tier_flip_kind`); the `*_FREE` /
 `*_QUOTA` tier-gate codes (flat `{"error_code","message"}`); `/billing/create-checkout` for upgrade.
 **No `/auth/me`, no `TRIAL_EXPIRED`.**
@@ -221,7 +221,7 @@ fine from the CLI without it."*
 
 **Trial expiry (existing model — no new code).** Detected off existing signals: a Pro-gated write
 (`POST /topics/`, `POST /goals/{id}/briefings`) returns an existing `*_FREE` code with
-`can_start_trial: false`, and `GET /subscription` reports `tier_flip_kind: "trial_expired"`. Behavior:
+`can_start_trial: false`, and `GET /billing/subscription` reports `tier_flip_kind: "trial_expired"`. Behavior:
 
 - Surface once: *"Your Header trial ended. Upgrade in the web UI to keep this repo's briefing
   fresh: `<claim_url>` (claim + upgrade) or the billing portal if already claimed."*
@@ -266,7 +266,7 @@ the session.
 
 - **Phase 0 — backend (blocking).** Only **two** new endpoints: `POST /auth/anonymous` (auto-starts
   the existing 15-day trial, mints a `full` key, returns a claim code) + the `/signup?code=` Clerk
-  claim flow. Everything else reuses the existing API (`GET /subscription`, `*_FREE` /
+  claim flow. Everything else reuses the existing API (`GET /billing/subscription`, `*_FREE` /
   `can_start_trial` / `tier_flip_kind`, `/billing/create-checkout`). Per the backend spec. Nothing
   client-side ships until this is live.
 - **Phase 1a — tested foundation. ✅ DONE.** `header-auth` bin (`register`/`save-key`/`state`/
@@ -286,7 +286,7 @@ the session.
   register call needs `POST /auth/anonymous` reachable. Graceful fallback: register fails → generic.
 - **Phase 4 — claim & lifecycle.** `/header account` mode routing ✅ (backed by `header-auth status`,
   works offline); README + SKILL.md privacy rewrite ✅. **Remaining (read off existing
-  `GET /subscription`):** claim-nudge cadence (after ≥3 applied recs), trial-expiry messaging +
+  `GET /billing/subscription`):** claim-nudge cadence (after ≥3 applied recs), trial-expiry messaging +
   public fallback, `llms.txt` top-line lingo.
 
 ## 8. Open questions / follow-ups

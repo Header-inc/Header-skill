@@ -78,13 +78,13 @@ No auth header. Idempotent on `installation_id`.
 | `claimed` | bool | `false` for a fresh anonymous account. |
 | `claim_code` | string | Unguessable token the `/signup` UI consumes to claim this account. |
 | `claim_url` | string | `https://joinheader.com/signup?code=<claim_code>` — surfaced verbatim by the CLI. |
-| `trial_active` / `trial_ends_at` / `can_start_trial` | — | The **same fields `GET /subscription` returns** — mirror them here so the skill has them inline at register. Authoritative trial state stays `/subscription`. |
+| `trial_active` / `trial_ends_at` / `can_start_trial` | — | The **same fields `GET /billing/subscription` returns** — mirror them here so the skill has them inline at register. Authoritative trial state stays `/billing/subscription`. |
 | `tier` | string | Optional coarse summary (`trial` \| `free` \| `pro`) for CLI display; derive from subscription state. Not authoritative. |
 
-### 2. Account / trial status — REUSE the existing `GET /api/v2/subscription`
+### 2. Account / trial status — REUSE the existing `GET /api/v2/billing/subscription`
 
 **No new status endpoint.** The live API already exposes everything the skill needs to nudge and
-to detect expiry — don't add `/auth/me`. `GET /api/v2/subscription` (auth `Bearer hdr_sk_…`) returns:
+to detect expiry — don't add `/auth/me`. `GET /api/v2/billing/subscription` (auth `Bearer hdr_sk_…`) returns:
 
 ```json
 {
@@ -97,9 +97,9 @@ to detect expiry — don't add `/auth/me`. `GET /api/v2/subscription` (auth `Bea
 }
 ```
 
-The only anonymous-specific datum not in `/subscription` is the **claim URL**. Rather than a new
+The only anonymous-specific datum not in `/billing/subscription` is the **claim URL**. Rather than a new
 status endpoint, **`POST /auth/anonymous` is idempotent and returns the current `claim_url` on every
-call** (see §1), so the skill re-fetches it there. Keep `/subscription` unchanged; just make sure an
+call** (see §1), so the skill re-fetches it there. Keep `/billing/subscription` unchanged; just make sure an
 anonymous account answers it like any other account.
 
 ### 3. `GET /signup?code=<claim_code>` — claim consumption (UI, NEW)
@@ -122,7 +122,7 @@ it reverts to free tier, and the existing behavior already covers it:
 - Pro-gated writes (`POST /api/v2/topics/`, `POST /api/v2/goals/{id}/briefings`) return the existing
   **`*_FREE`** code (e.g. `TOPIC_LIMIT_FREE`) — now with **`can_start_trial: false`** (the lifetime
   trial is used), so the recovery is **upgrade-only** (`POST /api/v2/billing/create-checkout`, UI).
-- `GET /api/v2/subscription` reports **`tier_flip_kind: "trial_expired"`** (the post-trial state).
+- `GET /api/v2/billing/subscription` reports **`tier_flip_kind: "trial_expired"`** (the post-trial state).
 - Schedules on the account's custom topics **auto-pause server-side** on lapse and **auto-resume on
   upgrade** — already implemented; no client action.
 
@@ -175,10 +175,35 @@ Anonymous + write-capable + auto-trial is a spam magnet: free Pro for anyone, an
 - Immediately `POST /api/v2/topics/` with the default source group + a stack-summary
   `goal_description`, then `header-repo bind` it to the repo.
 - Polls `first_briefing_id` and enriches the audit when it completes.
-- Re-checks `GET /subscription` (existing) to nudge claim (after ≥3 applied recs) and to detect a
+- Re-checks `GET /billing/subscription` (existing) to nudge claim (after ≥3 applied recs) and to detect a
   lapsed trial (`tier_flip_kind: "trial_expired"` / `*_FREE` + `can_start_trial:false`); re-fetches
   `claim_url` from an idempotent `POST /auth/anonymous`.
 - Never initiates payment.
+
+---
+
+## Verified against a running backend (2026-07-07)
+
+Integration-tested the client against a live instance. **Working:** `POST /api/v2/auth/anonymous`
+(`201`; idempotent — same `installation_id` → same `account_id` + `api_key`; response byte-matches §1
+incl. `key_scope:"full"`, `trial_active`, `can_start_trial`, `claim_code`/`claim_url`); the 15-day
+trial unlocking `POST /api/v2/topics/` (`201` + async `first_briefing_id`); `GET /api/v2/briefings/{id}`
+polling (+ `Accept: text/markdown`, `200`); and the `header-auth` bin end-to-end (register → `0600`
+creds → the saved key authenticates against `/billing/subscription`). Two findings:
+
+- **Claim is `POST /api/v2/auth/claim {code, email?}`, and it is Clerk-session-gated.** Without a
+  Clerk session it returns `401 SESSION_TOKEN_MISSING` and does **not** spend the code — correct: the
+  `/signup?code=` page signs the user in via Clerk, *then* calls claim with the session. So claim is
+  **not** headless-testable; only the UI flow completes it. `email` in the body is optional (identity
+  comes from the Clerk session).
+- **`claim_url` host is hardcoded to `https://joinheader.com`.** A locally-running backend still
+  returns `https://joinheader.com/signup?code=…`, so the code can't be claimed against that instance
+  without swapping the host. **Fix:** derive `claim_url` from a configurable frontend base / request
+  origin (e.g. `FRONTEND_BASE_URL`) so non-prod deployments emit a self-pointing claim URL. The CLI
+  surfaces whatever the API returns, so this is purely a backend config concern.
+
+Confirmed live paths (client refs aligned): status is **`GET /api/v2/billing/subscription`** (not
+`/api/v2/subscription`); claim is **`POST /api/v2/auth/claim`**.
 
 ---
 
@@ -201,7 +226,7 @@ Build:
 
 SCOPE: only TWO new things are needed — (1) POST /auth/anonymous and (2) the
 /signup?code= claim flow. Everything else REUSES the existing API: the 15-day
-trial (/billing/trial/start machinery), GET /subscription for trial/tier state,
+trial (/billing/trial/start machinery), GET /billing/subscription for trial/tier state,
 the *_FREE / *_QUOTA tier-gate codes, /billing/create-checkout for upgrade, and
 the /api-keys scope model (read|full). Do NOT add /auth/me or a TRIAL_EXPIRED code.
 
@@ -215,10 +240,10 @@ the /api-keys scope model (read|full). Do NOT add /auth/me or a TRIAL_EXPIRED co
      (device key recovery). Do not invalidate keys. Return the current claim_url.
    - Return: {account_id, api_key, key_scope:"full", claimed:false, claim_code,
      claim_url:"https://joinheader.com/signup?code=<claim_code>", trial_active,
-     trial_ends_at, can_start_trial, installation_id}. (trial_* mirror GET /subscription;
+     trial_ends_at, can_start_trial, installation_id}. (trial_* mirror GET /billing/subscription;
      optional coarse tier:"trial" for display.)
 
-2) Account/trial status: REUSE GET /api/v2/subscription (trial_active, trial_ends_at,
+2) Account/trial status: REUSE GET /api/v2/billing/subscription (trial_active, trial_ends_at,
    can_start_trial, tier_flip_kind). An anonymous account must answer it like any account.
    No new status endpoint — the skill gets claim_url from the idempotent register call.
 
@@ -230,7 +255,7 @@ the /api-keys scope model (read|full). Do NOT add /auth/me or a TRIAL_EXPIRED co
 
 4) Trial expiry: NO new code. When the 15-day trial lapses the account reverts to free —
    Pro-gated writes already return the existing *_FREE codes (e.g. TOPIC_LIMIT_FREE) with
-   can_start_trial=false (upgrade-only), GET /subscription reports tier_flip_kind:
+   can_start_trial=false (upgrade-only), GET /billing/subscription reports tier_flip_kind:
    "trial_expired", and topic schedules auto-pause server-side (auto-resume on upgrade).
    Keep the error envelope FLAT: {"error_code","message"}. Upgrade is UI-only.
 
@@ -268,7 +293,7 @@ ACCEPTANCE (these should pass; share BASE so I can run them too):
     -d '{"v":1,"installation_id":"test-1111","client":{"os":"linux","arch":"x86_64"}}')
   [ "$KEY" = "$(printf '%s' "$B" | sed -n 's/.*"api_key":"\([^"]*\)".*/\1/p')" ] && echo IDEMPOTENT-OK
   # key authenticates against the EXISTING subscription endpoint (trial state)
-  curl -sS $BASE/api/v2/subscription -H "Authorization: Bearer $KEY"
+  curl -sS $BASE/api/v2/billing/subscription -H "Authorization: Bearer $KEY"
   # trial unlocks topic creation immediately (no TOPIC_LIMIT_FREE)
   curl -sS -X POST $BASE/api/v2/topics/ -H "Authorization: Bearer $KEY" \
     -H 'Content-Type: application/json' \
