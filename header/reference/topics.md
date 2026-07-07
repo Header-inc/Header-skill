@@ -55,17 +55,21 @@ Offer to open the URL (portable `open` / `xdg-open` / `start` — see the snippe
 
 An empty or declined paste → the same fallback as a failed register (generic this run, leave `ENRICH_MODE` unset).
 
-**With a key now available**, build the repo's topic and defer the briefing:
+**With a key now available**, build the repo's topic and defer the briefing. `<TOPIC>` is `header-topic`, next to the preamble's `HEADER_BIN`:
 
-1. **Create the topic from the detected stack.** The Step 3 audit already inferred it — draft the `goal_description` for them; use the **default source group** for speed (offer source tailoring on a later run). See "Create a custom topic" in `reference/custom-briefings.md`. The response includes `first_briefing_id`; generation is **asynchronous** (~3–5 min). A `*_FREE` / cap code here → "Tier limits and error handling" (a fresh anonymous account is on a trial, so this is rare).
+1. **Create + bind the topic — one deterministic command.** The Step 3 audit inferred the stack; draft the `name` + `goal_description` (that's the judgment call), then let the bin do the API dance:
 
-2. **Bind it:** `"<REPO>" bind <new_topic_id> "<topic name>"`. Future runs resolve it as `REPO_TOPIC`.
+   ```bash
+   "<TOPIC>" create --name "<short topic name>" --goal "<goal_description drafted from the detected stack>"
+   ```
 
-3. **Present the audit now; defer the briefing recs.** Render Step 4's coach + scorecard + non-briefing recommendations immediately. The briefing-derived section reads: *"📰 Building this repo's briefing (~3–5 min) — stack-specific recommendations will follow as soon as it's ready."* Background-wait on `first_briefing_id` (see "Polling IN_PROGRESS briefings", non-blocking pattern, in `reference/custom-briefings.md`). On completion, fetch it (`Accept: text/markdown`), cross-reference the **briefing-derived items only**, and surface them as a follow-up — *"🔁 Your repo's briefing is ready"* — with their own small apply prompt; record `"<REPO>" seen "<generated_at>"`. (Harnesses without a background timer: the briefing-derived recs land on the next run via the normal bound-repo path — say so in one line.)
+   It POSTs the topic (default source group), **parses the nested response correctly, binds `topic.id` to this repo**, and prints `TOPIC_ID` / `GOAL_ID` / `BRIEFING_ID` — **capture `BRIEFING_ID`** (the `first_briefing_id`) to poll. **Don't hand-roll the curl/JSON:** the response nests three id fields (`topic.id`, `default_goal_id`, `first_briefing_id`) and a greedy grep binds the wrong one (the freshness check then `404`/`500`s) — that's the whole reason this is a bin. Exit codes: `0` ok; `2` no key (shouldn't happen — you just registered); `3` tier-gate (prints `ERROR_CODE <code>` → run "Tier limits and error handling"; rare on a fresh trial); `1` other → tell the user, fall back to generic for this run. Source tailoring (`sources/recommend`) is a later-run refinement — skip it here for speed.
 
-4. **Chained offers during the wait** (they depend on the topic existing) — bind is done; make the **schedule** and **team-config** offers exactly as in "After the audit" steps 2–3 below.
+2. **Present the audit now; defer the briefing recs.** Render Step 4's coach + scorecard + non-briefing recommendations immediately. The briefing-derived section reads: *"📰 Building this repo's briefing (~3–5 min) — stack-specific recommendations will follow as soon as it's ready."* Background-wait on `BRIEFING_ID` — poll `"<TOPIC>" status <BRIEFING_ID>` (prints `IN_PROGRESS` | `COMPLETED` | `FAILED`) on the non-blocking cadence (see "Polling IN_PROGRESS briefings" in `reference/custom-briefings.md`). On `COMPLETED`, fetch it (`Accept: text/markdown`), cross-reference the **briefing-derived items only**, surface them as a follow-up — *"🔁 Your repo's briefing is ready"* — with their own small apply prompt, and record `"<REPO>" seen "<generated_at>"`. **Still `IN_PROGRESS` at the deadline is fine** (a fresh briefing can run past the ETA): the topic is already bound, so the briefing-derived recs simply land on the **next** run in this repo — say so in one line. (Harnesses without a background timer: same — next run.)
 
-5. **Claim CTA (one line).** Surface the conversion link so the trial is convertible: `"<AUTH>" claim-url` (empty for an existing/already-claimed account). *"Your topics live in a free Header trial — create a full account (keeps your key + topics, and you can browse briefings in the web UI): \<claim_url\>. Optional; works fine from the CLI without it."*
+3. **Chained offers during the wait** (they depend on the topic existing) — bind is done; make the **schedule** and **team-config** offers exactly as in "After the audit" steps 2–3 below.
+
+4. **Claim CTA (one line).** Surface the conversion link so the trial is convertible: `"<AUTH>" claim-url` (empty for an existing/already-claimed account). *"Your topics live in a free Header trial — create a full account (keeps your key + topics, and you can browse briefings in the web UI): \<claim_url\>. Optional; works fine from the CLI without it."*
 
 Continue to "Telemetry consent". On a later run this repo has `ENRICH_MODE: custom` + a bound `REPO_TOPIC`, so Step 0 resolves it and the briefing already exists — no choice, no deferral.
 

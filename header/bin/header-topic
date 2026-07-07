@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# header-topic — deterministic topic + briefing lifecycle for the Header skill.
+#
+# The prose decides WHAT topic to create (name + goal_description, drafted from
+# the audit's detected stack — a judgment call). This bin does the deterministic
+# API dance so it isn't re-derived from prose + JSON each run: POST the topic,
+# parse the (nested) ids reliably, bind it to this repo, and report the briefing
+# id to poll. One tested place for the endpoint + response-shape knowledge.
+#
+# Motivating bug: `POST /api/v2/topics/` returns `{ "topic": { "id", … },
+# "first_briefing_id" }` — three distinct id fields — so a hand-written grep
+# silently binds the wrong id. Parsed here once, correctly.
+#
+# Usage:
+#   header-topic create --name N --goal D [--source-group ID]... [--no-bind]
+#       Create a topic (default source group if none given), bind it to this repo
+#       via header-repo (skip with --no-bind), and print machine-readable lines:
+#           TOPIC_ID <uuid>
+#           GOAL_ID <uuid>
+#           BRIEFING_ID <uuid>        # first_briefing_id — poll this
+#       Exit: 0 ok · 2 no API key · 3 tier-gate (prints the *_FREE/*_QUOTA code) ·
+#             1 other HTTP / parse error.
+#   header-topic status <briefing_id>
+#       Print one word: IN_PROGRESS | COMPLETED | FAILED | HTTP-<code>.
+#
+# Env:
+#   HEADER_HOME, HEADER_API_BASE (default https://joinheader.com), HEADER_API_KEY,
+#   HEADER_DEFAULT_SOURCE_GROUP  override the default source-group id
+#   HEADER_TOPIC_STUB / _CODE     file used as the create response (+ http code) — hermetic tests
+#   HEADER_TOPIC_STATUS_STUB      file used as the status response body — hermetic tests
+set -uo pipefail
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+STATE_DIR="${HEADER_HOME:-$HOME/.header}"
+API_BASE="${HEADER_API_BASE:-https://joinheader.com}"
+TOPICS_URL="$API_BASE/api/v2/topics/"
+BRIEFINGS_URL="$API_BASE/api/v2/briefings"
+DEFAULT_SG="${HEADER_DEFAULT_SOURCE_GROUP:-64981a34-3b8b-4064-a391-22f4534c229b}"
+
+json_escape() { printf '%s' "$1" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# json_str <body> <key> — first quoted-string value for a UNIQUELY-named "<key>":"…"
+# (e.g. first_briefing_id, default_goal_id, error_code, status). grep -o lists
+# matches in document order; head -1 takes the first. Fine for keys that appear once.
+json_str() { printf '%s' "$1" | grep -o "\"$2\":\"[^\"]*\"" | head -1 | sed "s/^\"$2\":\"//; s/\"\$//"; }
+# topic_id <body> — the created topic's id. `"id"` is NOT unique: the create
+# response nests `latest_briefing:{"id":…}` inside the topic object. But the topic's
+# own id is the FIRST `"id"` in the body (topic is the first object; its id precedes
+# the nested briefing id), so take the first match. (All other id fields are
+# `<word>_id`, so they never match the bare `"id"` key.)
+topic_id() { printf '%s' "$1" | grep -o '"id":"[^"]*"' | head -1 | sed 's/^"id":"//; s/"$//'; }
+
+resolve_key() {
+  [ -n "${HEADER_API_KEY:-}" ] && { printf '%s' "$HEADER_API_KEY"; return; }
+  sed -n 's/^HEADER_API_KEY=//p' "$STATE_DIR/credentials" 2>/dev/null | head -1
+}
+
+create() {
+  local name="" goal="" bind=1
+  local sgs=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name)         name="${2:-}"; shift 2 ;;
+      --goal)         goal="${2:-}"; shift 2 ;;
+      --source-group) sgs+=("${2:-}"); shift 2 ;;
+      --no-bind)      bind=0; shift ;;
+      *) echo "header-topic: unknown flag '$1'" >&2; return 1 ;;
+    esac
+  done
+  [ -n "$name" ] || { echo "header-topic: --name required" >&2; return 1; }
+  [ -n "$goal" ] || { echo "header-topic: --goal required" >&2; return 1; }
+  local key; key="$(resolve_key)"
+  [ -n "$key" ] || { echo "header-topic: no API key — run 'header-auth register' or set HEADER_API_KEY" >&2; return 2; }
+
+  [ ${#sgs[@]} -gt 0 ] || sgs=("$DEFAULT_SG")
+  local sg_json="" s
+  for s in "${sgs[@]}"; do sg_json="$sg_json\"$(json_escape "$s")\","; done
+  sg_json="[${sg_json%,}]"
+  local payload
+  payload="$(printf '{"name":"%s","source_group_ids":%s,"goal_description":"%s"}' \
+    "$(json_escape "$name")" "$sg_json" "$(json_escape "$goal")")"
+
+  local body code tmp
+  if [ -n "${HEADER_TOPIC_STUB:-}" ]; then
+    body="$(cat "$HEADER_TOPIC_STUB" 2>/dev/null)"; code="${HEADER_TOPIC_STUB_CODE:-201}"
+  else
+    tmp="$(mktemp)"
+    code="$(printf '%s' "$payload" | curl -sS -o "$tmp" -w '%{http_code}' --max-time 45 \
+      -X POST "$TOPICS_URL" -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+      --data @- 2>/dev/null || echo 000)"
+    body="$(cat "$tmp" 2>/dev/null)"; rm -f "$tmp"
+  fi
+
+  case "$code" in
+    2*) ;;
+    403|429)
+      # tier gate — surface the error_code (flat envelope) so the caller runs trial/upgrade.
+      local ec; ec="$(json_str "$body" error_code)"
+      echo "header-topic: tier-gate ${ec:-HTTP $code}${ec:+ (HTTP $code)}" >&2
+      printf 'ERROR_CODE %s\n' "${ec:-UNKNOWN}"
+      return 3 ;;
+    000) echo "header-topic: could not reach $TOPICS_URL (offline?)" >&2; return 1 ;;
+    *)   echo "header-topic: create failed (HTTP $code)${body:+ — $(printf '%s' "$body" | head -c 160)}" >&2; return 1 ;;
+  esac
+
+  local tid gid bid
+  tid="$(topic_id "$body")"                    # first "id" = topic.id (see topic_id note)
+  gid="$(json_str "$body" default_goal_id)"
+  bid="$(json_str "$body" first_briefing_id)"
+  [ -n "$tid" ] || { echo "header-topic: could not parse topic.id from the response" >&2; return 1; }
+
+  if [ "$bind" = 1 ]; then
+    "$BIN_DIR/header-repo" bind "$tid" "$name" || echo "header-topic: bind failed (topic still created)" >&2
+  fi
+  printf 'TOPIC_ID %s\n' "$tid"
+  [ -n "$gid" ] && printf 'GOAL_ID %s\n' "$gid"
+  [ -n "$bid" ] && printf 'BRIEFING_ID %s\n' "$bid"
+  return 0
+}
+
+status() {
+  local bid="${1:-}"
+  [ -n "$bid" ] || { echo "header-topic: status <briefing_id> required" >&2; return 1; }
+  local body code
+  if [ -n "${HEADER_TOPIC_STATUS_STUB:-}" ]; then
+    body="$(cat "$HEADER_TOPIC_STATUS_STUB" 2>/dev/null)"; code=200
+  else
+    local key tmp; key="$(resolve_key)"
+    [ -n "$key" ] || { echo "header-topic: no API key" >&2; return 2; }
+    tmp="$(mktemp)"
+    code="$(curl -sS -o "$tmp" -w '%{http_code}' --max-time 20 \
+      "$BRIEFINGS_URL/$bid" -H "Authorization: Bearer $key" 2>/dev/null || echo 000)"
+    body="$(cat "$tmp" 2>/dev/null)"; rm -f "$tmp"
+  fi
+  case "$code" in
+    2*) local st; st="$(json_str "$body" status)"; printf '%s\n' "${st:-UNKNOWN}" ;;
+    *)  printf 'HTTP-%s\n' "$code"; return 1 ;;
+  esac
+}
+
+case "${1:-}" in
+  create) shift; create "$@" ;;
+  status) shift; status "$@" ;;
+  -h|--help)
+    echo "Usage: header-topic {create --name N --goal D [--source-group ID]... [--no-bind] | status <briefing_id>}"
+    exit 0 ;;
+  *)
+    echo "Usage: header-topic {create|status} ..." >&2
+    exit 1 ;;
+esac

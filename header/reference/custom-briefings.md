@@ -126,7 +126,9 @@ curl -s -X POST https://joinheader.com/api/v2/topics/ \
   }'
 ```
 
-The default source group (`64981a34-...`) covers AI agent frameworks, MCP, coding tools. The response includes `first_briefing_id` — generation runs asynchronously.
+The default source group (`64981a34-...`) covers AI agent frameworks, MCP, coding tools.
+
+**Response shape — parse it as JSON, not with grep.** The body is `{ "topic": { "id", "default_goal_id", "name", … }, "first_briefing_id" }` — the new **topic id is nested at `topic.id`** (a sibling of `first_briefing_id`, *not* top-level), and there are **three distinct id fields** in play (`topic.id`, `topic.default_goal_id`, `first_briefing_id`). Bind **`topic.id`** with `header-repo bind`; poll **`first_briefing_id`** for the async briefing. A greedy `sed`/regex will silently grab the wrong id — extract with a JSON parser. (There is no "list my topics" fallback: `GET /api/v2/topics/` is the web app, and the public `catalog`/`dashboard` won't show a brand-new private topic — so capture `topic.id` from *this* response.)
 
 ### Team config (`.header/config`) — share a topic with your team
 
