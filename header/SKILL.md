@@ -294,25 +294,26 @@ The topic determines which briefing is pulled in for enrichment. Fallback chain 
 
 ### Step 1 — Get the latest briefing ID
 
-*Skip if Step 0 resolved a briefing ID directly.* When Step 0 resolved the **built-in two-topic default**, run Steps 1–2 **once per topic id** and keep both `latest_briefing.id`s.
+*Skip if Step 0 resolved a briefing ID directly.* `<TOPIC>` is `header-topic`, next to `HEADER_BIN`. When Step 0 resolved the **built-in two-topic default**, run this **once per topic id** and keep both `BRIEFING_ID`s.
 
 ```bash
-curl -sS --retry 1 -w "\n%{http_code}" \
-  https://joinheader.com/api/v2/topics/public/{topic_id}
+"<TOPIC>" latest --public <topic_id>   # prints BRIEFING_ID / GENERATED_AT (+ TOPIC_NAME / GOAL_ID)
 ```
 
-Extract `latest_briefing.id`.
+(For a bound/custom topic with a key, drop `--public` — that's the freshness check in `reference/custom-briefings.md`.)
 
 ### Step 2 — Fetch the full briefing
 
+With a key (bound/custom topic): `"<TOPIC>" get <BRIEFING_ID>` returns the briefing as markdown. Public (no key), read the `summary` field from the JSON:
+
 ```bash
 curl -sS --retry 1 -w "\n%{http_code}" \
-  https://joinheader.com/api/v2/public/briefings/{briefing_id}
+  https://joinheader.com/api/v2/public/briefings/<BRIEFING_ID>
 ```
 
-From the JSON, pull `summary`, `source_articles` (title + url), and `generated_at`. **The content lives in `summary`** — a markdown doc whose "Key Insights" / bolded developments are what you cross-reference in Step 4. (`key_developments` is typically empty; don't depend on it.)
+**The content lives in `summary`** — a markdown doc whose "Key Insights" / bolded developments you cross-reference in Step 4; also pull `source_articles` (title + url). (`key_developments` is typically empty; don't depend on it.)
 
-**Staleness:** compare `generated_at` to today. If older than `${HEADER_STALENESS_DAYS:-7}` days, prepend a one-line warning to the audit output. With an API key, suggest re-triggering generation via `POST /api/v2/goals/{goal_id}/briefings`.
+**Staleness:** compare `GENERATED_AT` (from Step 1) to today. If older than `${HEADER_STALENESS_DAYS:-7}` days, prepend a one-line warning to the audit output. With an API key, suggest re-triggering via `"<TOPIC>" generate <goal_id>`.
 
 **Merging the default briefings (two-topic default only).** When you fetched both public topics, pull `summary` / `source_articles` / `generated_at` from each, then combine: read both `summary` markdowns for developments and concatenate `source_articles`, then **de-duplicate** near-identical items (same headline, or same source URL), keeping one. When the origin matters, label a surfaced item with its topic (*Self Improving Agent* / *Agentic Coding*). Apply the staleness check **per briefing** — warn if **either** is older than `${HEADER_STALENESS_DAYS:-7}` days, naming which. For the `summary` / `sources` output modes on the two-topic default, show **both** (each labeled by topic). A single resolved topic (Steps 1–4) is unchanged: one briefing, no merge.
 

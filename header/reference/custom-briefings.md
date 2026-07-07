@@ -12,13 +12,13 @@ curl -s https://joinheader.com/api/v2/topics/public/catalog
 
 Each entry has `id`, `name`, `description`, `subscriber_count`.
 
-Get details for a specific topic (includes latest briefing summary):
+For a specific public topic's latest briefing (no key), let the bin resolve the nested ids (`<TOPIC>` = `header-topic`):
 
 ```bash
-curl -s https://joinheader.com/api/v2/topics/public/{topic_id}
+"<TOPIC>" latest --public <topic_id>   # prints TOPIC_NAME / BRIEFING_ID / GENERATED_AT / GOAL_ID
 ```
 
-The response includes the topic `name`, `description`, and `latest_briefing` details.
+Then read the briefing content: authenticated → `"<TOPIC>" get <briefing_id>` (markdown); public → `GET /api/v2/public/briefings/{briefing_id}` returns JSON, read its `summary` field.
 
 
 ## Custom briefings (API key required)
@@ -69,29 +69,19 @@ curl -sS https://joinheader.com/docs
 > 1. **Start the free trial now** (recommended — no credit card needed)
 > 2. Upgrade to Pro directly
 
-Trial (if `can_start_trial: true`):
+`<AUTH>` is `header-auth`. **Trial** (if `can_start_trial: true`) — then retry the original request:
 
 ```bash
-curl -sS -X POST https://joinheader.com/api/v2/billing/trial/start \
-  -H "Authorization: Bearer $HEADER_API_KEY"
+"<AUTH>" trial     # prints TRIAL_ACTIVE/TRIAL_ENDS_AT (exit 0); or ERROR_CODE + exit 3 if already used
 ```
 
-Then retry the original `POST /api/v2/topics/`. Upgrade:
+**Upgrade** — checkout needs an email, so an **anonymous** account must claim first (`"<AUTH>" claim-url`); a claimed account can:
 
 ```bash
-resp=$(curl -sS -X POST https://joinheader.com/api/v2/billing/create-checkout \
-  -H "Authorization: Bearer $HEADER_API_KEY")
-URL=$(printf '%s' "$resp" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-if [ -n "$URL" ]; then
-  if   command -v open     >/dev/null 2>&1; then open "$URL"
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL"
-  elif command -v start    >/dev/null 2>&1; then start "$URL"
-  else echo "Open $URL in your browser to finish checkout."
-  fi
-fi
+"<AUTH>" checkout --email <email>    # prints CHECKOUT_URL
 ```
 
-The same trial-vs-upgrade pattern applies to any `*_FREE` code.
+Open the `CHECKOUT_URL` (portable: `open` / `xdg-open` / `start`, else print it). Upgrade is otherwise UI-only. The same trial-vs-upgrade pattern applies to any `*_FREE` code.
 
 ### Setup
 
@@ -149,69 +139,42 @@ git add .header/config && git commit -m "Add Header team config"
 
 ### Bound repos — freshness & schedule
 
-Runs at session start **only** when the preamble echoed a non-empty `REPO_TOPIC` **or** `TEAM_TOPIC` and a key is available. Team topic behaves like a personal binding here — substitute `TEAM_TOPIC` for `{REPO_TOPIC}` below when Step 0 resolved that (just don't `header-repo clear` a team topic on `404`; tell the user to fix `.header/config` instead).
+Runs at session start when the preamble echoed a non-empty `REPO_TOPIC` **or** `TEAM_TOPIC` and a key is available. `<TOPIC>` is `header-topic`, next to `HEADER_BIN`.
 
-**1. Fetch the bound topic and check freshness.**
-
-```bash
-curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $_HK" \
-  https://joinheader.com/api/v2/topics/{REPO_TOPIC}
-```
-
-- `404` → topic deleted server-side. Tell the user, run `"<REPO>" clear`, fall back to the default topic.
-- Otherwise read `default_goal_id` and `latest_briefing.generated_at`. Compare to the last-seen marker:
+**1. Freshness check — one command** (deterministic: fetch + parse the nested `latest_briefing` + compare to `header-repo seen`):
 
 ```bash
-_SEEN="$("<REPO>" seen)"
+"<TOPIC>" latest                       # the bound REPO_TOPIC
+"<TOPIC>" latest --topic <TEAM_TOPIC>  # or a team topic
 ```
 
-If `generated_at` is newer than `_SEEN` (or empty), there's a **new briefing since the user last visited this repo** — say so ("📰 New briefing for this repo, generated <date>"), enrich the audit via Step 2 using `latest_briefing` (fetch by id with `Accept: text/markdown`). Record what was shown:
+It prints `TOPIC_ID` / `GOAL_ID` / `BRIEFING_ID` / `GENERATED_AT` and `FRESH new|current|none`:
 
-```bash
-"<REPO>" seen "<generated_at of the briefing just delivered>"
-```
+- **Exit `4`** → topic deleted server-side. Tell the user; for a personal `REPO_TOPIC` run `"<REPO>" clear` and fall back to the default topic; for a `TEAM_TOPIC` **don't** clear — tell them to fix `.header/config`.
+- **`FRESH new`** → a new briefing since the user last visited this repo. Say so ("📰 New briefing for this repo, generated `<GENERATED_AT>`"), fetch it (`"<TOPIC>" get <BRIEFING_ID>`), enrich the audit via Step 2, then record it: `"<REPO>" seen "<GENERATED_AT>"`.
+- **`FRESH current`** → nothing new since last visit. **`FRESH none`** → the topic has no briefing yet.
 
-**2. Schedule** — handled inside the post-audit chain. To change/stop later: `PUT /api/v2/goals/{default_goal_id}` with a new `schedule_frequency_days`, or `{"schedule_enabled": false}`.
+**2. Schedule** — handled inside the post-audit chain. To change/stop later: `PUT /api/v2/goals/{GOAL_ID}` with a new `schedule_frequency_days`, or `{"schedule_enabled": false}`.
 
 ### Add a source
 
-`/header add-source <url>` (or "add this source: <url>") feeds a URL into the user's topic. Requires a key.
+`/header add-source <url>` (or "add this source: <url>") feeds a URL into the user's topic. Requires a key. `<TOPIC>` is `header-topic`:
 
 ```bash
-# 1. Preview (detect type, verify the URL)
-curl -sS -X POST https://joinheader.com/api/v2/sources/preview \
-  -H "Authorization: Bearer $HEADER_API_KEY" -H "Content-Type: application/json" \
-  -d '{"url":"<url>"}'
-# 2. Create the source
-curl -sS -X POST https://joinheader.com/api/v2/sources/ \
-  -H "Authorization: Bearer $HEADER_API_KEY" -H "Content-Type: application/json" \
-  -d '{"name":"<name>","type":"<type>","url":"<url>"}'   # → returns the source id
-# 3. Add it to a source group the topic's goal already references
-curl -sS -X POST https://joinheader.com/api/v2/source-groups/{group_id}/members \
-  -H "Authorization: Bearer $HEADER_API_KEY" -H "Content-Type: application/json" \
-  -d '{"member_id":"<source_id>"}'
+"<TOPIC>" add-source "<url>"                     # add to the bound topic's source group
+"<TOPIC>" add-source "<url>" --group <group_id>  # or an explicit group you own
 ```
 
-Pick a group the user owns. If none editable, create one (`POST /api/v2/source-groups/`), add the source, then `PUT /api/v2/goals/{goal_id}` with `source_group_ids` including the new group. If multiple topics, ask which. On `*_FREE`, run trial/upgrade.
+It previews (detects type), creates the source, and adds it to the group — printing `SOURCE_ID` / `GROUP_ID` / `TYPE` / `NAME`. **Exit `3`** means the target group isn't yours to edit (the bound topic uses the *shared* default group — the common case): this is the judgment branch the bin leaves to you — create a group you own (`POST /api/v2/source-groups/`), `PUT /api/v2/goals/{goal_id}` to attach it to the topic's goal, then re-run with `--group <that group>`. If the user has multiple topics, ask which. On a `*_FREE`, run trial/upgrade.
 
-### Check briefing status
+### Check briefing status & fetch
 
 ```bash
-curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
-  https://joinheader.com/api/v2/briefings/{briefing_id}
+"<TOPIC>" status <briefing_id>   # IN_PROGRESS | COMPLETED | FAILED
+"<TOPIC>" get <briefing_id>      # the full briefing as markdown (authenticated)
 ```
 
-`status` is `IN_PROGRESS`, `COMPLETED`, or `FAILED`.
-
-**Markdown rendering:** authenticated path honors `Accept: text/markdown`:
-
-```bash
-curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
-  -H "Accept: text/markdown" \
-  https://joinheader.com/api/v2/briefings/{briefing_id}
-```
-
-(Public path returns JSON only.)
+`get` returns rendered markdown (the authenticated path honors `Accept: text/markdown`). The **public** path returns JSON only — read the `summary` field directly, or use `"<TOPIC>" latest --public <topic_id>` for the latest briefing id + `generated_at`.
 
 ### Polling IN_PROGRESS briefings
 
@@ -219,19 +182,16 @@ curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
 
 **Cadence:** sleep `remaining` + buffer before the first poll, then poll every 30s. Give up at ~2× the ETA past `created_at`.
 
-**Blocking pattern** (user is waiting):
+**Blocking pattern** (user is waiting) — `<TOPIC>` is `header-topic` (no `jq` dependency):
 
 ```bash
-resp=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
-  -X POST https://joinheader.com/api/v2/goals/{goal_id}/briefings)
-briefing_id=$(echo "$resp" | jq -r .id)
-eta=$(echo "$resp" | jq -r '.estimated_duration_seconds // 300')
+out="$("<TOPIC>" generate <goal_id>)"
+bid=$(printf '%s' "$out" | sed -n 's/^BRIEFING_ID //p')
+eta=$(printf '%s' "$out" | sed -n 's/^ETA_SECONDS //p'); eta=${eta:-300}
 sleep "$(( eta + 15 ))"
 deadline=$(( $(date +%s) + eta ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  status=$(curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
-    "https://joinheader.com/api/v2/briefings/$briefing_id" | jq -r .status)
-  case "$status" in
+  case "$("<TOPIC>" status "$bid")" in
     COMPLETED) break ;;
     FAILED) echo "Briefing failed"; exit 1 ;;
   esac
@@ -256,20 +216,10 @@ Other harnesses: record `briefing_id`, fetch on next invocation.
 ### Generate a new briefing
 
 ```bash
-curl -sS -w "\n%{http_code}" -X POST -H "Authorization: Bearer $HEADER_API_KEY" \
-  -H "Content-Type: application/json" \
-  https://joinheader.com/api/v2/goals/{goal_id}/briefings \
-  -d '{"max_entries": 5, "max_age_days": 7}'
+"<TOPIC>" generate <goal_id> [--max-entries N] [--max-age-days N]
 ```
 
-Body fields optional — omit the body for defaults.
-
-| Body field | Notes |
-|---|---|
-| `max_entries` | cap source entries |
-| `max_age_days` | only entries from the last N days |
-
-Returns `201` with `status: IN_PROGRESS` + ETA — then poll.
+Triggers a fresh briefing for the goal and prints `BRIEFING_ID` + `ETA_SECONDS`; then poll with `"<TOPIC>" status <BRIEFING_ID>`. `--max-entries` caps source entries; `--max-age-days` limits to the last N days (both optional). On a `*_FREE` (`MANUAL_BRIEFING_FREE`) it prints `ERROR_CODE …` and exits `3` → run trial/upgrade.
 
 ### Update a goal
 
@@ -350,33 +300,27 @@ Best-effort: skip silently if no key, no custom goal, or no new signal. When you
 
 ### Since-last digest
 
-For "what's new since I last checked" (and cron / `ScheduleWakeup` shapes): pass the last-run timestamp to surface only changes.
+For "what's new since I last checked" (and cron / `ScheduleWakeup` shapes): pass the last-run timestamp to surface only changes. `<TOPIC>` is `header-topic`:
 
 ```bash
-_HH="${HEADER_HOME:-$HOME/.header}"; _SINCE="$(cat "$_HH/.last-run" 2>/dev/null || echo)"
-curl -sS -H "Authorization: Bearer $HEADER_API_KEY" \
-  "https://joinheader.com/api/v2/topics/dashboard${_SINCE:+?since=$_SINCE}"
+_SINCE="$(cat "${HEADER_HOME:-$HOME/.header}/.last-run" 2>/dev/null || echo)"
+"<TOPIC>" dashboard ${_SINCE:+--since "$_SINCE"}    # prints: TOPIC <topic_id> <next_action>
 ```
 
-Surface topics whose `next_action` is `briefing_ready`; if nothing, say "nothing new since &lt;time&gt;" and stop. The skill writes `.last-run` after each audit.
+Surface topics whose `next_action` is `briefing_ready`; if none, say "nothing new since &lt;time&gt;" and stop. The skill writes `.last-run` after each audit.
 
 ### Scheduled / agent loop
 
-For agents on a cron or scheduled trigger, use `GET /api/v2/topics/dashboard?since=<iso8601>` and the server-computed `next_action`:
+For agents on a cron or scheduled trigger, `"<TOPIC>" dashboard --since <iso8601>` prints one `TOPIC <topic_id> <next_action>` line per custom topic (the server-computed `next_action`):
 
 | `next_action` | Meaning | Behavior |
 |---|---|---|
-| `briefing_ready` | New completed briefing available. | Fetch `latest_briefing.id`; run the audit flow with it as enrichment. |
-| `briefing_failed` | Most recent generation failed. | Tell the user; suggest re-trigger via `POST /goals/{id}/briefings`. |
+| `briefing_ready` | New completed briefing available. | `"<TOPIC>" latest --topic <topic_id>` → `BRIEFING_ID`; run the audit flow with it as enrichment. |
+| `briefing_failed` | Most recent generation failed. | Tell the user; suggest re-trigger via `"<TOPIC>" generate <goal_id>`. |
 | `briefing_in_progress` | Still generating. | Apply the polling cadence above. |
 | `nothing` | No change since `?since`. | Skip. |
 
 **Set `HEADER_NONINTERACTIVE=1`** in scheduled / unattended environments — the preamble reads it and suppresses every prompt (`CI=1` is treated the same way).
-
-```bash
-curl -sS -w "\n%{http_code}" -H "Authorization: Bearer $HEADER_API_KEY" \
-  "https://joinheader.com/api/v2/topics/dashboard?since=2026-05-01T00:00:00Z"
-```
 
 For full API documentation, see [joinheader.com/docs](https://joinheader.com/docs).
 

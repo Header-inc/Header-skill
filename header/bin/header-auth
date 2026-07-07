@@ -71,6 +71,18 @@ has_key() {
   [ -n "${HEADER_API_KEY:-}" ] && return 0
   [ -f "$CREDS" ] && grep -q '^HEADER_API_KEY=' "$CREDS" 2>/dev/null
 }
+# resolve_key — env first, then the credentials file (parsed, never sourced).
+resolve_key() {
+  [ -n "${HEADER_API_KEY:-}" ] && { printf '%s' "$HEADER_API_KEY"; return; }
+  sed -n 's/^HEADER_API_KEY=//p' "$CREDS" 2>/dev/null | head -1
+}
+# post_billing <path> [payload] — POST to a billing endpoint; echo "<body>\n<code>".
+post_billing() {
+  local key; key="$(resolve_key)"; [ -n "$key" ] || { printf '\n401'; return; }
+  local -a a=(-sS -w '\n%{http_code}' --max-time 20 -X POST "$API_BASE/api/v2/$1" -H "Authorization: Bearer $key")
+  [ -n "${2:-}" ] && a+=(-H 'Content-Type: application/json' --data "$2")
+  curl "${a[@]}" 2>/dev/null || printf '\n000'
+}
 
 # secure_save_key <key> — write the credentials file under a tight umask and
 # verify the perms before trusting it. 0 ok · 1 couldn't secure it. Shared by
@@ -206,18 +218,54 @@ status() {
   echo "  stop creating accounts:  header-config set auto_register false"
 }
 
+# trial — start the account's free trial (the *_FREE recovery for an existing-user
+# key with no trial yet; anonymous accounts already have one). Deterministic.
+trial() {
+  local resp code body
+  if [ -n "${HEADER_AUTH_BILLING_STUB:-}" ]; then body="$(cat "$HEADER_AUTH_BILLING_STUB" 2>/dev/null)"; code="${HEADER_AUTH_BILLING_CODE:-200}"
+  else resp="$(post_billing billing/trial/start)"; code="${resp##*$'\n'}"; body="${resp%$'\n'*}"; fi
+  case "$code" in
+    2*) local te; te="$(json_str "$body" trial_ends_at)"; echo "TRIAL_ACTIVE true"; [ -n "$te" ] && echo "TRIAL_ENDS_AT $te"; return 0 ;;
+    401|403 ) [ "$code" = 401 ] && { echo "header-auth: no API key" >&2; return 2; }
+              local ec; ec="$(json_str "$body" error_code)"; printf 'ERROR_CODE %s\n' "${ec:-UNKNOWN}"; echo "header-auth: trial not started (${ec:-HTTP $code})" >&2; return 3 ;;
+    409)      local ec; ec="$(json_str "$body" error_code)"; printf 'ERROR_CODE %s\n' "${ec:-TRIAL_ALREADY_USED}"; echo "header-auth: trial not started (${ec:-TRIAL_ALREADY_USED})" >&2; return 3 ;;
+    000)      echo "header-auth: offline" >&2; return 1 ;;
+    *)        echo "header-auth: trial failed (HTTP $code)" >&2; return 1 ;;
+  esac
+}
+
+# checkout --email E — create a Pro checkout URL (upgrade). The backend requires an
+# email, so anonymous accounts must CLAIM first; upgrade is otherwise UI-only.
+checkout() {
+  local email=""
+  while [ $# -gt 0 ]; do case "$1" in --email) email="${2:-}"; shift 2 ;; *) shift ;; esac; done
+  [ -n "$email" ] || { echo "header-auth: checkout --email <email> required (upgrade needs an email — anonymous accounts must claim first)" >&2; return 1; }
+  local resp code body
+  if [ -n "${HEADER_AUTH_BILLING_STUB:-}" ]; then body="$(cat "$HEADER_AUTH_BILLING_STUB" 2>/dev/null)"; code="${HEADER_AUTH_BILLING_CODE:-200}"
+  else resp="$(post_billing billing/create-checkout "$(printf '{"email":"%s"}' "$(json_escape "$email")")")"; code="${resp##*$'\n'}"; body="${resp%$'\n'*}"; fi
+  case "$code" in
+    2*) local u; u="$(json_str "$body" url)"; [ -n "$u" ] || u="$(json_str "$body" checkout_url)"
+        [ -n "$u" ] && { printf 'CHECKOUT_URL %s\n' "$u"; return 0; }; echo "header-auth: no url in checkout response" >&2; return 1 ;;
+    401) echo "header-auth: no API key" >&2; return 2 ;;
+    000) echo "header-auth: offline" >&2; return 1 ;;
+    *)   echo "header-auth: checkout failed (HTTP $code)${body:+ — $(printf '%s' "$body" | head -c 120)}" >&2; return 1 ;;
+  esac
+}
+
 case "${1:-}" in
   register)  register ;;
   save-key)  save_key_cmd "${2:-}" ;;
   state)     state ;;
   status)    status ;;
   claim-url) claim_url ;;
+  trial)     trial ;;
+  checkout)  shift; checkout "$@" ;;
   -h|--help)
-    echo "Usage: header-auth {register|save-key|state|status|claim-url}"
+    echo "Usage: header-auth {register|save-key|state|status|claim-url|trial|checkout --email E}"
     exit 0
     ;;
   *)
-    echo "Usage: header-auth {register|save-key|state|status|claim-url}" >&2
+    echo "Usage: header-auth {register|save-key|state|status|claim-url|trial|checkout --email E}" >&2
     exit 1
     ;;
 esac

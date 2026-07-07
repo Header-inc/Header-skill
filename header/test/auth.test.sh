@@ -110,6 +110,30 @@ assert_eq "full" "$(env -u HEADER_API_KEY HEADER_HOME="$HH6" "$HA" state)" \
 rc=0; HEADER_HOME="$HH5" "$HA" save-key >/dev/null 2>&1 || rc=$?
 assert_exit 1 "$rc" "save-key with no key → exit 1"
 
+# ── trial: start / already-used / no-key ─────────────────────
+sb5="$(make_sandbox)"; HH5="$sb5/.header"; mkdir -p "$HH5"
+printf '{"trial_active":true,"trial_ends_at":"2026-07-22T00:00:00Z","can_start_trial":false}' > "$sb5/ok.json"
+out="$(HEADER_HOME="$HH5" HEADER_API_KEY=hdr_sk_x HEADER_AUTH_BILLING_STUB="$sb5/ok.json" "$HA" trial)"
+assert_contains "$out" "TRIAL_ACTIVE true"                 "trial: success prints TRIAL_ACTIVE"
+assert_contains "$out" "TRIAL_ENDS_AT 2026-07-22T00:00:00Z" "trial: success prints the end date"
+printf '{"detail":{"error_code":"TRIAL_ALREADY_USED","message":"used"}}' > "$sb5/used.json"
+rc=0; out="$(HEADER_HOME="$HH5" HEADER_API_KEY=hdr_sk_x HEADER_AUTH_BILLING_STUB="$sb5/used.json" \
+  HEADER_AUTH_BILLING_CODE=409 "$HA" trial 2>/dev/null)" || rc=$?
+assert_exit 3 "$rc" "trial: 409 → exit 3"
+assert_contains "$out" "ERROR_CODE TRIAL_ALREADY_USED" "trial: surfaces error_code (even wrapped in detail)"
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb5/empty" "$HA" trial >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "trial: no key → exit 2 (no network)"
+
+# ── checkout: url / no-email / no-key ────────────────────────
+printf '{"url":"https://joinheader.com/checkout/abc"}' > "$sb5/co.json"
+assert_eq "CHECKOUT_URL https://joinheader.com/checkout/abc" \
+  "$(HEADER_HOME="$HH5" HEADER_API_KEY=hdr_sk_x HEADER_AUTH_BILLING_STUB="$sb5/co.json" "$HA" checkout --email a@b.co)" \
+  "checkout: prints CHECKOUT_URL from the response"
+rc=0; HEADER_HOME="$HH5" HEADER_API_KEY=hdr_sk_x "$HA" checkout >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "checkout: no --email → exit 1"
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb5/empty" "$HA" checkout --email a@b.co >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "checkout: no key → exit 2 (no network)"
+
 # ── dispatch: --help is success, unknown subcommand is an error ─
 HEADER_HOME="$HH" "$HA" --help >/dev/null 2>&1; assert_exit 0 "$?" "--help exits 0"
 HEADER_HOME="$HH" "$HA" zzz-not-a-subcommand >/dev/null 2>&1; assert_exit 1 "$?" \

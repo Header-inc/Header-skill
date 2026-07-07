@@ -65,6 +65,55 @@ assert_eq "IN_PROGRESS" \
 rc=0; HEADER_HOME="$sb/.header" HEADER_TOPIC_STATUS_STUB="$sb/st.json" "$HT" status >/dev/null 2>&1 || rc=$?
 assert_exit 1 "$rc" "status without a briefing id → exit 1"
 
+# ── latest: nested latest_briefing + freshness compare ──
+sb="$(make_sandbox)"; HH="$sb/.header"
+cat > "$sb/topic.json" <<'JSON'
+{"id":"TID-xyz","name":"My Topic","description":"","owner_id":"a","is_public":false,"created_at":"2026-06-15T00:00:00Z","updated_at":"2026-06-15T00:00:00Z","source_group_ids":["SG-1"],"default_goal_id":"GID-1","default_goal_description":"...","keywords":[],"source_count":1,"latest_briefing":{"id":"BID-9","status":"COMPLETED","generated_at":"2026-06-15T00:00:00Z","summary":"hi"}}
+JSON
+L() { env -u HEADER_API_KEY HEADER_HOME="$HH" HEADER_API_KEY=hdr_sk_x HEADER_REPO_KEY=lr \
+  HEADER_TOPIC_GET_STUB="$sb/topic.json" "$HT" latest --topic TID-xyz; }
+out="$(L)"
+assert_contains "$out" "TOPIC_ID TID-xyz"      "latest: topic id (first id)"
+assert_contains "$out" "BRIEFING_ID BID-9"     "latest: latest_briefing.id (nested, not topic id)"
+assert_contains "$out" "GENERATED_AT 2026-06-15T00:00:00Z" "latest: generated_at from the nested briefing"
+assert_contains "$out" "FRESH new"             "latest: no seen marker → FRESH new"
+HEADER_HOME="$HH" HEADER_REPO_KEY=lr "$RP" seen "2026-06-01T00:00:00Z"
+assert_contains "$(L)" "FRESH new"             "latest: seen older than briefing → FRESH new"
+HEADER_HOME="$HH" HEADER_REPO_KEY=lr "$RP" seen "2026-07-01T00:00:00Z"
+assert_contains "$(L)" "FRESH current"         "latest: seen newer than briefing → FRESH current"
+printf '{"id":"T2","name":"n","default_goal_id":"g","latest_briefing":null}' > "$sb/topic.json"
+out="$(L)"; assert_contains "$out" "FRESH none" "latest: null latest_briefing → FRESH none"
+assert_not_contains "$out" "BRIEFING_ID"        "latest: no BRIEFING_ID when there's no briefing"
+
+# ── generate: briefing id (first id) + numeric ETA ──
+sb="$(make_sandbox)"
+printf '{"id":"NEWBID-1","goal_id":"g","status":"IN_PROGRESS","estimated_duration_seconds":300,"source_count":5}' > "$sb/gen.json"
+out="$(env -u HEADER_API_KEY HEADER_HOME="$sb/.header" HEADER_API_KEY=hdr_sk_x \
+  HEADER_TOPIC_GET_STUB="$sb/gen.json" "$HT" generate GID-1)"
+assert_contains "$out" "BRIEFING_ID NEWBID-1" "generate: briefing id parsed"
+assert_contains "$out" "ETA_SECONDS 300"      "generate: numeric ETA parsed"
+
+# ── dashboard: per-topic next_action from the custom_topics array ──
+sb="$(make_sandbox)"
+cat > "$sb/dash.json" <<'JSON'
+{"custom_topics":[{"id":"DT-1","name":"a","latest_briefing":{"id":"lb1","status":"COMPLETED"},"next_action":"briefing_ready"},{"id":"DT-2","name":"b","latest_briefing":null,"next_action":"nothing"}],"subscribed_topics":[],"has_onboarded":true}
+JSON
+out="$(env -u HEADER_API_KEY HEADER_HOME="$sb/.header" HEADER_API_KEY=hdr_sk_x \
+  HEADER_TOPIC_GET_STUB="$sb/dash.json" "$HT" dashboard)"
+assert_contains "$out" "TOPIC DT-1 briefing_ready" "dashboard: topic id (first id, not nested lb1) + next_action"
+assert_contains "$out" "TOPIC DT-2 nothing"        "dashboard: second topic parsed"
+assert_not_contains "$out" "lb1"                    "dashboard: nested latest_briefing.id not mistaken for topic id"
+
+# ── get / add-source: arg + key guards (live paths validated against prod) ──
+rc=0; HEADER_HOME="$sb/.header" HEADER_API_KEY=hdr_sk_x "$HT" get >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "get without a briefing id → exit 1"
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb/empty" "$HT" get b >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "get with no key → exit 2"
+rc=0; HEADER_HOME="$sb/.header" HEADER_API_KEY=hdr_sk_x "$HT" add-source >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "add-source without a url → exit 1"
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb/empty" "$HT" add-source http://x >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "add-source with no key → exit 2"
+
 # ── dispatch ──
 HEADER_HOME="$HH" "$HT" --help >/dev/null 2>&1; assert_exit 0 "$?" "--help exits 0"
 HEADER_HOME="$HH" "$HT" zzz >/dev/null 2>&1; assert_exit 1 "$?" "unknown subcommand exits 1"
