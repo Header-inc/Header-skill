@@ -3,6 +3,46 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.0 — zero-friction custom briefings: anonymous onboarding + a scripted API surface
+
+Flips custom briefings from a post-audit upsell into a **first-run choice**, and
+moves the deterministic API plumbing out of prose into tested bins. Dogfooded
+end-to-end against production.
+
+- **First-run enrichment choice.** On a new repo the skill asks once — *generic
+  agentic recommendations, or ones tuned to this codebase?* On **custom** it sets up
+  a free account with no signup screen (a silent **anonymous 15-day trial**, keyed on
+  the device `installation_id`; or the existing user pastes their key), builds a topic
+  from the detected stack, and enriches every future audit from *that* briefing. On
+  **generic**, nothing project-derived leaves the machine. The anonymous account is
+  convertible to a full one anytime via a claim link — API key and topics preserved.
+- **`header-auth` bin** — `register` (anonymous trial), `save-key` (existing-user
+  paste), `state`/`status`/`claim-url`, `trial`, `checkout`, `subscription`. Account +
+  billing lifecycle, hardened + unit-tested (`~/.header/credentials` written 0600).
+- **`header-topic` bin** — `create` / `latest` (freshness) / `get` / `generate` /
+  `status` / `add-source` / `dashboard`. Owns every topic/briefing endpoint and its
+  (nested) response shape, so the agent never re-parses `topic.id` vs
+  `first_briefing_id` vs `latest_briefing.id` from prose. `reference/topics.md`,
+  `reference/custom-briefings.md`, and SKILL.md Step 1/2 now call the bins; the old
+  `jq` dependency in the polling prose is gone.
+- **Deferred briefing.** The onboarding run shows the audit immediately and
+  background-polls the new briefing; if it outruns its ETA the recs land on the next
+  run (the topic is already bound).
+- **Claim & lifecycle.** `/header account` view; a one-time claim nudge after 3+
+  applied recs on an unclaimed trial; trial-expiry detection (`tier_flip_kind`) that
+  messages once and falls back to public enrichment. All read off the existing
+  `GET /billing/subscription` — reuses the existing trial/billing model, no new codes.
+- **New config:** `auto_register` (default `true`; the opt-out) and `enrich_mode`,
+  both egress-related → **not** team-config-shareable. New preamble signals
+  `ENRICH_MODE` / `ACCOUNT` / `AUTO_REGISTER` / `CLAIM_NUDGED`.
+- **Lingo.** "Nothing about your project leaves the machine" → precise: the audit is
+  always 100% local (no code/contents/diffs); on **custom**, only a one-line stack
+  summary egresses, by choice (README / SKILL.md / `llms.txt`).
+
+Design + backend contract in `docs/anonymous-onboarding-design.md` and
+`docs/anonymous-auth-backend-spec.md`. +~90 assertions (new `auth` / `topic` suites,
+extended `preamble` / `repo` / `header-config` / `binexit`); 19 suites green.
+
 ## 0.37.1 — the always-loaded context tax moves to `harness`, split by scope
 
 Finishes the scope-clean context picture 0.37.0 started. The skills context tax
