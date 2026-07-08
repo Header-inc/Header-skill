@@ -276,18 +276,23 @@ the session.
   change yet — the bins are dormant infra, fully unit-tested. `VERSION` unchanged (not a release).
 - **Phase 1b — preamble signals. ✅ DONE.** `SKILL.md` preamble emits `ENRICH_MODE`/`ACCOUNT`/
   `AUTO_REGISTER` + table rows; +7 preamble assertions. Inert until the flow consumes them.
-- **Phase 2 + 3 — the choice flow + deferred briefing. ✍️ DRAFTED on the branch (needs backend
-  integration test).** `SKILL.md` "First-run enrichment choice" entry hook + reconciled the old
-  upsell to the existing-key path + telemetry-gate fold-in; `reference/topics.md` rewritten with the
-  full choice flow (§2.2 generic-vs-custom, §2.2a new-or-existing → `header-auth register` /
-  `save-key`, topic-from-stack create + bind, present-now / background-wait / surface-when-ready
-  deferred briefing, claim CTA); the "nothing leaves your machine" lingo rewrite (SKILL.md + README).
-  **Not yet validated end-to-end** — the prose is model-instruction (not unit-testable) and the
-  register call needs `POST /auth/anonymous` reachable. Graceful fallback: register fails → generic.
-- **Phase 4 — claim & lifecycle.** `/header account` mode routing ✅ (backed by `header-auth status`,
-  works offline); README + SKILL.md privacy rewrite ✅. **Remaining (read off existing
-  `GET /billing/subscription`):** claim-nudge cadence (after ≥3 applied recs), trial-expiry messaging +
-  public fallback, `llms.txt` top-line lingo.
+- **Phase 2 — the choice flow. ✅ DONE + dogfooded against prod (2026-07-07).** `SKILL.md` "First-run
+  enrichment choice" entry hook + reconciled the old upsell to the existing-key path + telemetry-gate
+  fold-in; `reference/topics.md` choice flow (§2.2 generic-vs-custom, §2.2a new-or-existing →
+  `header-auth register` / `save-key`, topic-from-stack create + bind); lingo rewrite (SKILL.md +
+  README). A live `/header` first-run ran end-to-end on prod: choice → new-user → register → topic
+  create + bind → `ENRICH_MODE:custom` + `REPO_TOPIC` bound. **Hardened:** the topic create/bind dance
+  is now the `header-topic` bin (not prose-parsed JSON) after a nested-id bug.
+- **Phase 3 — deferred briefing. ✅ DONE + dogfooded.** present-now / background-wait (`header-topic
+  status`) / surface-when-ready / claim CTA. Validated live: the background poll ran; a fresh briefing
+  can exceed its ETA, so the designed fallback (topic bound → recs land next run) is confirmed.
+- **Phase 4 — claim & lifecycle. Mostly done.** `/header account` ✅; README + SKILL.md privacy
+  rewrite ✅; **claim UI tested by the user — works** (re-register shows `claimed:true`, key preserved).
+  **Remaining (read off existing `GET /billing/subscription`):** claim-nudge cadence (after ≥3 applied
+  recs), trial-expiry messaging + public fallback, `llms.txt` top-line lingo.
+- **Extra — scripted the deterministic API surface.** `header-topic` (create/latest/get/generate/
+  status/add-source/dashboard) + `header-auth` (trial/checkout) own every endpoint + response shape;
+  prose orchestrates only. All validated against prod.
 
 ## 8. Open questions / follow-ups
 
