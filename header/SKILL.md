@@ -96,6 +96,7 @@ else
   _EM="$("$_HR" enrich-mode 2>/dev/null || true)"
   [ -n "$_EM" ] || _EM="$("$_HC" get enrich_mode 2>/dev/null || true)"
   echo "ENRICH_MODE: ${_EM:-unset}"
+  echo "CLAIM_NUDGED: $([ -f "$_HH/.claim-nudged" ] && echo yes || echo no)"
   _UPD="$("$(dirname "$_HC")/header-update-check" 2>/dev/null || true)"
   case "$_UPD" in UPDATE_*) echo "UPDATE_CHECK: $_UPD" ;; esac
 fi
@@ -124,6 +125,7 @@ If `HEADER_INSTALL: ok`, use the echoed values for the rest of the session:
 | `ENRICH_MODE` | `custom` / `generic` / `unset` for this repo (per-repo `header-repo enrich-mode` › global `enrich_mode` default). `unset` (with `INTERACTIVE: yes`, `HAS_KEY: no`, `AUTO_REGISTER` ≠ `false`) → ask the generic-vs-custom enrichment choice — see "Default flow". `generic` → public topics, never register. `custom` → use the repo's bound topic (register/key already resolved). |
 | `ACCOUNT` | `none` / `anonymous-unclaimed` / `anonymous-claimed` / `full` (from `header-auth state`). `none` + `HAS_KEY: no` → the enrichment choice may register an anonymous account (new user) or save a pasted key (existing user). Drives the `/header account` view and the claim nudge. |
 | `AUTO_REGISTER` | `true` / `false` (config `auto_register`, default `true`). `false` → never offer custom / never register; generic public-topic behavior only. |
+| `CLAIM_NUDGED` | `yes` / `no`. `no` (with `ACCOUNT: anonymous-unclaimed`, `INTERACTIVE: yes`, and 3+ applied recs) → make the one-time claim-your-account nudge — see "Claim your account (nudge)". |
 | `TELEMETRY_PROMPTED` | `no` (with `INTERACTIVE: yes`, after the post-audit flow resolves) → ask telemetry consent once. |
 | `TOPIC_OFFERED` | **Per-repo** flag. `no` (with `INTERACTIVE: yes` and empty `REPO_TOPIC`) → offer to create a custom topic for *this* repo after the audit. Once per repo. |
 | `SCHEDULE_OFFERED` | **Per-repo** flag. `no` (with a bound `REPO_TOPIC` not yet on a schedule, `INTERACTIVE: yes`) → make the schedule offer for *this* repo's topic. Once per repo. |
@@ -542,6 +544,22 @@ curl -sS -w "\n%{http_code}" https://joinheader.com/api/v2/topics/public/catalog
 ## After the audit: customize your topic (existing key)
 
 For a user who **already has a key** (`HAS_KEY: yes`) but no `REPO_TOPIC`/`TEAM_TOPIC` yet: the "First-run enrichment choice" above doesn't fire for them (it gates on `HAS_KEY: no`), so make the offer here. In an interactive run, once per repo, offer to point the briefing at the user's stack (plus the chained bind / schedule / team-config offers). **Flow → `reference/topics.md`.** A **no-key** new repo is handled up front by the first-run choice instead — don't also offer here.
+
+## Claim your account (nudge)
+
+Fires **once**, only when `INTERACTIVE: yes`, `ACCOUNT: anonymous-unclaimed`, `CLAIM_NUDGED: no`, and the user has applied **3+** recommendations (`<LEDGER> list --action applied --since-days 90` has ≥3 entries). A soft conversion nudge for someone getting value from an anonymous trial — never every run, and only for an unclaimed anonymous account (skip for `full`/`anonymous-claimed`/`none`). `<AUTH>` is `header-auth`.
+
+```bash
+"<AUTH>" claim-url    # the /signup?code=… URL (empty if already claimed)
+```
+
+> You've applied several recommendations — nice. Your topics live in a free Header trial; create a full account to keep them (and your API key), and browse your briefings in the web UI: `<claim_url>`. Optional — the CLI works fine without it.
+
+Then mark it so it never repeats:
+
+```bash
+touch "${HEADER_HOME:-$HOME/.header}/.claim-nudged"
+```
 
 ## Telemetry consent
 

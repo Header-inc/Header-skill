@@ -156,6 +156,8 @@ It prints `TOPIC_ID` / `GOAL_ID` / `BRIEFING_ID` / `GENERATED_AT` and `FRESH new
 
 **2. Schedule** — handled inside the post-audit chain. To change/stop later: `PUT /api/v2/goals/{GOAL_ID}` with a new `schedule_frequency_days`, or `{"schedule_enabled": false}`.
 
+**3. Trial expiry.** A lapsed trial doesn't break reads — the bound topic still resolves and its last briefing is still readable — but new generation is blocked. Detect it with `"<AUTH>" subscription` → an `EXPIRED yes` line (`<AUTH>` is `header-auth`), or a `generate`/topic write returning `*_FREE` with `can_start_trial:false`. On expiry, surface **once** — "Your Header trial ended; upgrade to keep this repo's briefing fresh: `<claim-url>` (claim + upgrade), or the billing portal if already claimed" — and **fall back to public-topic enrichment** for this run so the audit still runs enriched. Upgrade is UI-only; the skill never charges.
+
 ### Add a source
 
 `/header add-source <url>` (or "add this source: <url>") feeds a URL into the user's topic. Requires a key. `<TOPIC>` is `header-topic`:

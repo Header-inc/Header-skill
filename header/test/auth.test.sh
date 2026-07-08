@@ -134,6 +134,18 @@ assert_exit 1 "$rc" "checkout: no --email → exit 1"
 rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb5/empty" "$HA" checkout --email a@b.co >/dev/null 2>&1 || rc=$?
 assert_exit 2 "$rc" "checkout: no key → exit 2 (no network)"
 
+# ── subscription: tier/trial state + EXPIRED detection ───────
+printf '{"trial_active":true,"can_start_trial":false,"trial_ends_at":"2026-07-22T00:00:00Z","tier_flip_kind":null}' > "$sb5/act.json"
+out="$(HEADER_HOME="$HH5" HEADER_API_KEY=hdr_sk_x HEADER_AUTH_BILLING_STUB="$sb5/act.json" "$HA" subscription)"
+assert_contains "$out" "TRIAL_ACTIVE true"  "subscription: active trial"
+assert_not_contains "$out" "EXPIRED"         "subscription: active trial is not EXPIRED"
+printf '{"trial_active":false,"can_start_trial":false,"trial_ends_at":"2026-06-01T00:00:00Z","tier_flip_kind":"trial_expired"}' > "$sb5/exp.json"
+out="$(HEADER_HOME="$HH5" HEADER_API_KEY=hdr_sk_x HEADER_AUTH_BILLING_STUB="$sb5/exp.json" "$HA" subscription)"
+assert_contains "$out" "TIER_FLIP_KIND trial_expired" "subscription: surfaces tier_flip_kind"
+assert_contains "$out" "EXPIRED yes"                   "subscription: lapsed trial → EXPIRED yes"
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb5/empty" "$HA" subscription >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "subscription: no key → exit 2 (no network)"
+
 # ── dispatch: --help is success, unknown subcommand is an error ─
 HEADER_HOME="$HH" "$HA" --help >/dev/null 2>&1; assert_exit 0 "$?" "--help exits 0"
 HEADER_HOME="$HH" "$HA" zzz-not-a-subcommand >/dev/null 2>&1; assert_exit 1 "$?" \

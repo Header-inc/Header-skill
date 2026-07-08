@@ -83,6 +83,12 @@ post_billing() {
   [ -n "${2:-}" ] && a+=(-H 'Content-Type: application/json' --data "$2")
   curl "${a[@]}" 2>/dev/null || printf '\n000'
 }
+get_api() {  # GET /api/v2/<path> → echo "<body>\n<code>"
+  local key; key="$(resolve_key)"; [ -n "$key" ] || { printf '\n401'; return; }
+  curl -sS -w '\n%{http_code}' --max-time 20 "$API_BASE/api/v2/$1" -H "Authorization: Bearer $key" 2>/dev/null || printf '\n000'
+}
+# json_bool <body> <key> — value of an unquoted "<key>":true|false (empty if absent).
+json_bool() { printf '%s' "$1" | grep -o "\"$2\":\\(true\\|false\\)" | head -1 | sed 's/.*://'; }
 
 # secure_save_key <key> — write the credentials file under a tight umask and
 # verify the perms before trusting it. 0 ok · 1 couldn't secure it. Shared by
@@ -252,20 +258,43 @@ checkout() {
   esac
 }
 
+# subscription — the account's tier/trial state (existing GET /billing/subscription),
+# printed machine-readable so the flow can detect a lapsed trial deterministically.
+subscription() {
+  local resp code body
+  if [ -n "${HEADER_AUTH_BILLING_STUB:-}" ]; then body="$(cat "$HEADER_AUTH_BILLING_STUB" 2>/dev/null)"; code="${HEADER_AUTH_BILLING_CODE:-200}"
+  else resp="$(get_api billing/subscription)"; code="${resp##*$'\n'}"; body="${resp%$'\n'*}"; fi
+  case "$code" in
+    2*) ;;
+    401) echo "header-auth: no API key" >&2; return 2 ;;
+    000) echo "header-auth: offline" >&2; return 1 ;;
+    *) echo "header-auth: HTTP $code" >&2; return 1 ;;
+  esac
+  local ta cs te tf; ta="$(json_bool "$body" trial_active)"; cs="$(json_bool "$body" can_start_trial)"
+  te="$(json_str "$body" trial_ends_at)"; tf="$(json_str "$body" tier_flip_kind)"
+  printf 'TRIAL_ACTIVE %s\n' "${ta:-unknown}"
+  printf 'CAN_START_TRIAL %s\n' "${cs:-unknown}"
+  [ -n "$te" ] && printf 'TRIAL_ENDS_AT %s\n' "$te"
+  [ -n "$tf" ] && printf 'TIER_FLIP_KIND %s\n' "$tf"
+  # EXPIRED yes when the trial lapsed (flip=trial_expired, or inactive + can't restart).
+  if [ "$tf" = "trial_expired" ] || { [ "$ta" = "false" ] && [ "$cs" = "false" ]; }; then echo "EXPIRED yes"; fi
+}
+
 case "${1:-}" in
-  register)  register ;;
-  save-key)  save_key_cmd "${2:-}" ;;
-  state)     state ;;
-  status)    status ;;
-  claim-url) claim_url ;;
-  trial)     trial ;;
-  checkout)  shift; checkout "$@" ;;
+  register)     register ;;
+  save-key)     save_key_cmd "${2:-}" ;;
+  state)        state ;;
+  status)       status ;;
+  claim-url)    claim_url ;;
+  trial)        trial ;;
+  checkout)     shift; checkout "$@" ;;
+  subscription) subscription ;;
   -h|--help)
-    echo "Usage: header-auth {register|save-key|state|status|claim-url|trial|checkout --email E}"
+    echo "Usage: header-auth {register|save-key|state|status|claim-url|trial|checkout --email E|subscription}"
     exit 0
     ;;
   *)
-    echo "Usage: header-auth {register|save-key|state|status|claim-url|trial|checkout --email E}" >&2
+    echo "Usage: header-auth {register|save-key|state|status|claim-url|trial|checkout --email E|subscription}" >&2
     exit 1
     ;;
 esac

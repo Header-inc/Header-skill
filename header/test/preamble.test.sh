@@ -127,6 +127,9 @@ out="$(run_preamble "$SKILL_DIR" "$sb")"
 assert_contains "$out" "ACCOUNT: none"        "no account → ACCOUNT: none"
 assert_contains "$out" "AUTO_REGISTER: true"  "AUTO_REGISTER default true"
 assert_contains "$out" "ENRICH_MODE: unset"   "ENRICH_MODE unset by default"
+assert_contains "$out" "CLAIM_NUDGED: no"     "CLAIM_NUDGED no by default"
+touch "$sb/.header/.claim-nudged"
+assert_contains "$(run_preamble "$SKILL_DIR" "$sb")" "CLAIM_NUDGED: yes" ".claim-nudged marker → CLAIM_NUDGED: yes"
 
 # global enrich_mode default folds in when this repo has no per-repo value
 HEADER_HOME="$sb/.header" "$SKILL_DIR/bin/header-config" set enrich_mode generic >/dev/null

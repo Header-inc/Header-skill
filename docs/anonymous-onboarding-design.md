@@ -286,10 +286,12 @@ the session.
 - **Phase 3 — deferred briefing. ✅ DONE + dogfooded.** present-now / background-wait (`header-topic
   status`) / surface-when-ready / claim CTA. Validated live: the background poll ran; a fresh briefing
   can exceed its ETA, so the designed fallback (topic bound → recs land next run) is confirmed.
-- **Phase 4 — claim & lifecycle. Mostly done.** `/header account` ✅; README + SKILL.md privacy
-  rewrite ✅; **claim UI tested by the user — works** (re-register shows `claimed:true`, key preserved).
-  **Remaining (read off existing `GET /billing/subscription`):** claim-nudge cadence (after ≥3 applied
-  recs), trial-expiry messaging + public fallback, `llms.txt` top-line lingo.
+- **Phase 4 — claim & lifecycle. ✅ DONE.** `/header account` ✅; privacy rewrite (README + SKILL.md +
+  `llms.txt`) ✅; **claim UI tested by the user — works** (re-register shows `claimed:true`, key
+  preserved); **claim-nudge cadence** ✅ (`CLAIM_NUDGED` preamble signal + `.claim-nudged` marker,
+  fires once after ≥3 applied recs on an `anonymous-unclaimed` account); **trial-expiry** ✅
+  (`header-auth subscription` → `EXPIRED yes` off `tier_flip_kind`/`can_start_trial`; prose messages +
+  falls back to public enrichment). All read off the existing `GET /billing/subscription` — no new backend.
 - **Extra — scripted the deterministic API surface.** `header-topic` (create/latest/get/generate/
   status/add-source/dashboard) + `header-auth` (trial/checkout) own every endpoint + response shape;
   prose orchestrates only. All validated against prod.
