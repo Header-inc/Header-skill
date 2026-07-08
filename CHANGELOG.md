@@ -3,6 +3,17 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.1 — leaner SKILL.md frontmatter; install docs default to the one-command script
+
+- **Trimmed the always-loaded `description` + `when_to_use`** frontmatter (~40% shorter) — cut
+  repetition and the legacy `/header-briefing` mention while **keeping every trigger condition**
+  intact. Skill discoverability is load-bearing: the model routes on the description alone, so the
+  triggers stay; only the padding goes (per the agentic-coding briefing's own finding).
+- **README:** the one-command `curl … install.sh | sh` is now the recommended **Option A**;
+  `npx skills` moves to **Option B**. Cross-references updated.
+
+No behavior change; VERSION + frontmatter → 0.38.1.
+
 ## 0.38.0 — zero-friction custom briefings: anonymous onboarding + a scripted API surface
 
 Flips custom briefings from a post-audit upsell into a **first-run choice**, and

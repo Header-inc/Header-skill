@@ -3,3 +3,5 @@
 # Local skill install copy (the canonical source is header/).
 .claude/skills/
 # Note: .claude/settings.json is intentionally NOT ignored — it's shared team config.
+# Compounding memory is kept LOCAL on this public repo (dev learnings, not product).
+.claude/memory/

@@ -10,17 +10,7 @@ Every invocation runs the audit. The briefing is **input** to the audit: items i
 
 The skill is a small folder — `header/` (`SKILL.md` + `bin/` + `VERSION`) — installed into your agent's skills directory.
 
-### Option A: `npx skills` (recommended)
-
-One command, and it works in Claude Code, Codex, Cursor, Copilot, Gemini CLI, and [50+ other Agent Skills hosts](https://github.com/vercel-labs/skills) — via the open [`skills`](https://github.com/vercel-labs/skills) CLI, with no install script piped into a shell. Needs Node (for `npx`).
-
-```bash
-npx skills add Header-inc/Header-skill -g
-```
-
-`-g` installs globally for your user (available across all projects) — drop it to scope to the current project. The CLI finds the `header` skill in this repo and installs just that folder; inside an agent session it installs non-interactively. Add `-a <agent>` to target specific hosts, `--list` to preview, and re-run to update.
-
-### Option B: One-command install script
+### Option A: One-command install script (recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
@@ -29,6 +19,16 @@ curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/instal
 Installs into `~/.claude/skills/header/` (and `~/.codex/skills/` if Codex is detected). No Node required — just `sh`, plus `git` or `curl`. Re-run any time to update.
 
 The installer also **migrates a previous `header-briefing/` install** at the same skills root — it removes the legacy folder after a successful install so the old `/header-briefing` command no longer appears. State at `~/.header/` (your API key, config, ledger, repo bindings) is outside the skill dir and is preserved.
+
+### Option B: `npx skills`
+
+One command, and it works in Claude Code, Codex, Cursor, Copilot, Gemini CLI, and [50+ other Agent Skills hosts](https://github.com/vercel-labs/skills) — via the open [`skills`](https://github.com/vercel-labs/skills) CLI, with no install script piped into a shell. Needs Node (for `npx`).
+
+```bash
+npx skills add Header-inc/Header-skill -g
+```
+
+`-g` installs globally for your user (available across all projects) — drop it to scope to the current project. The CLI finds the `header` skill in this repo and installs just that folder; inside an agent session it installs non-interactively. Add `-a <agent>` to target specific hosts, `--list` to preview, and re-run to update.
 
 ### Option C: Clone and install
 
@@ -53,7 +53,7 @@ Start a new Claude Code session (or restart your current one) to pick up the ski
 
 ### Using with other harnesses (Cursor, Aider, Codex CLI, etc.)
 
-Most hosts are covered by **Option A** — `npx skills add Header-inc/Header-skill -a <agent>` (e.g. `-a cursor`, `-a codex`). For anything the CLI doesn't cover, the skill is a folder of plain `bash` + `curl` — no build step, no runtime dependencies — so install the `header/` folder where your agent looks for skills, or point your agent at `header/SKILL.md` directly:
+Most hosts are covered by **Option B** — `npx skills add Header-inc/Header-skill -a <agent>` (e.g. `-a cursor`, `-a codex`). For anything the CLI doesn't cover, the skill is a folder of plain `bash` + `curl` — no build step, no runtime dependencies — so install the `header/` folder where your agent looks for skills, or point your agent at `header/SKILL.md` directly:
 
 - **Cursor**: add `header/SKILL.md` as a project rule.
 - **Aider**: `aider --read header/SKILL.md` (or add to `CONVENTIONS.md`).
@@ -65,7 +65,7 @@ Most hosts are covered by **Option A** — `npx skills add Header-inc/Header-ski
 The installable skill is the **`header/` subfolder**, not the repository root — there is no `SKILL.md` at the root, so a root-level install fails with `SKILL.md not found`. Point Codex at the subfolder:
 
 - **Repo:** `Header-inc/Header-skill`  ·  **Skill path:** `header`  ·  **Installed location:** `$CODEX_HOME/skills/header` (default `~/.codex/skills/header`).
-- `npx skills add Header-inc/Header-skill -a codex` (Option A) or `install.sh` (Option B, which installs into `~/.codex/skills/` automatically when `codex` is on `PATH`) both target the `header/` folder for you.
+- `npx skills add Header-inc/Header-skill -a codex` (Option B) or `install.sh` (Option A, which installs into `~/.codex/skills/` automatically when `codex` is on `PATH`) both target the `header/` folder for you.
 - **Restart Codex after installing or updating.** Codex loads skills at session startup, so a freshly installed `/header` won't appear until you start a new session.
 
 Two Codex-specific rough edges the skill now handles itself:
@@ -274,7 +274,7 @@ On each run the skill checks for a newer version against Header's version endpoi
 - **The prompt** offers Yes / Always / Not now / Never. "Always" sets `auto_update`; "Never" sets `update_check false`.
 - **Auto-update:** `~/.claude/skills/header/bin/header-config set auto_update true` — future updates install silently.
 - **Disable checks:** `~/.claude/skills/header/bin/header-config set update_check false`.
-- **Update manually anytime** by re-running your installer — `npx skills add Header-inc/Header-skill -g` (Option A), or the script:
+- **Update manually anytime** by re-running your installer — the script (Option A), or `npx skills add Header-inc/Header-skill -g` (Option B):
 
   ```bash
   curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
