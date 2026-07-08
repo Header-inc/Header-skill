@@ -180,40 +180,19 @@ It previews (detects type), creates the source, and adds it to the group — pri
 
 ### Polling IN_PROGRESS briefings
 
-`POST /api/v2/goals/{id}/briefings` returns `201` with `estimated_duration_seconds` (ETA). **The ETA is static** — fixed at create time, doesn't count down. Compute remaining as `estimated_duration_seconds - (now - created_at)`. Add a small buffer. Null on briefings predating the field — fall back to 300s.
+**Use `"<TOPIC>" await <briefing_id>` — don't hand-roll a poll loop.** It block-polls every ~10 min (up to ~50 min; `--interval`/`--timeout` to change) and prints a timestamped status line each poll. First briefings routinely take **30–40 min**, so it's built for that. Exit: `0` COMPLETED · `5` FAILED · `6` timed out (still `IN_PROGRESS`) · `2` no key. (`"<TOPIC>" status <id>` is the one-shot primitive underneath.)
 
-**Cadence:** sleep `remaining` + buffer before the first poll, then poll every 30s. Give up at ~2× the ETA past `created_at`.
+**Claude Code — the standard mechanism (non-busy-wait):** launch `await` as a **background job** (`Bash` with `run_in_background: true`); it detaches and re-invokes you on exit. Then act on the exit code (COMPLETED → fetch + surface; FAILED → offer a retry; timed out → lands next run). This is what the first-run deferred-briefing pass (`reference/topics.md`) does. `ScheduleWakeup` at `interval` is an alternative if you'd rather the agent wake and do one `status` check.
 
-**Blocking pattern** (user is waiting) — `<TOPIC>` is `header-topic` (no `jq` dependency):
+**Blocking pattern** (a harness that can't detach, or you truly want to wait):
 
 ```bash
 out="$("<TOPIC>" generate <goal_id>)"
 bid=$(printf '%s' "$out" | sed -n 's/^BRIEFING_ID //p')
-eta=$(printf '%s' "$out" | sed -n 's/^ETA_SECONDS //p'); eta=${eta:-300}
-sleep "$(( eta + 15 ))"
-deadline=$(( $(date +%s) + eta ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
-  case "$("<TOPIC>" status "$bid")" in
-    COMPLETED) break ;;
-    FAILED) echo "Briefing failed"; exit 1 ;;
-  esac
-  sleep 30
-done
+"<TOPIC>" await "$bid"      # blocks until COMPLETED/FAILED/timeout; no jq, no manual loop
 ```
 
-**Non-blocking pattern** — for the post-audit chain, which intentionally fills the wait with the schedule/team-config questions:
-
-1. Tell the user the briefing is generating, including the ETA.
-2. Record `briefing_id` and `created_at`.
-3. Ask the chained questions (schedule, team-config).
-4. Check back after the ETA — fetch by ID and confirm completion.
-
-**Claude Code** automates step 4 without busy-waiting:
-
-- **Background loop:** run the poll loop as a background job (`Bash` with `run_in_background: true`); it sleeps `remaining` + buffer, polls every 30s, re-invokes you on exit.
-- **Timer:** `ScheduleWakeup` with `remaining` + buffer; the agent wakes, does one GET, and confirms — or reschedules a short delay if still `IN_PROGRESS`.
-
-Other harnesses: record `briefing_id`, fetch on next invocation.
+**Other harnesses (no background job):** record `briefing_id`; the topic is bound, so the briefing lands on the next invocation (freshness check picks it up).
 
 ### Generate a new briefing
 

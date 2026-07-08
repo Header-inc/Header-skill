@@ -24,6 +24,10 @@
 #       Trigger a fresh briefing for a goal. Prints BRIEFING_ID / ETA_SECONDS.
 #   header-topic status <briefing_id>
 #       Print one word: IN_PROGRESS | COMPLETED | FAILED | HTTP-<code>.
+#   header-topic await <briefing_id> [--interval SEC] [--timeout SEC]
+#       Block-poll a briefing to completion (default: every 10 min, up to 50 min).
+#       Meant to run detached (Claude Code: run_in_background) so the deferred-briefing
+#       pass actually happens. Exit: 0 COMPLETED · 5 FAILED · 6 timed out · 2 no key.
 #   header-topic add-source <url> [--group ID]
 #       Preview → create → add a source to a group (bound topic's first group if
 #       --group omitted). Prints SOURCE_ID / GROUP_ID / TYPE / NAME.
@@ -180,6 +184,32 @@ cmd_status() {
     *) printf 'HTTP-%s\n' "$_HC"; return 1 ;; esac
 }
 
+# await — block-poll a briefing to completion. Meant to run detached (Claude Code:
+# run_in_background:true) so the deferred-briefing pass ACTUALLY happens instead of
+# falling back to "next run". First briefings can take 30–40 min, so the default
+# cadence is every 10 min up to 50 min. Emits a timestamped status line each poll.
+# Exit: 0 COMPLETED · 5 FAILED · 6 timed out (still IN_PROGRESS) · 2 no key.
+cmd_await() {
+  local bid="" interval="${HEADER_TOPIC_POLL_INTERVAL:-600}" timeout="${HEADER_TOPIC_POLL_TIMEOUT:-3000}"
+  while [ $# -gt 0 ]; do case "$1" in
+    --interval) interval="${2:-}"; shift 2 ;; --timeout) timeout="${2:-}"; shift 2 ;;
+    -*) echo "header-topic: unknown flag '$1'" >&2; return 1 ;; *) bid="$1"; shift ;; esac; done
+  [ -n "$bid" ] || { echo "header-topic: await <briefing_id> required" >&2; return 1; }
+  local key="-"; [ -n "${HEADER_TOPIC_STATUS_STUB:-}" ] || { key="$(need_key)" || return 2; }
+  local deadline=$(( $(date +%s) + timeout )) st
+  while :; do
+    call GET "$API_BASE/api/v2/briefings/$bid" "$key" "" HEADER_TOPIC_STATUS_STUB
+    case "$_HC" in 2*) st="$(json_str "$BODY" status)" ;; *) st="HTTP-$_HC" ;; esac
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${st:-UNKNOWN}"
+    case "$st" in
+      COMPLETED) echo "AWAIT COMPLETED"; return 0 ;;
+      FAILED)    echo "AWAIT FAILED"; return 5 ;;
+    esac
+    [ "$(date +%s)" -ge "$deadline" ] && { echo "AWAIT TIMEOUT still IN_PROGRESS"; return 6; }
+    sleep "$interval"
+  done
+}
+
 cmd_add_source() {
   local url="" group=""
   while [ $# -gt 0 ]; do case "$1" in
@@ -241,10 +271,11 @@ case "${1:-}" in
   get)        shift; cmd_get "$@" ;;
   generate)   shift; cmd_generate "$@" ;;
   status)     shift; cmd_status "$@" ;;
+  await)      shift; cmd_await "$@" ;;
   add-source) shift; cmd_add_source "$@" ;;
   dashboard)  shift; cmd_dashboard "$@" ;;
   -h|--help)
-    echo "Usage: header-topic {create|latest|get|generate|status|add-source|dashboard} ..."
+    echo "Usage: header-topic {create|latest|get|generate|status|await|add-source|dashboard} ..."
     exit 0 ;;
-  *) echo "Usage: header-topic {create|latest|get|generate|status|add-source|dashboard} ..." >&2; exit 1 ;;
+  *) echo "Usage: header-topic {create|latest|get|generate|status|await|add-source|dashboard} ..." >&2; exit 1 ;;
 esac

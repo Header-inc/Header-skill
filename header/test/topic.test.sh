@@ -65,6 +65,19 @@ assert_eq "IN_PROGRESS" \
 rc=0; HEADER_HOME="$sb/.header" HEADER_TOPIC_STATUS_STUB="$sb/st.json" "$HT" status >/dev/null 2>&1 || rc=$?
 assert_exit 1 "$rc" "status without a briefing id → exit 1"
 
+# ── await: resolves on COMPLETED / FAILED, guards no-key + missing arg ──
+printf '{"id":"b","status":"COMPLETED"}' > "$sb/done.json"
+out="$(HEADER_HOME="$sb/.header" HEADER_TOPIC_STATUS_STUB="$sb/done.json" "$HT" await b)"; rc=$?
+assert_exit 0 "$rc" "await: COMPLETED → exit 0 (immediate, no sleep)"
+assert_contains "$out" "AWAIT COMPLETED" "await: prints the completion marker"
+printf '{"id":"b","status":"FAILED"}' > "$sb/fail.json"
+rc=0; HEADER_HOME="$sb/.header" HEADER_TOPIC_STATUS_STUB="$sb/fail.json" "$HT" await b >/dev/null 2>&1 || rc=$?
+assert_exit 5 "$rc" "await: FAILED → exit 5"
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb/empty" "$HT" await b >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "await: no key → exit 2"
+rc=0; HEADER_HOME="$sb/.header" HEADER_API_KEY=hdr_sk_x "$HT" await >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "await without a briefing id → exit 1"
+
 # ── latest: nested latest_briefing + freshness compare ──
 sb="$(make_sandbox)"; HH="$sb/.header"
 cat > "$sb/topic.json" <<'JSON'

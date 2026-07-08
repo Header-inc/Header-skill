@@ -3,6 +3,22 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.2 — first-run briefings poll in the background (they can take 30–40 min)
+
+The deferred-briefing pass was easy to read as "it'll land next run" and skip — so a
+first-time custom briefing (often **30–40 min**) only surfaced when the user manually
+re-ran `/header`. Fixed:
+
+- **`header-topic await <briefing_id>`** — block-polls a briefing to completion (default:
+  every **10 min**, up to 50 min; `--interval`/`--timeout` to tune). Emits a timestamped
+  status line per poll. Exit `0` COMPLETED · `5` FAILED · `6` timed out · `2` no key. Meant
+  to run detached (Claude Code: `run_in_background`) so the poll actually happens.
+- **The first-run flow now LAUNCHES it.** `reference/topics.md` step 2 is imperative:
+  present the audit, then run `header-topic await` as a background job and act on the exit
+  code (fetch + surface on COMPLETED, offer retry on FAILED, next-run on timeout) — no more
+  silently falling back to "next run" on Claude Code. `reference/custom-briefings.md`'s
+  polling section now leads with `await` instead of a hand-rolled sleep loop.
+
 ## 0.38.1 — leaner SKILL.md frontmatter; install docs default to the one-command script
 
 - **Trimmed the always-loaded `description` + `when_to_use`** frontmatter (~40% shorter) — cut
