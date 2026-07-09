@@ -1147,6 +1147,31 @@ EXP run mg --k 1 --adapter "$sb/m-cheat.sh" >/dev/null 2>&1
 assert_contains "$(cat "$mg_runs")" '"success":false' "cheat agent → lock restores the test → cannot game the oracle"
 assert_not_contains "$(cat "$mg_runs")" '"success":true' "lock defeats test-tampering (reward-hacking defense)"
 
+# The lock and the seal must hold SIMULTANEOUSLY, and they pull in opposite
+# directions: the lock needs the fixing ref at grade time, the agent must never
+# reach it. (Sealing naively broke the lock — the grade-time `git checkout` had
+# no object store left; the fix snapshots the graded files out before sealing.)
+# A cheating agent that ALSO reads git must neither game the oracle nor see the
+# commit its task was mined from.
+cat > "$sb/m-cheat-spy.sh" <<EOF
+#!/usr/bin/env bash
+printf 'true\n' > tests/check.sh
+{ printf 'REVCOUNT=%s\n' "\$(git rev-list --all --count 2>/dev/null || echo ERR)"
+  if git cat-file -e $FIX_SHA 2>/dev/null; then echo FIX_COMMIT_REACHABLE; else echo FIX_COMMIT_SEALED; fi
+} >> "\$SPY_OUT" 2>&1
+printf '{"type":"result","model":"stub","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}\n'
+EOF
+chmod +x "$sb/m-cheat-spy.sh"
+export SPY_OUT="$sb/mg-spy.log"; : > "$SPY_OUT"
+EXP run mg --k 1 --adapter "$sb/m-cheat-spy.sh" >/dev/null 2>&1
+assert_contains "$(cat "$mg_runs")" '"success":false' \
+  "cheat+spy agent: the lock still holds under a sealed workspace"
+assert_contains "$(cat "$SPY_OUT")" "FIX_COMMIT_SEALED" \
+  "the mined task's fixing commit is unreachable from the sealed workspace"
+assert_contains "$(cat "$SPY_OUT")" "REVCOUNT=1" \
+  "a mined replicate sees exactly one (root) commit"
+unset SPY_OUT
+
 # ── arm overrides ──
 EXP mine ma --repo "$mine_repo" --verify "$VC" --from m-x --to m-y --yes >/dev/null 2>&1
 assert_contains "$(cat "$(exp_dir_for ma)/spec")" "model: m-x" "mine --from sets arm A model"
@@ -1532,5 +1557,53 @@ assert_contains "$mine_custom_out" "tests fail at parent" \
 # the spec's RUNTIME verify stays the FULL suite — narrowing is validation-only
 assert_contains "$(cat "$(exp_dir_for pyt-t)/spec")" "verify: pytest -q" \
   "the mined spec's runtime oracle remains the full suite (narrowing is validation-only)"
+
+# ── git-history sealing: the agent must not be able to read the answer ────────
+# `mine` derives tasks FROM git history, and `git worktree add` leaves a .git
+# pointer into the parent object store — so without sealing the agent under test
+# can `git log --all` / `git show` the very commit that fixes the task. The
+# adapter below IS the attacker: it greps the object store for a marker that
+# only exists in the fixing commit.
+seal_sb="$(make_sandbox)"; seal_repo="$seal_sb/repo"
+mkdir -p "$seal_repo"
+( cd "$seal_repo" && git init -q && git config user.email t@t && git config user.name t \
+  && echo 'buggy' > calc.txt && git add -A && git commit -qm bug )
+seal_parent="$(cd "$seal_repo" && git rev-parse HEAD)"
+( cd "$seal_repo" && echo 'fixed SECRET_ANSWER_9c1f' > calc.txt && git add -A && git commit -qm fix )
+
+# spy adapter: append what git reveals to $SPY_OUT, then emit valid usage JSON
+cat > "$seal_sb/spy.sh" <<'SPY'
+#!/usr/bin/env bash
+{ git log --all -p 2>/dev/null | grep -o 'SECRET_ANSWER_9c1f' | head -1
+  printf 'REVCOUNT=%s\n' "$(git rev-list --all --count 2>/dev/null || echo ERR)"; } >> "$SPY_OUT" 2>&1
+printf '{"type":"result","model":"stub","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}\n'
+SPY
+chmod +x "$seal_sb/spy.sh"
+
+EXP define exp-seal --description d --arm "A=m1" --arm "B=m2" --replicates 1 >/dev/null 2>&1
+mkdir -p "$(exp_dir_for exp-seal)/tasks"; echo "fix it" > "$(exp_dir_for exp-seal)/tasks/example.md"
+sed_sub "s|^repo: .*|repo: $seal_repo|" "$(exp_dir_for exp-seal)/spec"
+sed_sub "s|^commit: .*|commit: $seal_parent|" "$(exp_dir_for exp-seal)/spec"
+
+# default: sealed → no leak, exactly one (root) commit reachable
+export SPY_OUT="$seal_sb/spy.log"; : > "$SPY_OUT"
+EXP run exp-seal --yes --adapter "$seal_sb/spy.sh" >/dev/null 2>&1
+assert_not_contains "$(cat "$SPY_OUT")" "SECRET_ANSWER_9c1f" \
+  "sealed workspace: the agent cannot read the fixing commit out of git"
+assert_contains "$(cat "$SPY_OUT")" "REVCOUNT=1" \
+  "sealed workspace: exactly one (root) commit is reachable"
+
+# opt-out honored, and it warns — proves the assertions above aren't vacuous
+: > "$SPY_OUT"
+seal_out="$(HEADER_HOME="$sb/.header" HEADER_EXPERIMENT_NOSYNC=1 HEADER_EXPERIMENT_NO_SEAL=1 \
+  "$HE" run exp-seal --yes --adapter "$seal_sb/spy.sh" 2>&1 >/dev/null)"
+assert_contains "$seal_out" "NOT sealed" "the no-seal opt-out warns loudly"
+assert_contains "$(cat "$SPY_OUT")" "SECRET_ANSWER_9c1f" \
+  "without sealing the answer IS reachable (the bug this guards)"
+unset SPY_OUT
+
+# sealing leaves no stale worktree registry entry in the parent repo
+assert_eq "1" "$(cd "$seal_repo" && git worktree list | wc -l | tr -d ' ')" \
+  "sealed replicates prune their worktree registry entries"
 
 t_done

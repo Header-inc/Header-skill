@@ -5,7 +5,9 @@
 #   mine → run → analyze → report          (or define/new → run → analyze → report)
 #
 # Each run executes (task × arm × replicate) in an isolated worktree at a pinned
-# commit, captures real usage via the Claude Code headless adapter
+# commit whose git history is SEALED (a single root commit — the agent cannot
+# `git log` the commit that solves a mined task; `seal_history: off` to opt out),
+# captures real usage via the Claude Code headless adapter
 # (`claude -p --output-format json`), then runs a user-specified verifier. The
 # analyser pairs by task, bootstraps a 95% CI on per-task differences, and emits
 # a verdict against the deck's rule: B wins only if cost CI < 0 AND success is
@@ -309,6 +311,74 @@ _oracle_checkout() {
   IFS="$oifs"
   [ "${#arr[@]}" -gt 0 ] || return 0
   ( cd "$wt" && git checkout "$ref" -- "${arr[@]}" 2>/dev/null )
+}
+
+# _seal_history <worktree> — cut the eval workspace off from repository history.
+# `git worktree add` leaves a .git POINTER into the parent repo's object store
+# (and the `cp -a` fallback copies .git wholesale), so the agent under test can
+# run `git log --all` / `git show <sha>` and read the very commit that solves a
+# `mine`d task — the task is DERIVED from that commit, so the answer is always
+# reachable. Databricks names this the "cheating by reading the answer from git"
+# failure mode and prescribes sealing the working copy per eval run.
+#
+# Sealing replaces history with a single root commit of the current tree: git
+# still works for the agent (status / diff / commit / stash), but there is no
+# prior or future commit to read. MUST run AFTER _oracle_checkout, which
+# legitimately needs the fixing ref's objects.
+#
+# Returns 0 when the workspace is sealed (no reachable history), 1 when it could
+# not be sealed — callers treat 1 as fatal for the replicate, because an unsealed
+# run silently produces an invalid measurement rather than a loud failure.
+# Escape: `seal_history: off` in the spec, or HEADER_EXPERIMENT_NO_SEAL=1.
+_seal_history() {
+  local wt="$1"
+  [ -e "$wt/.git" ] || return 0          # nothing to seal (already historyless)
+  rm -rf "$wt/.git" 2>/dev/null || return 1
+  ( cd "$wt" || exit 1
+    git init -q || exit 1
+    git add -A || exit 1
+    # --no-verify + an explicit identity: the sandbox may have no git identity,
+    # and a global core.hooksPath must not run this repo's hooks during sealing.
+    git -c user.email=experiment@header.local -c user.name='Header Experiment' \
+        -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+        commit -q --no-verify --allow-empty \
+        -m 'sealed baseline — history withheld from the agent under test' || exit 1
+  ) >/dev/null 2>&1 || return 1
+  # Belt and braces: prove no commit other than the sealed root is reachable.
+  local n
+  n="$( ( cd "$wt" && git rev-list --all --count ) 2>/dev/null || echo 0 )"
+  [ "${n:-0}" = "1" ] || return 1
+  return 0
+}
+
+# _lock_snapshot <repo> <ref> <paths_csv> <dest> — copy <ref>'s version of the
+# lock paths OUT of the repo, before the workspace's history is sealed. The
+# grade-time lock (_lock_restore) must be able to reinstate the pristine tests
+# WITHOUT the object store — which is precisely what the agent must not have.
+# Uses `git archive`, so directories and files behave like `git checkout ref --`.
+_lock_snapshot() {
+  local repo="$1" ref="$2" paths="$3" dest="$4" p arr=() oifs="$IFS"
+  IFS=','
+  for p in $paths; do
+    p="$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$p" ] && arr+=("$p")
+  done
+  IFS="$oifs"
+  [ "${#arr[@]}" -gt 0 ] || return 0
+  mkdir -p "$dest" || return 1
+  ( cd "$repo" && git archive --format=tar "$ref" -- "${arr[@]}" 2>/dev/null ) \
+    | ( cd "$dest" && tar -xf - 2>/dev/null ) || return 1
+  [ -n "$(ls -A "$dest" 2>/dev/null)" ] || return 1
+  return 0
+}
+
+# _lock_restore <dest> <worktree> — overwrite whatever the agent left at the
+# graded paths with the pristine snapshot. Lives outside the worktree so the
+# agent's edits (and `git checkout`) can't reach it.
+_lock_restore() {
+  local dest="$1" wt="$2"
+  [ -d "$dest" ] || return 1
+  cp -a "$dest"/. "$wt"/ 2>/dev/null || return 1
 }
 
 # prompt_user <message> [<default>]  → read one line interactively, echo answer.
@@ -620,6 +690,10 @@ write_spec() {
     printf 'replicates: %s\n' "${reps:-3}"
     printf 'non_inferiority_margin: %s\n' "${margin:-0.02}"
     [ -n "$ledger_key" ] && printf 'ledger_key: %s\n' "$ledger_key"
+    printf '# seal_history: off                 # OPTIONAL — default ON. Each replicate gets a\n'
+    printf '                                    # single-root-commit workspace so the agent cannot\n'
+    printf '                                    # `git log` the commit that solves a mined task.\n'
+    printf '                                    # Only turn off for tasks that need real history.\n'
     printf '# worktree_include:                 # OPTIONAL — comma-sep paths (e.g. venv, .env)\n'
     printf '                                    # symlinked from repo into each runs worktree.\n'
     printf '                                    # Needed for editable installs / dotfiles that\n'
@@ -1687,6 +1761,43 @@ run_one() {
     _oracle_checkout "$wt" "$ORACLE_APPLY_FROM" "$ORACLE_APPLY_PATHS"
   fi
 
+  # Snapshot the graded (locked) test files out of the repo BEFORE sealing —
+  # _lock_restore reinstates them at grade time without needing the object store
+  # that sealing takes away. A lock that silently stops locking would re-open the
+  # reward-hack it exists to close, so a failed snapshot is fatal.
+  local lock_dir=""
+  if [ -n "${ORACLE_APPLY_FROM:-}" ] && [ -n "${ORACLE_LOCK_PATHS:-}" ]; then
+    lock_dir="$wt.lock"
+    rm -rf "$lock_dir"
+    if ! _lock_snapshot "$repo" "$ORACLE_APPLY_FROM" "$ORACLE_LOCK_PATHS" "$lock_dir"; then
+      rm -rf "$lock_dir" "$wt"
+      (cd "$repo" && git worktree prune >/dev/null 2>&1) || true
+      die "could not snapshot lock_paths from $ORACLE_APPLY_FROM for $task_id — refusing to run with a defeated test lock"
+    fi
+  fi
+
+  # Seal git history — AFTER the oracle (it needs the fixing ref), BEFORE the
+  # agent runs. Otherwise the agent can read the answer commit straight out of
+  # the object store the worktree points at. Unsealed runs are invalid, not
+  # merely risky, so a sealing failure aborts the replicate instead of quietly
+  # measuring a compromised arm.
+  local sealed=0
+  if [ "${HEADER_EXPERIMENT_NO_SEAL:-}" = "1" ] || [ "${SEAL_HISTORY:-}" = "off" ]; then
+    echo "header-experiment: git history NOT sealed (opt-out) — the agent can read the answer commit; results are not trustworthy for mined tasks." >&2
+  else
+    if _seal_history "$wt"; then
+      sealed=1
+    else
+      if [ "$using_worktree" -eq 1 ]; then
+        (cd "$repo" && git worktree remove --force "$wt" >/dev/null 2>&1) || rm -rf "$wt"
+        (cd "$repo" && git worktree prune >/dev/null 2>&1) || true
+      else
+        rm -rf "$wt"
+      fi
+      die "could not seal git history for $task_id/$arm_label/$rep — refusing to run an unsealed replicate (override: HEADER_EXPERIMENT_NO_SEAL=1)"
+    fi
+  fi
+
   # Ephemeral-infra env: cmd_run's setup step writes KEY=VALUE lines to
   # <exp_dir>/.run-env; export them so the adapter AND the verifier both see the
   # provisioned connection info (e.g. an isolated DATABASE_URL pointing at a
@@ -1734,8 +1845,15 @@ run_one() {
   # version right before grading, so any edit the agent made to the tests is
   # reverted. This is the reward-hacking defense (design §11) — "make the test
   # pass" cannot be won by weakening or deleting the test.
+  # Restored from the pre-seal snapshot when we have one (the sealed workspace has
+  # no object store to `git checkout` from); otherwise the original git path.
   if [ -n "${ORACLE_APPLY_FROM:-}" ] && [ -n "${ORACLE_LOCK_PATHS:-}" ]; then
-    _oracle_checkout "$wt" "$ORACLE_APPLY_FROM" "$ORACLE_LOCK_PATHS"
+    if [ -n "$lock_dir" ] && [ -d "$lock_dir" ]; then
+      _lock_restore "$lock_dir" "$wt" \
+        || die "could not restore locked test files for $task_id — refusing to grade a gameable run"
+    else
+      _oracle_checkout "$wt" "$ORACLE_APPLY_FROM" "$ORACLE_LOCK_PATHS"
+    fi
   fi
 
   # Verifier — Tier-1 oracle: exit 0 = pass. Run AFTER the agent so it can see
@@ -1753,9 +1871,17 @@ run_one() {
   fi
   local success="false"; [ "$verify_rc" -eq 0 ] && success="true"
 
-  # Cleanup
+  # Cleanup. A sealed workspace is no longer a linked worktree (its .git pointer
+  # was replaced by a standalone repo), so `git worktree remove` can't claim it —
+  # delete the dir and prune the parent's now-stale worktree registry entry.
+  [ -n "$lock_dir" ] && rm -rf "$lock_dir"
   if [ "$using_worktree" -eq 1 ]; then
-    (cd "$repo" && git worktree remove --force "$wt" >/dev/null 2>&1) || rm -rf "$wt"
+    if [ "$sealed" -eq 1 ]; then
+      rm -rf "$wt"
+      (cd "$repo" && git worktree prune >/dev/null 2>&1) || true
+    else
+      (cd "$repo" && git worktree remove --force "$wt" >/dev/null 2>&1) || rm -rf "$wt"
+    fi
   else
     rm -rf "$wt"
   fi
@@ -1932,6 +2058,14 @@ cmd_run() {
   # Picked up via dynamic scope (run_one reads $WORKTREE_INCLUDE).
   local WORKTREE_INCLUDE
   WORKTREE_INCLUDE="$(spec_get_scalar "$spec" worktree_include)"
+
+  # seal_history: on (default) | off. Read via dynamic scope by run_one. Sealing
+  # cuts each replicate's workspace off from repo history so the agent can't read
+  # the commit that solves a mined task. Only turn it off for a task that
+  # legitimately needs history (e.g. "revert commit X") — and distrust the
+  # numbers from any mined task run with it off.
+  local SEAL_HISTORY
+  SEAL_HISTORY="$(spec_get_scalar "$spec" seal_history)"
 
   # Ephemeral-infra lifecycle (setup/teardown/setup_scope). See _run_setup /
   # _run_teardown above for the contract.

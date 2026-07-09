@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.38.3
+version: 0.38.4
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk, enriched by the latest agentic-coding briefing for your stack. '/header wrapup' (or 'compound') captures the session's learnings into committed .claude/memory/. Public access needs no auth; an API key unlocks custom, codebase-tuned briefings."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers: audit, audit my setup or harness, optimize codebase, reduce token cost, supply-chain risk, dependency or model upgrade, CLAUDE.md or prompt debt, add guardrails / a pre-commit gate / test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header or /header-audit. '/header wrapup' (or 'compound') at session end reviews the session and writes its pitfalls/learnings into committed .claude/memory/ — triggers: wrap up, capture learnings, what did we learn, note the pitfalls, remember this for next time. Pass a topic name/UUID/briefing URL to swap the enrichment topic. '/header fable-5' (or 'adopt' / 'opus-4.8') renders the engine-adoption card — a grounded 'should you move your harness to this model?' answer that hands off to header-experiment mine --adopt."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"

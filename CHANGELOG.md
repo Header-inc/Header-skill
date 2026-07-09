@@ -3,6 +3,28 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.4 — experiments seal git history (the agent could read the answer commit)
+
+Surfaced by this repo's own custom briefing, which named "cheating by reading the answer
+from git" as the failure mode deterministic eval harnesses must close (Databricks).
+
+- **`header-experiment` replicates now run in a sealed workspace.** `git worktree add`
+  leaves a `.git` *pointer* into the parent repo's object store (and the `cp -a` fallback
+  copied `.git` wholesale), so the agent under test could run `git log --all` / `git show`
+  and read the commit that solves its task. `mine` derives tasks **from** that commit, so
+  the answer was always reachable — every mined-task A/B was open to an agent that thought
+  to look, and nothing in the results would show it. Each replicate now gets a single-root-commit
+  workspace: git still works (`status`/`diff`/`commit`), no other commit is reachable.
+- **The test lock still holds.** `lock_paths` restores the pristine graded tests right before
+  verification — the reward-hacking defense — and it needed the fixing ref at grade time,
+  exactly what sealing takes away. Sealing naively defeated it. The locked paths are now
+  snapshotted out of the repo (`git archive`) *before* sealing and restored from that copy,
+  so the lock never touches the object store the agent can't see.
+- **Failures are loud, not silent.** A workspace that can't be sealed, or a lock that can't be
+  snapshotted, aborts the replicate — an unsealed run is an invalid measurement, not a risky
+  one. Opt out per-spec with `seal_history: off` (top block) or `HEADER_EXPERIMENT_NO_SEAL=1`;
+  both warn.
+
 ## 0.38.3 — two dogfood bugs: a broken Step 1 command, and a rail blind to shell suites
 
 Both found by running `/header` against this repo.
