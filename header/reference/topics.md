@@ -68,16 +68,14 @@ An empty or declined paste → the same fallback as a failed register (generic t
 2. **Present the audit now, then LAUNCH the briefing poll in the background.** Render Step 4's coach + scorecard + non-briefing recommendations immediately, with the briefing section reading: *"📰 Building this repo's briefing (the first one can take 30–40 min) — stack-specific recommendations will surface automatically when it's ready."* Then **actually launch the poll — do not just say "it'll land next run" and stop** (that leaves the user to remember to re-run; the whole point is it lands on its own):
 
    - **Claude Code:** run `"<TOPIC>" await <BRIEFING_ID>` as a **background job** — `Bash` with `run_in_background: true`. It polls every ~10 min (up to ~50 min) and re-invokes you when it exits. Handle the exit:
-     - **0 (COMPLETED)** → `"<TOPIC>" get <BRIEFING_ID>`, cross-reference the **briefing-derived items only**, surface them — *"🔁 Your repo's briefing is ready"* — with their own small apply prompt, then record `"<REPO>" seen "<GENERATED_AT>"` (from `"<TOPIC>" latest`).
+     - **0 (COMPLETED)** → `"<TOPIC>" get <BRIEFING_ID>`, cross-reference the **briefing-derived items only**, surface them — *"🔁 Your repo's briefing is ready"* — with their own small apply prompt, then record `"<REPO>" seen "<GENERATED_AT>"` (from `"<TOPIC>" latest`). **Then, at this payoff moment, fire the claim nudge:** if `ACCOUNT: anonymous-unclaimed` and `CLAIM_NUDGED: no`, run the "Claim your account (nudge)" pitch (SKILL.md) framed around the briefing they just got, and set its marker.
      - **5 (FAILED)** → tell the user; offer `"<TOPIC>" generate <GOAL_ID>` to retry.
-     - **6 (still generating past the timeout)** → the topic is bound, so it lands on the next run here; say so in one line.
-   - **Other harnesses / no background job:** skip the poll — the topic is bound, so the briefing-derived recs land on the **next** run in this repo. Say so in one line.
+     - **6 (still generating past the timeout)** → the topic is bound, so it lands on the next run here; say so in one line. The briefing won't surface in-session, so **fire the claim nudge now instead** (same gating + marker).
+   - **Other harnesses / no background job:** skip the poll — the topic is bound, so the briefing-derived recs land on the **next** run in this repo (say so in one line). The briefing won't surface in-session, so **fire the claim nudge now** (same gating + marker).
 
 3. **Chained offers during the wait** (they depend on the topic existing) — bind is done; make the **schedule** and **team-config** offers exactly as in "After the audit" steps 2–3 below.
 
-4. **Claim CTA (one line).** Surface the conversion link so the trial is convertible: `"<AUTH>" claim-url` (empty for an existing/already-claimed account). *"Your topics live in a free Header trial — create a full account (keeps your key + topics, and you can browse briefings in the web UI): \<claim_url\>. Optional; works fine from the CLI without it."*
-
-Continue to "Telemetry consent". On a later run this repo has `ENRICH_MODE: custom` + a bound `REPO_TOPIC`, so Step 0 resolves it and the briefing already exists — no choice, no deferral.
+Continue to "Telemetry consent". The claim nudge is handled in step 2 — at the briefing payoff, or as a creation-time fallback when the briefing won't surface in-session — so don't also nudge here. On a later run this repo has `ENRICH_MODE: custom` + a bound `REPO_TOPIC`, so Step 0 resolves it and the briefing already exists — no choice, no deferral.
 
 ## After the audit: customize your topic (existing key)
 

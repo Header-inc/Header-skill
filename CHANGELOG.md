@@ -3,6 +3,21 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.6 — claim nudge fires at the briefing payoff (custom onboarding)
+
+An anonymous user who chose **custom** enrichment now gets a well-timed, value-framed
+nudge to claim their account — at the moment the briefing lands (the payoff), not buried
+as a one-line CTA. Framed around what claiming **keeps**: this briefing and every future
+one, revisit anytime, and a clean web UI (your API key + topics come along).
+
+- The "Claim your account" nudge (SKILL.md) is now the **canonical, one-time** nudge, fired
+  at the **first** of: (1) first-run custom onboarding at the briefing payoff — with a
+  creation-time fallback when the briefing won't surface in-session (other harness / the
+  background poll timed out); (2) a later run after 3+ applied recs. Coordinated by the
+  `CLAIM_NUDGED` marker so it never double-fires.
+- `reference/topics.md` first-run step 2 fires it in the `await`-COMPLETED handler; the
+  standalone step-4 CTA is folded in.
+
 ## 0.38.5 — a published team topic no longer demands an API key
 
 Committing `.header/config` is how a repo shares its briefing with everyone who clones it.
