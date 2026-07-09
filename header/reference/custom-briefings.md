@@ -15,7 +15,7 @@ Each entry has `id`, `name`, `description`, `subscriber_count`.
 For a specific public topic's latest briefing (no key), let the bin resolve the nested ids (`<TOPIC>` = `header-topic`):
 
 ```bash
-"<TOPIC>" latest --public <topic_id>   # prints TOPIC_NAME / BRIEFING_ID / GENERATED_AT / GOAL_ID
+"<TOPIC>" latest --topic <topic_id> --public   # prints TOPIC_NAME / BRIEFING_ID / GENERATED_AT / GOAL_ID
 ```
 
 Then read the briefing content: authenticated → `"<TOPIC>" get <briefing_id>` (markdown); public → `GET /api/v2/public/briefings/{briefing_id}` returns JSON, read its `summary` field.
@@ -176,7 +176,7 @@ It previews (detects type), creates the source, and adds it to the group — pri
 "<TOPIC>" get <briefing_id>      # the full briefing as markdown (authenticated)
 ```
 
-`get` returns rendered markdown (the authenticated path honors `Accept: text/markdown`). The **public** path returns JSON only — read the `summary` field directly, or use `"<TOPIC>" latest --public <topic_id>` for the latest briefing id + `generated_at`.
+`get` returns rendered markdown (the authenticated path honors `Accept: text/markdown`). The **public** path returns JSON only — read the `summary` field directly, or use `"<TOPIC>" latest --topic <topic_id> --public` for the latest briefing id + `generated_at`.
 
 ### Polling IN_PROGRESS briefings
 

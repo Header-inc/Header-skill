@@ -555,10 +555,17 @@ _rail_primary_ecosystem() {
 }
 _rail_testpath() {
   # A representative test location, or "none" (drives the ratchet n/a case).
+  # A false "none" silently drops the ratchet rail, so detection errs toward
+  # finding a suite: top-level dirs, then one level deep (a repo that nests its
+  # suite — e.g. header/test/ — still has tests to ratchet), then per-stack globs.
   for d in tests test spec __tests__; do
     [ -d "$REPO/$d" ] && { printf '%s/' "$d"; return; }
   done
-  for g in '*_test.go' 'test_*.py' '*_spec.rb'; do
+  _td="$(find "$REPO" -maxdepth 2 \
+    \( -name node_modules -o -name .git -o -name vendor -o -name dist -o -name target \) -prune -o \
+    -type d \( -name tests -o -name test -o -name spec -o -name __tests__ \) -print 2>/dev/null | head -1)"
+  [ -n "$_td" ] && { printf '%s/' "${_td#"$REPO"/}"; return; }
+  for g in '*_test.go' 'test_*.py' '*_spec.rb' '*.test.sh' '*_test.sh' '*.bats'; do
     find "$REPO" -maxdepth 3 \
       \( -name node_modules -o -name .git -o -name vendor -o -name dist -o -name target \) -prune -o \
       -name "$g" -type f -print 2>/dev/null | grep -q . && { printf '%s' "$g"; return; }

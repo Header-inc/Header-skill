@@ -131,4 +131,19 @@ assert_exit 2 "$rc" "add-source with no key → exit 2"
 HEADER_HOME="$HH" "$HT" --help >/dev/null 2>&1; assert_exit 0 "$?" "--help exits 0"
 HEADER_HOME="$HH" "$HT" zzz >/dev/null 2>&1; assert_exit 1 "$?" "unknown subcommand exits 1"
 
+# ── latest takes the topic id via --topic, never positionally ──
+# `latest` has no positional arg: a bare id lands in the flag parser and exits 1.
+rc=0; HEADER_HOME="$HH" "$HT" latest --public TID-xyz >/dev/null 2>&1 || rc=$?
+assert_exit 1 "$rc" "latest with a positional topic id → exit 1 (unknown flag)"
+
+# ── docs must not drift from that contract ──
+# Regression: SKILL.md Step 1 and custom-briefings.md documented
+# `latest --public <topic_id>`, which errors. Every copy-pasteable `latest`
+# command in the docs must pass the topic id through --topic. Scans command
+# lines only (prose may name the flags), with trailing #comments stripped.
+_cmds="$(grep -rhE '^[[:space:]]*("<TOPIC>"|header-topic)[[:space:]]+latest' \
+  "$SKILL_DIR/SKILL.md" "$SKILL_DIR/reference" 2>/dev/null | sed 's/#.*$//' || true)"
+_bad="$(printf '%s\n' "$_cmds" | grep -E 'latest[[:space:]]+[^-[:space:]]|--public[[:space:]]+[^-[:space:]]' || true)"
+assert_eq "" "$_bad" "no documented \`latest\` command passes the topic id positionally"
+
 t_done

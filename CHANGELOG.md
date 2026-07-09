@@ -3,6 +3,29 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.3 — two dogfood bugs: a broken Step 1 command, and a rail blind to shell suites
+
+Both found by running `/header` against this repo.
+
+- **`header-topic latest` was documented with a positional topic id** (`latest --public <topic_id>`)
+  in `SKILL.md` Step 1 and twice in `reference/custom-briefings.md`. The bin takes `--topic ID`, so
+  the documented command exited `1 unknown flag` — every harness following Step 1 verbatim failed
+  the enrichment fetch. All three call sites now read `latest --topic <topic_id> --public`.
+  `test/topic.test.sh` pins the contract (a positional id → exit 1) and scans the docs for the bad
+  form, so the command and its documentation can't drift apart again.
+- **`_rail_testpath` only looked for a TOP-LEVEL `tests|test|spec|__tests__`** plus go/py/rb/js
+  globs, so a shell-first repo that nests its suite (this one: `header/test/*.test.sh`) reported
+  `tests none` → `RAIL test-ratchet n/a` and silently lost the rail. It now also searches one level
+  deep and recognizes `*.test.sh` / `*_test.sh` / `*.bats`. A false `none` is the costly direction;
+  a repo with genuinely no tests still reports `none`.
+- **The ratchet it recommends now sees shell test units.** Detection alone would have handed
+  shell-first repos a guardrail that blocks nothing: `scaffold/ratchet.sh` captured `*.test.sh` via
+  its `*.test.*` pathspec but counted `0` removals, because its regex only knew `def test_` / `it(` /
+  `func Test` / `#[test]`. It now counts bats `@test` and `assert_*` helper calls as test units,
+  treats bats `skip` as an unconditional skip marker, and adds `*_test.sh` / `*.bats` to the staged-file
+  pathspec. Verified end-to-end: a staged deletion of two shell tests is blocked, adding one is
+  allowed, and `RATCHET_OVERRIDE=1` still escapes.
+
 ## 0.38.2 — first-run briefings poll in the background (they can take 30–40 min)
 
 The deferred-briefing pass was easy to read as "it'll land next run" and skip — so a

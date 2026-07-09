@@ -30,6 +30,32 @@ R2="$(HOME="$sb" "$AU" rails --repo "$repo")"
 assert_contains "$R2" $'RAIL-ENV\ttests\ttests/'      "tests/ dir → tests path reported"
 assert_contains "$R2" $'RAIL\ttest-ratchet\tabsent'   "tests present, no ratchet → test-ratchet absent"
 
+# ── a nested / shell-only suite is still a suite ──────────────
+# Regression: _rail_testpath used to check only TOP-LEVEL tests|test|spec|__tests__
+# plus go/py/rb/js globs, so a shell-first repo nesting its suite (header/test/
+# *.test.sh) reported `tests none` → test-ratchet silently n/a, and the repo
+# lost the rail. A false "none" is the costly direction here.
+sbn="$(make_sandbox)"; rn="$sbn/r"; _mkrepo "$rn"
+mkdir -p "$rn/pkg/test"; printf '#!/usr/bin/env bash\nassert_eq 1 1 "x"\n' > "$rn/pkg/test/a.test.sh"
+RN="$(HOME="$sbn" "$AU" rails --repo "$rn")"
+assert_contains "$RN" $'RAIL-ENV\ttests\tpkg/test/'  "a nested test dir is detected one level deep"
+assert_contains "$RN" $'RAIL\ttest-ratchet\tabsent'  "a nested shell suite → test-ratchet absent, not n/a"
+
+# a bare *.test.sh with no test dir at all is still found by the glob arm
+sbs="$(make_sandbox)"; rs="$sbs/r"; _mkrepo "$rs"
+printf '#!/usr/bin/env bash\n' > "$rs/audit.test.sh"
+assert_contains "$(HOME="$sbs" "$AU" rails --repo "$rs")" $'RAIL-ENV\ttests\t*.test.sh' \
+  "a bare *.test.sh is detected by the shell glob arm"
+# .bats too
+sbb="$(make_sandbox)"; rb="$sbb/r"; _mkrepo "$rb"
+printf '@test "x" {\n}\n' > "$rb/a.bats"
+assert_contains "$(HOME="$sbb" "$AU" rails --repo "$rb")" $'RAIL-ENV\ttests\t*.bats' \
+  "a .bats suite is detected"
+# and a repo with genuinely no tests still reports none (no false positive)
+sbz="$(make_sandbox)"; rz="$sbz/r"; _mkrepo "$rz"; printf 'x\n' > "$rz/README.md"
+assert_contains "$(HOME="$sbz" "$AU" rails --repo "$rz")" $'RAIL-ENV\ttests\tnone' \
+  "a repo with no tests still reports tests none"
+
 # ── git-native gate present → precommit-gate present ──────────
 mkdir -p "$repo/.githooks"; printf '#!/bin/sh\n' > "$repo/.githooks/pre-commit"
 assert_contains "$(HOME="$sb" "$AU" rails --repo "$repo")" $'RAIL\tprecommit-gate\tpresent\t.githooks/pre-commit' \
@@ -111,6 +137,12 @@ TR="$(HOME="$sb" "$AU" rail test-ratchet)"
 assert_contains "$TR" "Test ratchet" "test-ratchet prints the ratchet block"
 # the corrected kwarg-only xfail arm (Finding 5) must be present
 assert_contains "$TR" 'xfail\([[:space:]]*[a-zA-Z_]' "ratchet carries the corrected kwarg-only xfail regex"
+# a ratchet that can't see shell test units would be a hollow rail on a shell-first
+# repo: it captures the diff via '*.test.*' but counts 0 removals and never fires.
+assert_contains "$TR" '@test[[:space:]]' "ratchet counts bats @test as a test unit"
+assert_contains "$TR" 'assert_[a-zA-Z0-9_]+[[:space:]]' "ratchet counts shell assert_* helpers as test units"
+assert_contains "$TR" "'*.bats'" "ratchet's staged-file pathspec includes .bats"
+assert_contains "$TR" "'*_test.sh'" "ratchet's staged-file pathspec includes *_test.sh"
 
 # ── rail printer: compound-memory ─────────────────────────────
 # Native-first (v0.29.0): the rail leads with /header wrapup (Header runs capture
