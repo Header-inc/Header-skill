@@ -1,0 +1,8 @@
+# Header TEAM config — committed to the repo so everyone here shares it.
+# Flat "key: value" lines. Put only TEAM-relevant settings here; personal
+# preferences and consent (telemetry, auto_update, auto_tune, update_check)
+# belong in ~/.header/config and are IGNORED if set here.
+# Honored keys: default_topic, staleness_days, schedule_frequency_days, language.
+# Docs: https://github.com/Header-inc/Header-skill
+default_topic: 4ffb4a3b-a72b-4628-bd6c-359347fcabb5
+staleness_days: 7
