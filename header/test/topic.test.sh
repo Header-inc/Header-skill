@@ -127,6 +127,24 @@ assert_exit 1 "$rc" "add-source without a url → exit 1"
 rc=0; env -u HEADER_API_KEY HEADER_HOME="$sb/empty" "$HT" add-source http://x >/dev/null 2>&1 || rc=$?
 assert_exit 2 "$rc" "add-source with no key → exit 2"
 
+# ── latest --public: a published TEAM_TOPIC resolves with NO key ──
+# SKILL.md Step 0 case 3 probes a committed team topic over the public endpoint
+# before ever claiming an API key is required. If the public path grew a need_key
+# call, every keyless contributor to a repo that ships .header/config would
+# silently fall through to the generic briefings. Pin both arms.
+pub_sb="$(make_sandbox)"
+cat > "$pub_sb/topic.json" <<'JSON'
+{"id":"TID-pub","name":"Team Topic","is_public":true,"default_goal_id":"GID-1","latest_briefing":{"id":"BID-9","status":"COMPLETED","generated_at":"2026-06-15T00:00:00Z"}}
+JSON
+pub_out="$(env -u HEADER_API_KEY HEADER_HOME="$pub_sb/empty" \
+  HEADER_TOPIC_GET_STUB="$pub_sb/topic.json" "$HT" latest --topic TID-pub --public)"; rc=$?
+assert_exit 0 "$rc" "latest --public resolves with no key (published team topic)"
+assert_contains "$pub_out" "BRIEFING_ID BID-9" "latest --public returns the briefing id keylessly"
+# the authenticated arm still demands a key — the probe is the ONLY keyless path
+rc=0; env -u HEADER_API_KEY HEADER_HOME="$pub_sb/empty" \
+  HEADER_TOPIC_GET_STUB="$pub_sb/topic.json" "$HT" latest --topic TID-pub >/dev/null 2>&1 || rc=$?
+assert_exit 2 "$rc" "latest without --public still requires a key (exit 2)"
+
 # ── dispatch ──
 HEADER_HOME="$HH" "$HT" --help >/dev/null 2>&1; assert_exit 0 "$?" "--help exits 0"
 HEADER_HOME="$HH" "$HT" zzz >/dev/null 2>&1; assert_exit 1 "$?" "unknown subcommand exits 1"

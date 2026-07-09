@@ -139,18 +139,20 @@ git add .header/config && git commit -m "Add Header team config"
 
 ### Bound repos — freshness & schedule
 
-Runs at session start when the preamble echoed a non-empty `REPO_TOPIC` **or** `TEAM_TOPIC` and a key is available. `<TOPIC>` is `header-topic`, next to `HEADER_BIN`.
+Runs at session start when the preamble echoed a non-empty `REPO_TOPIC` **or** `TEAM_TOPIC`. A `REPO_TOPIC` needs a key; a `TEAM_TOPIC` does **not** when its owner published it (see the keyless probe below). `<TOPIC>` is `header-topic`, next to `HEADER_BIN`.
 
 **1. Freshness check — one command** (deterministic: fetch + parse the nested `latest_briefing` + compare to `header-repo seen`):
 
 ```bash
-"<TOPIC>" latest                       # the bound REPO_TOPIC
-"<TOPIC>" latest --topic <TEAM_TOPIC>  # or a team topic
+"<TOPIC>" latest                              # the bound REPO_TOPIC (needs a key)
+"<TOPIC>" latest --topic <TEAM_TOPIC>         # a team topic, with a key
+"<TOPIC>" latest --topic <TEAM_TOPIC> --public  # a team topic, NO key (published topics)
 ```
 
 It prints `TOPIC_ID` / `GOAL_ID` / `BRIEFING_ID` / `GENERATED_AT` and `FRESH new|current|none`:
 
-- **Exit `4`** → topic deleted server-side. Tell the user; for a personal `REPO_TOPIC` run `"<REPO>" clear` and fall back to the default topic; for a `TEAM_TOPIC` **don't** clear — tell them to fix `.header/config`.
+- **No key + a `TEAM_TOPIC`** → run the `--public` form (SKILL.md Step 0, case 3). A published team topic resolves with no auth; read its briefing from `/api/v2/public/briefings/<id>`. Only when this returns exit `4` is an API key genuinely required — don't say a key is needed before the probe fails.
+- **Exit `4`** → the topic is private (no key) or deleted server-side. Tell the user; for a personal `REPO_TOPIC` run `"<REPO>" clear` and fall back to the default topic; for a `TEAM_TOPIC` **don't** clear — tell them to fix `.header/config` (or ask its owner to publish the topic).
 - **`FRESH new`** → a new briefing since the user last visited this repo. Say so ("📰 New briefing for this repo, generated `<GENERATED_AT>`"), fetch it (`"<TOPIC>" get <BRIEFING_ID>`), enrich the audit via Step 2, then record it: `"<REPO>" seen "<GENERATED_AT>"`.
 - **`FRESH current`** → nothing new since last visit. **`FRESH none`** → the topic has no briefing yet.
 

@@ -3,6 +3,25 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.38.5 — a published team topic no longer demands an API key
+
+Committing `.header/config` is how a repo shares its briefing with everyone who clones it.
+But Step 0 only ever resolved a `TEAM_TOPIC` through the **authenticated** endpoints: without
+a key the skill announced "this repo pins a team topic that needs an API key" and fell through
+to the generic briefings — even when the topic was **public and readable with no auth at all**.
+The team-config feature therefore did nothing for the contributors it exists to serve.
+
+- **Step 0, case 3 now probes the public endpoint before giving up.** No key + a `TEAM_TOPIC`
+  → `header-topic latest --topic <TEAM_TOPIC> --public`. Exit `0` → use it, and read the
+  briefing via Step 2's no-key path (`/api/v2/public/briefings/<id>`). Only on exit `4`
+  (the topic really is private) does the skill say a key is required. It must never claim a
+  key is needed before that probe has failed.
+- `reference/custom-briefings.md` documents the keyless arm alongside the two authenticated
+  ones, and stops asserting that the freshness check needs a key for a team topic.
+- `test/topic.test.sh` pins both arms: `latest --public` resolves with no key and no
+  credentials file, while the authenticated arm still exits `2`. (Mutation-checked — making
+  the public path call `need_key` turns both assertions red.)
+
 ## 0.38.4 — experiments seal git history (the agent could read the answer commit)
 
 Surfaced by this repo's own custom briefing, which named "cheating by reading the answer
