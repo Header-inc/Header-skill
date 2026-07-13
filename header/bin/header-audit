@@ -95,14 +95,34 @@
 #       Determinism rails (guardrails). Detects whether the repo has the
 #       guardrails that make AI-written code reliable: a pre-commit quality gate,
 #       a test ratchet (can't green the suite by deleting/skipping the failing
-#       test), and a compounding-memory discipline. Absence is an OPPORTUNITY the
+#       test), a compounding-memory discipline, and a ROUND-TRIP INVARIANT over any
+#       value pipeline found in the source. Absence is an OPPORTUNITY the
 #       audit surfaces as [Apply with review] (opinionated). Output lines:
 #         RAIL-ENV <key>  <value>   (ecosystem/ecosystem-all/git-remote/hooks-path/claude/tests)
 #         RAIL     <name>  <present|absent|n/a>  <evidence>
-#   header-audit rail <precommit-gate|test-ratchet|compound-memory> [--ecosystem E]
-#                     [--delivery git|pretooluse|both] [--ratchet on|off]
+#   header-audit rail <precommit-gate|test-ratchet|compound-memory|roundtrip-invariant>
+#                     [--ecosystem E] [--delivery git|pretooluse|both] [--ratchet on|off]
 #       Print the scaffold to install for a rail (stack-adapted), the analogue of
 #       `gate` for supply-chain. Reads header/scaffold/ templates.
+#
+#   header-audit drift [--repo DIR]
+#       INVARIANT COVERAGE — the one scan that grades whether the machinery covers
+#       what the ARCHITECTURE depends on, rather than whether machinery exists. It
+#       locates a value pipeline in the SOURCE (not the harness files `harness`
+#       greps) and asks whether anything asserts that a value survives it intact.
+#       The target bug: a chain of hand-maintained hops (wire schema → column →
+#       import mapping → export query → serializer → UI) where a field must be
+#       added in every hop or none, nothing enforces that, and so fields silently
+#       drift — a column with no wire field, or a wire field the exporter
+#       hardcodes. It stays invisible because no test round-trips the pipeline AND
+#       because the schema silently strips unknown keys, so a config authored with
+#       the dropped field still parses clean and LOOKS complete.
+#       n/a (a NOTE, no rows) unless a pipeline is actually detected — a repo
+#       without one is never nagged and its grade never moves. Output lines:
+#         DRIFT-ENV   <key>  <value>                   (ecosystem / tests)
+#         PIPELINE    <kind>  <n_files>  <example>     (schema | persist | serde)
+#         ROUNDTRIP   <present|absent|n/a>  <evidence> (the headline)
+#         SCHEMA-LAX  <path>  <lineno>  <lib>  <why>   (parses unknown keys silently)
 #
 #   header-audit grade [--repo DIR]
 #       TWO composite, deterministic SETUP GRADES over the five scorecard axes
@@ -622,6 +642,147 @@ _rail_compound_status() {
   [ -f "$REPO/MEMORY.md" ]                && { printf 'present\tMEMORY.md'; return; }
   [ -d "$REPO/.claude/skills/compound" ] && { printf 'present\t.claude/skills/compound'; return; }
   printf 'absent\tno compounding-memory discipline (.claude/memory/ + a capture step) found'
+}
+
+# ── pipeline drift (the round-trip invariant) ─────────────────
+# The other scans grade the PRESENCE OF MACHINERY (is there a gate? a ratchet?).
+# This one asks whether the machinery covers the invariant the architecture
+# actually depends on. The target failure: a value pipeline built as a chain of
+# hand-maintained hops (wire schema → column → import mapping → export query →
+# serializer → UI), where a field must be added in every hop or none, nothing
+# enforces that, and so it silently drifts — you get a column with no wire field,
+# or a wire field the exporter hardcodes. It is invisible precisely because no
+# test asserts "what I upload comes back identical", and because the schema
+# silently strips unknown keys, so a config authored with the dropped field still
+# LOOKS complete.
+#
+# Detection is deterministic and deliberately high-precision: the rail is n/a
+# unless a pipeline is actually detected, so a repo without one is never nagged
+# (and its grade never moves).
+_GEX='--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor --exclude-dir=dist --exclude-dir=build --exclude-dir=target --exclude-dir=.venv --exclude-dir=venv --exclude-dir=__pycache__ --exclude-dir=.next --exclude-dir=coverage'
+
+# A path that is part of the test suite (excluded from hop detection, and the
+# only place a round-trip test is looked for).
+_is_testpath() {
+  case "$1" in
+    */tests/*|*/test/*|*/spec/*|*/__tests__/*) return 0 ;;
+    *_test.*|*_spec.*|*.test.*|*.spec.*)       return 0 ;;
+    */test_*.py)                               return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Hop regexes, per kind. Strict, library-anchored markers only — a loose regex
+# here would fire the rail on repos with no pipeline, which is the one failure
+# mode that would make this scan unshippable.
+_HOP_SCHEMA_RX='\(BaseModel\)|from pydantic|import pydantic|z\.object\(|from ["'"'"']zod["'"'"']|from marshmallow|\(Schema\)|#\[derive\([^)]*Serialize|@JsonProperty'
+_HOP_PERSIST_RX='__tablename__|declarative_base|sqlalchemy|models\.Model|CREATE TABLE|ActiveRecord::|typeorm|@Entity\(|drizzle-orm|knex|sequelize'
+# Function DEFINITIONS that move a value across a hop. Anchored on the definition
+# keyword: bare `JSON.parse` / `json.loads` appear everywhere and would be noise.
+_HOP_SERDE_RX='(def|function|fn|func|const|export function|async def)[[:space:]]+[A-Za-z_]*(serialize|deserialize|to_dict|from_dict|to_json|from_json|to_wire|from_wire|import_|export_|_import|_export|marshal|unmarshal)'
+
+# _hop_files KIND → newline-separated non-test source files matching that hop.
+_hop_files() {
+  case "$1" in
+    schema)  _rx="$_HOP_SCHEMA_RX" ;;
+    persist) _rx="$_HOP_PERSIST_RX" ;;
+    serde)   _rx="$_HOP_SERDE_RX" ;;
+    *) return 0 ;;
+  esac
+  # shellcheck disable=SC2086
+  grep -rlE $_GEX "$_rx" "$REPO" 2>/dev/null | while IFS= read -r f; do
+    _is_testpath "$f" || printf '%s\n' "$f"
+  done
+  # protobuf / prisma / json-schema are schema hops by file type alone.
+  if [ "$1" = schema ]; then
+    find "$REPO" \( -name .git -o -name node_modules -o -name vendor \) -prune -o \
+      -type f \( -name '*.proto' -o -name '*.schema.json' -o -name 'schema.prisma' \) -print 2>/dev/null
+  fi
+  if [ "$1" = persist ]; then
+    for d in migrations db/migrate alembic prisma; do
+      [ -d "$REPO/$d" ] && printf '%s\n' "$REPO/$d"
+    done
+  fi
+}
+
+# wc -l, not `grep -c . || printf 0`: grep prints its own "0" AND exits 1 on no
+# match, so the || fallback appended a second "0" and every caller's [ -gt ] saw
+# a two-line string. wc always emits exactly one number and exits 0.
+_hop_count() { _hop_files "$1" | wc -l | tr -d ' \n'; }
+
+# _pipeline_kinds → the hop kinds present, space-separated. A PIPELINE (and hence
+# a non-n/a round-trip rail) requires a schema hop plus at least one hop it has to
+# round-trip THROUGH: persistence or a serde boundary. Schema alone is a type
+# definition, not a pipeline.
+_pipeline_kinds() {
+  _pk=""
+  for k in schema persist serde; do
+    [ "$(_hop_count "$k")" -gt 0 ] && _pk="$_pk $k"
+  done
+  printf '%s' "${_pk# }"
+}
+# A pipeline is a CHAIN: a schema hop, at least one hop to round-trip through, and
+# — critically — the hops must span at least two distinct FILES. A single file that
+# matches several hop regexes is not a hand-maintained chain; it is one file. This
+# guard is what stops the scanner from firing on itself (header-audit carries the
+# hop regexes as string literals, so it matches `schema` AND `persist` in one file)
+# and on the general class of linters, scanners and codegen tools that quote schema
+# and ORM identifiers in their own source. Drift needs somewhere to drift BETWEEN.
+_has_pipeline() {
+  _k=" $(_pipeline_kinds) "
+  case "$_k" in *" schema "*) ;; *) return 1 ;; esac
+  case "$_k" in *" persist "*|*" serde "*) ;; *) return 1 ;; esac
+  _nfiles="$( { _hop_files schema; _hop_files persist; _hop_files serde; } | sort -u | wc -l | tr -d ' \n')"
+  [ "${_nfiles:-0}" -ge 2 ]
+}
+
+# _roundtrip_test → the test file asserting the invariant, or empty. Two ways to
+# qualify: it says round-trip, or a single test file exercises BOTH directions
+# (serialize and deserialize) — which is what a round-trip test structurally is.
+_roundtrip_test() {
+  # shellcheck disable=SC2086
+  _rt="$(grep -rlEi $_GEX 'round.?trip' "$REPO" 2>/dev/null | while IFS= read -r f; do
+    _is_testpath "$f" && { printf '%s\n' "$f"; break; }
+  done)"
+  [ -n "$_rt" ] && { printf '%s' "$_rt"; return; }
+  # shellcheck disable=SC2086
+  grep -rlE $_GEX '(serialize|to_dict|to_json|export_|dump)' "$REPO" 2>/dev/null | while IFS= read -r f; do
+    _is_testpath "$f" || continue
+    grep -qE '(deserialize|from_dict|from_json|import_|load)' "$f" 2>/dev/null && { printf '%s\n' "$f"; break; }
+  done
+}
+
+_roundtrip_status() {
+  _has_pipeline || { printf 'n/a\tno value pipeline detected (needs a schema hop + a persistence/serde hop)'; return; }
+  _rt="$(_roundtrip_test | head -1)"
+  [ -n "$_rt" ] && { printf 'present\t%s' "${_rt#"$REPO"/}"; return; }
+  printf 'absent\tpipeline across %s hop(s) and no test asserts what goes in comes back out' \
+    "$(_pipeline_kinds | wc -w | tr -d ' ')"
+}
+
+# _schema_lax → schema files whose parser SILENTLY DROPS unknown keys. This is
+# what makes drift invisible rather than merely present: a config authored with a
+# field nobody wired still parses clean, so it looks complete and isn't. Strict
+# mode turns "wrong numbers, found by eye in a demo" into "import failed: unknown
+# field X". Emits: path <TAB> lineno <TAB> lib.
+_schema_lax() {
+  _hop_files schema | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    case "$f" in
+      *.py)
+        grep -qE '\(BaseModel\)' "$f" 2>/dev/null || continue
+        grep -qE 'extra[[:space:]]*=[[:space:]]*["'"'"']?forbid|Extra\.forbid' "$f" 2>/dev/null && continue
+        _ln="$(grep -nE '\(BaseModel\)' "$f" 2>/dev/null | head -1 | cut -d: -f1)"
+        printf '%s\t%s\tpydantic\n' "$f" "${_ln:-1}"
+        ;;
+      *.ts|*.tsx|*.js|*.jsx)
+        grep -qE 'z\.object\(' "$f" 2>/dev/null || continue
+        grep -qE '\.strict\(|\.passthrough\(' "$f" 2>/dev/null && continue
+        _ln="$(grep -nE 'z\.object\(' "$f" 2>/dev/null | head -1 | cut -d: -f1)"
+        printf '%s\t%s\tzod\n' "$f" "${_ln:-1}"
+        ;;
+    esac
+  done
 }
 
 case "$sub" in
@@ -1285,6 +1446,67 @@ SIG
         printf 'RETRO-SHIP\t%s\t%s\t%s\n' "$ncommits" "${1:-0}" "${2:-0}"
         peak="$(git -C "$REPO" log --since="$gsince" --format='%ad' --date=format:'%a' 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print $2"\t"$1}')"
         [ -n "$peak" ] && printf 'RETRO-PEAK\t%s\n' "$peak"
+
+        # ── CO-CHANGE DRIFT ──────────────────────────────────────────────────
+        # The generalized shape of the hand-maintained-pipeline bug, mined from
+        # git history alone — no knowledge of schemas, languages or frameworks:
+        #
+        #   "These files almost always change together. Here are the commits
+        #    where one of them didn't."
+        #
+        # A file pair that co-changes 80%+ of the time encodes an invariant the
+        # repo never wrote down (add the column → add the mapping). The commits
+        # that break the pattern are exactly where a field got half-wired. That
+        # is a DETERMINISTIC finding: the exceptions are counted, not inferred.
+        #
+        # Conservative by construction: bulk commits (>25 files: merges, renames,
+        # vendoring) are dropped — they co-change everything with everything and
+        # would swamp the signal. A coupling needs real support (>=4 joint commits)
+        # and the violations must be EXCEPTIONS (<= 1/3 of the file's commits), not
+        # the norm — a pair that drifts half the time isn't a broken invariant,
+        # it's two files that merely often change together.
+        git -C "$REPO" log --since="$gsince" --format='%H' --name-only 2>/dev/null | awk '
+          function slug(s) { gsub(/[^A-Za-z0-9]+/, "-", s); gsub(/^-|-$/, "", s); return tolower(s) }
+          function base(p,  n) { n = p; sub(/.*\//, "", n); return n }
+          function flush(  i, j, a, b) {
+            if (nf > 0 && nf <= 25) {                 # drop bulk commits
+              ncommit++
+              for (i = 1; i <= nf; i++) {
+                Seen[F[i]]++
+                for (j = i + 1; j <= nf; j++) {
+                  a = F[i]; b = F[j]
+                  if (a > b) { t = a; a = b; b = t }  # canonical pair order
+                  Pair[a SUBSEP b]++
+                }
+              }
+            }
+            nf = 0
+          }
+          /^[0-9a-f]{40}$/ { flush(); next }
+          NF == 0          { next }
+          { F[++nf] = $0 }
+          END {
+            flush()
+            if (ncommit < 8) exit 0        # too little history to claim a pattern
+            nd = 0; nc = 0
+            for (k in Pair) {
+              split(k, P, SUBSEP); a = P[1]; b = P[2]
+              tg = Pair[k]
+              if (tg < 4) continue          # needs real support
+              ca = Seen[a]; cb = Seen[b]
+              pa = 100 * tg / ca; pb = 100 * tg / cb
+              # A coupling: both files mostly appear together.
+              if (pa < 70 || pb < 70) continue
+              if (nc++ < 5) printf "RETRO-COCHANGE\t%s\t%s\t%d\t%d\t%d\n", a, b, tg, (ca > cb ? ca : cb), (pa < pb ? pa : pb)
+              # A drift: one side has commits the other is missing from, and those
+              # are exceptions rather than the norm. Report the direction.
+              ma = ca - tg; mb = cb - tg
+              if (ma >= 1 && pa >= 75 && nd < 5) { Drift[++nd] = sprintf("%s\t%s\t%d\t%d\tkey=cochange-%s", a, b, ma, ca, slug(base(a) "-" base(b))) }
+              if (mb >= 1 && pb >= 75 && nd < 5) { Drift[++nd] = sprintf("%s\t%s\t%d\t%d\tkey=cochange-%s", b, a, mb, cb, slug(base(b) "-" base(a))) }
+            }
+            for (i = 1; i <= nd; i++) printf "RETRO-DRIFT\t%s\n", Drift[i]
+          }
+        '
       fi
     fi
     ;;
@@ -1344,9 +1566,44 @@ EOF
         *)       printf 'RAIL\t%s\t%s\n' "$1" "$2" ;;
       esac
     }
-    _rail_row precommit-gate   "$(_rail_precommit_status)"
-    _rail_row test-ratchet     "$(_rail_ratchet_status "$tp")"
-    _rail_row compound-memory  "$(_rail_compound_status)"
+    _rail_row precommit-gate      "$(_rail_precommit_status)"
+    _rail_row test-ratchet        "$(_rail_ratchet_status "$tp")"
+    _rail_row compound-memory     "$(_rail_compound_status)"
+    _rail_row roundtrip-invariant "$(_roundtrip_status)"
+    ;;
+
+  drift)
+    # The INVARIANT-COVERAGE scan: does the repo's machinery actually cover the
+    # thing its architecture depends on? Grades no config — it locates a value
+    # pipeline in the SOURCE (not the harness files the `harness` scan greps) and
+    # reports whether anything round-trips it. Every row is deterministic; the
+    # presentation narrates, it does not detect.
+    if ! _has_pipeline; then
+      printf 'NOTE\tdrift\tno value pipeline detected — needs a schema hop plus a persistence/serde hop\n'
+      exit 0
+    fi
+    printf 'DRIFT-ENV\tecosystem\t%s\n' "$(_rail_primary_ecosystem)"
+    printf 'DRIFT-ENV\ttests\t%s\n' "$(_rail_testpath)"
+    # PIPELINE: one row per hop kind — the chain a field must survive end to end.
+    for k in schema persist serde; do
+      n="$(_hop_count "$k")"
+      [ "$n" -gt 0 ] || continue
+      ex="$(_hop_files "$k" | head -1)"
+      printf 'PIPELINE\t%s\t%s\t%s\n' "$k" "$n" "${ex#"$REPO"/}"
+    done
+    # ROUNDTRIP: the headline. Absent = a field can be dropped in any hop and
+    # nothing in the repo will ever say so. Shares the rails ledger key.
+    rt="$(_roundtrip_status)"
+    case "$rt" in
+      absent*) printf 'ROUNDTRIP\t%s\tkey=rail-roundtrip-invariant\n' "$rt" ;;
+      *)       printf 'ROUNDTRIP\t%s\n' "$rt" ;;
+    esac
+    # SCHEMA-LAX: the reason drift is INVISIBLE rather than merely present.
+    _schema_lax | while IFS="$TAB" read -r f ln lib; do
+      [ -n "${f:-}" ] || continue
+      printf 'SCHEMA-LAX\t%s\t%s\t%s\tsilently drops unknown keys — a field nobody wired still parses clean\tkey=strict-schema-%s\n' \
+        "${f#"$REPO"/}" "$ln" "$lib" "$(_relslug "$f")"
+    done
     ;;
 
   rail)
@@ -1437,8 +1694,38 @@ EOF
         echo "# ----- FILE: .claude/skills/compound/SKILL.md -----"
         cat "$SCAFFOLD/compound/SKILL.md"
         ;;
+      roundtrip-invariant)
+        # The artifact, not advice: a round-trip test adapted to the detected stack,
+        # plus the strict-parsing change that makes the drift visible in the first
+        # place. Mirrors `gate npm 7` — the bin prints, the SKILL.md flow writes.
+        case "$ECO" in
+          python) _rtf="$SCAFFOLD/roundtrip/python.py"; _rtp="tests/test_roundtrip.py" ;;
+          npm)    _rtf="$SCAFFOLD/roundtrip/npm.ts";    _rtp="tests/roundtrip.test.ts" ;;
+          go)     _rtf="$SCAFFOLD/roundtrip/go.go";     _rtp="roundtrip_test.go" ;;
+          *)      _rtf="$SCAFFOLD/roundtrip/unknown.md"; _rtp="" ;;
+        esac
+        if [ -n "$_rtp" ]; then
+          echo "# ===== FILE: $_rtp — ecosystem: $ECO ====="
+        else
+          echo "# ===== round-trip invariant — ecosystem: $ECO (no template; the shape to write) ====="
+        fi
+        cat "$_rtf"
+        # The companion one-liner. Strict parsing is what turns a silent drop into a
+        # named failure — without it, a config authored with an unwired field still
+        # parses clean, so it LOOKS complete. Print it next to the test, always.
+        printf '\n# ===== COMPANION FIX: reject unknown keys at the import boundary =====\n'
+        echo "# Silent tolerance of unknown input is what makes field drift INVISIBLE."
+        echo "# Turn it off. In most schema libraries this is one line:"
+        echo "#   pydantic v2   → model_config = ConfigDict(extra='forbid')"
+        echo "#   pydantic v1   → class Config: extra = 'forbid'"
+        echo "#   zod           → z.object({...}).strict()"
+        echo "#   marshmallow   → class Meta: unknown = RAISE"
+        echo "#   serde (rust)  → #[serde(deny_unknown_fields)]"
+        echo "#   encoding/json → dec := json.NewDecoder(r); dec.DisallowUnknownFields()"
+        echo "# Run 'header-audit drift' to list the schema files still parsing leniently."
+        ;;
       *)
-        echo "header-audit: rail <precommit-gate|test-ratchet|compound-memory> [--ecosystem E] [--delivery git|pretooluse|both] [--ratchet on|off]" >&2
+        echo "header-audit: rail <precommit-gate|test-ratchet|compound-memory|roundtrip-invariant> [--ecosystem E] [--delivery git|pretooluse|both] [--ratchet on|off]" >&2
         exit 1
         ;;
     esac
@@ -1541,11 +1828,11 @@ EOF
     ;;
 
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|grade|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|drift|grade|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|grade|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|drift|grade|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac

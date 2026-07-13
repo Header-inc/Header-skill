@@ -3,6 +3,61 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.39.0 — invariant coverage: does your machinery cover what your architecture depends on?
+
+Every scan Header shipped until now grades the **presence of machinery**: is there a gate?
+a ratchet? a cooldown? A repo can pass all of them — pre-commit gate, test ratchet, 100%
+green suite, `A+` setup grade — and still silently drop a field on every release. That gap
+came from a user report, and it is the difference between a config linter and a coach.
+
+The bug: a value pipeline built as a chain of hand-maintained hops — **wire schema →
+database column → import mapping → export query → serializer → UI**. A field must be added
+in *every* hop or none. Nothing enforces that, so fields drift: a column with no wire field,
+or a wire field the exporter hardcodes to a constant. It stays invisible for two compounding
+reasons — nothing asserts that what goes in comes back out, **and** the schema silently
+strips unknown keys, so a config authored with the dropped field still parses clean and
+*looks* complete. It surfaces when a human notices wrong numbers in a demo.
+
+Three deterministic additions, all computed in the bin — no prose telling the model to go
+look for drift.
+
+- **`header-audit drift`** (new scan, the 8th) — reads the **source** (not the harness files
+  `harness` greps) and locates a value pipeline: `PIPELINE schema|persist|serde` hops
+  (pydantic / zod / marshmallow / protobuf / prisma / serde · ORM models, migrations, DDL ·
+  serialize/deserialize *definitions*). Then the headline: `ROUNDTRIP present|absent` — does
+  anything assert a value survives the pipeline intact? Plus `SCHEMA-LAX` — schemas that
+  silently discard unknown keys, which is *why* the drift is invisible rather than merely
+  present. **High-precision by construction:** a schema hop alone is a type definition, not a
+  pipeline; a repo without one emits a `NOTE` and nothing else, so it is never nagged and its
+  grade never moves.
+- **`roundtrip-invariant`** — a 4th determinism rail, `n/a` unless a pipeline is detected.
+  `header-audit rail roundtrip-invariant --ecosystem <eco>` prints the **artifact**, like
+  `gate npm 7` prints the `.npmrc`: a stack-adapted round-trip test (python / npm / go, plus
+  the shape to write for anything else) and the strict-parsing companion fix. The templates
+  carry the three rules that make the test actually work — non-default values everywhere
+  (a field that drifts to its default still compares equal), generate the fixture *from the
+  schema* rather than by hand (a handwritten fixture only covers the fields you remembered —
+  the same bug), and fail per field, not per struct.
+- **`RETRO-COCHANGE` / `RETRO-DRIFT`** — the generalized shape, mined from **git history
+  alone**, with no knowledge of the stack: files that almost always change together encode an
+  invariant the repo never wrote down, and the commits that break the pattern are exactly
+  where a field got half-wired. **Counted, not inferred.** Conservative by construction: bulk
+  commits (>25 files) dropped, ≥4 joint commits and ≥70% mutual co-change for a coupling, and
+  violations must be *exceptions* (≥75% directional) rather than the norm. Dogfood: it finds
+  this repo's own release invariant (`CHANGELOG` ↔ `VERSION`, 21/21) and the 5 commits where
+  `SKILL.md` moved without either.
+
+**A pipeline is a chain, so its hops must span ≥2 distinct files.** Caught by dogfooding: the
+first cut reported a pipeline in *this* repo, because `header-audit` carries the hop regexes
+as string literals and so matched `schema` **and** `persist` in a single file — itself. The
+guard generalizes past the self-match to every linter, scanner and codegen tool that quotes
+schema/ORM identifiers in its own source: a lone file matching several hop regexes is not a
+hand-maintained chain, and drift needs somewhere to drift *between*. Regression-tested.
+
+Also: `_hop_count` uses `wc -l` rather than `grep -c . || printf 0` — grep prints its own
+`"0"` *and* exits 1 on no match, so the `||` fallback appended a second `0` and every
+`[ -gt ]` caller saw a two-line string.
+
 ## 0.38.6 — claim nudge fires at the briefing payoff (custom onboarding)
 
 An anonymous user who chose **custom** enrichment now gets a well-timed, value-framed

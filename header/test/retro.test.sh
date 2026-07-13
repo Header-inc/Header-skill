@@ -100,4 +100,51 @@ assert_contains "$PS" $'RETRO-PLAN\t2\t4' "plan-mode counted per session (2 of 4
 assert_contains "$PS" $'RETRO-CORR\tplan-mode\t0.00\t1.00' "plan sessions correlate to fewer Bash errors than no-plan"
 assert_contains "$PS" $'RETRO-GAP\t1\t4' "a session with edit + fix-claim + no test is a verification gap"
 
+# ── CO-CHANGE DRIFT: the hand-maintained-pipeline bug, mined from git alone ──
+# Files that almost always change together encode an invariant the repo never
+# wrote down (add the column → add the wire field → add the mapping). The commits
+# that BREAK the pattern are where a field got half-wired. Deterministic: the
+# violations are counted, not inferred.
+csb="$(make_sandbox)"; crepo="$csb/cc"; mkdir -p "$crepo"
+( cd "$crepo" && git init -q && git config user.email t@t.t && git config user.name t
+  mkdir -p app
+  # 9 commits honoring the invariant: schema + column + mapping move together.
+  for i in 1 2 3 4 5 6 7 8 9; do
+    echo "f$i" >> app/schema.py; echo "f$i" >> app/models.py; echo "f$i" >> app/mapping.py
+    git add -A; git commit -qm "feat: field f$i"
+  done
+  # 2 commits that BREAK it: the column landed, the wire schema never did.
+  for i in 10 11; do
+    echo "f$i" >> app/models.py; echo "f$i" >> app/mapping.py
+    git add -A; git commit -qm "feat: field f$i (column only)"
+  done ) >/dev/null 2>&1
+# retro reads this repo's transcripts; the key is the repo path slugged.
+ckey="$(printf '%s' "$crepo" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$csb/.claude/projects/$ckey"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"/x.py"}}]}}' \
+  > "$csb/.claude/projects/$ckey/s.jsonl"
+CC="$(HOME="$csb" "$AU" retro --repo "$crepo")"
+assert_contains "$CC" $'RETRO-COCHANGE\tapp/mapping.py\tapp/models.py\t11\t11\t100' \
+  "two files that ALWAYS move together → a 100% coupling"
+assert_contains "$CC" $'RETRO-DRIFT\tapp/models.py\tapp/schema.py\t2\t11' \
+  "the column changed 11x, the wire schema only co-changed 9x → 2 drift commits"
+assert_contains "$CC" "key=cochange-models-py-schema-py" "RETRO-DRIFT carries a canonical ledger key"
+# A 100% coupling has no violations, so it must NOT be reported as drift.
+assert_not_contains "$CC" $'RETRO-DRIFT\tapp/mapping.py\tapp/models.py' \
+  "a coupling with zero violations is not a drift finding"
+
+# Precision: unrelated files that merely both appear must not fabricate a pair.
+usb="$(make_sandbox)"; urepo="$usb/u"; mkdir -p "$urepo"
+( cd "$urepo" && git init -q && git config user.email t@t.t && git config user.name t
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    echo "$i" >> "f$i.txt"; git add -A; git commit -qm "c$i"
+  done ) >/dev/null 2>&1
+ukey="$(printf '%s' "$urepo" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$usb/.claude/projects/$ukey"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"/x"}}]}}' \
+  > "$usb/.claude/projects/$ukey/s.jsonl"
+UU="$(HOME="$usb" "$AU" retro --repo "$urepo")"
+assert_not_contains "$UU" "RETRO-COCHANGE" "files that never co-change → no coupling invented"
+assert_not_contains "$UU" "RETRO-DRIFT"    "no coupling → no drift"
+
 t_done
