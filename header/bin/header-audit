@@ -98,8 +98,15 @@
 #       test), a compounding-memory discipline, and a ROUND-TRIP INVARIANT over any
 #       value pipeline found in the source. Absence is an OPPORTUNITY the
 #       audit surfaces as [Apply with review] (opinionated). Output lines:
-#         RAIL-ENV <key>  <value>   (ecosystem/ecosystem-all/git-remote/hooks-path/claude/tests)
-#         RAIL     <name>  <present|absent|n/a>  <evidence>
+#         RAIL-ENV   <key>  <value>  (ecosystem/ecosystem-all/git-remote/hooks-path/claude/tests)
+#         RAIL       <name>  <present|absent|n/a>  <evidence>
+#         RAIL-INERT <name>  <path>  <why>   — machinery that is PRESENT and CANNOT
+#           FAIL: a gate whose checks end in `|| true` (or `set +e`), CI with
+#           continue-on-error, a ratchet whose override is armed in the committed
+#           env. Strictly WORSE than an absent rail — it earns rails credit while
+#           enforcing nothing, so everyone downstream believes they are covered.
+#           Graded identically to absent. (Precedent: `TOOL npm too-old` is this
+#           same finding — a cooldown gate present and silently ignored.)
 #   header-audit rail <precommit-gate|test-ratchet|compound-memory|roundtrip-invariant>
 #                     [--ecosystem E] [--delivery git|pretooluse|both] [--ratchet on|off]
 #       Print the scaffold to install for a rail (stack-adapted), the analogue of
@@ -123,6 +130,25 @@
 #         PIPELINE    <kind>  <n_files>  <example>     (schema | persist | serde)
 #         ROUNDTRIP   <present|absent|n/a>  <evidence> (the headline)
 #         SCHEMA-LAX  <path>  <lineno>  <lib>  <why>   (parses unknown keys silently)
+#
+#   header-audit silence [--repo DIR]
+#       THE SILENCE AXIS — information discarded without a signal. The
+#       generalization of SCHEMA-LAX (a schema that silently strips unknown keys is
+#       ONE instance of a wider class): code that throws information away and says
+#       nothing. The defect is not that something broke — it is that NOTHING TOLD
+#       YOU, so it surfaces later, somewhere expensive. Deterministic, read-only.
+#         SILENCE-SCOPE   repo  <repo>
+#         ENV-UNDECLARED  <var>  <path>  <lineno>  <why>  — the code reads a config
+#           var that nothing declares. The classic silent prod break: it's in your
+#           shell, so it works on your laptop and dies in the runner. Fires ONLY when
+#           the repo HAS declaration files (.env.example / compose / Dockerfile / CI)
+#           — no declaration discipline means no invariant to violate, and inventing
+#           one would be noise. Ambient vars (HOME/PATH/CI/...) and test-only reads
+#           are never findings.
+#         SWALLOW         <path>  <lineno>  <why>  — an exception handler with an
+#           EMPTY body. Precision is the whole product decision: a handler that logs,
+#           re-raises, or returns a fallback is a DECISION, not a swallow. Only a
+#           truly empty one counts. Anchors on the `except`/`catch` line.
 #
 #   header-audit grade [--repo DIR]
 #       TWO composite, deterministic SETUP GRADES over the five scorecard axes
@@ -613,7 +639,10 @@ _rail_gate_scripts() {
     [ -f "$c" ] && _gs="$_gs $c"
   done
   for c in "$REPO"/scripts/*pre-commit*; do [ -f "$c" ] && _gs="$_gs $c"; done
-  printf '%s' "${_gs# }"
+  # De-duplicate: scripts/pre-commit-gate.sh matches both the explicit path above
+  # AND the glob, so it was listed twice — which made RAIL-INERT emit the same
+  # finding twice and double-deduct it from the rails grade.
+  printf '%s' "$_gs" | tr ' ' '\n' | grep -v '^$' | awk '!seen[$0]++' | tr '\n' ' ' | sed 's/ $//'
 }
 _rail_precommit_status() {
   _hp="$(_rail_hookspath)"
@@ -642,6 +671,157 @@ _rail_compound_status() {
   [ -f "$REPO/MEMORY.md" ]                && { printf 'present\tMEMORY.md'; return; }
   [ -d "$REPO/.claude/skills/compound" ] && { printf 'present\t.claude/skills/compound'; return; }
   printf 'absent\tno compounding-memory discipline (.claude/memory/ + a capture step) found'
+}
+
+# ── inert machinery (the guardrail that cannot fail) ──────────
+# The direct consequence of the drift thesis, turned on Header's OWN findings:
+# PRESENCE OF MACHINERY IS NOT COVERAGE. A pre-commit gate whose checks end in
+# `|| true`, a CI job with continue-on-error, a ratchet whose override is exported
+# in the environment — each is *detected as present*, earns rails credit, and
+# enforces nothing. That is strictly worse than an absent gate, because everyone
+# downstream believes they are covered.
+#
+# Precedent for the row already lives in this bin: `TOOL npm too-old` is exactly
+# this finding — the .npmrc cooldown gate is present and SILENTLY IGNORED because
+# npm is too old to honor it. This generalizes that one row into a family.
+#
+# High precision by construction: `|| true` is not a judgment call. Comment lines
+# are excluded, so a template that *documents* an escape hatch is not flagged.
+# _excerpt — normalize a `grep -n` hit into "<lineno>: <trimmed source>" so the
+# evidence reads cleanly in a finding instead of carrying the file's indentation.
+_excerpt() {
+  sed 's/^\([0-9]*\):[[:space:]]*/\1: /' | tr '\t' ' ' | cut -c1-46
+}
+
+_ci_files() {
+  for d in "$REPO/.github/workflows"; do
+    [ -d "$d" ] && find "$d" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null
+  done
+  for f in "$REPO/.gitlab-ci.yml" "$REPO/.circleci/config.yml"; do
+    [ -f "$f" ] && printf '%s\n' "$f"
+  done
+}
+
+# _rail_inert → RAIL-INERT rows: machinery that is present but cannot fail.
+# Emits: name <TAB> path <TAB> why
+_rail_inert() {
+  # 1. A gate script that neutralizes its own checks. `|| true` / `|| exit 0`
+  #    swallow a failing check; `set +e` disarms the whole script. Skip comments —
+  #    a scaffold that documents an escape hatch in prose is not an inert gate.
+  for g in $(_rail_gate_scripts); do
+    [ -f "$g" ] || continue
+    _hit="$(grep -nE '\|\|[[:space:]]*(true|:|exit[[:space:]]+0)|^[[:space:]]*set[[:space:]]+\+e' "$g" 2>/dev/null \
+      | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | _excerpt)"
+    [ -n "$_hit" ] && printf 'precommit-gate\t%s\tthe gate neutralizes its own checks (line %s) — it is present, it runs, and it cannot fail\n' \
+      "${g#"$REPO"/}" "$_hit"
+  done
+  # 2. CI that is configured never to fail the build.
+  _ci_files | while IFS= read -r c; do
+    [ -f "$c" ] || continue
+    _hit="$(grep -nE 'continue-on-error:[[:space:]]*true|allow_failure:[[:space:]]*true' "$c" 2>/dev/null \
+      | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | _excerpt)"
+    [ -n "$_hit" ] && printf 'ci\t%s\tCI step is set never to fail the build (line %s)\n' \
+      "${c#"$REPO"/}" "$_hit"
+  done
+  # 3. A test ratchet whose escape hatch is armed in the committed environment —
+  #    the override exists for a human to use deliberately, once. Exported in CI,
+  #    it means the ratchet never blocks anything, ever.
+  _ci_files | while IFS= read -r c; do
+    [ -f "$c" ] || continue
+    grep -qE 'RATCHET_OVERRIDE[[:space:]]*[:=][[:space:]]*("?(1|true|yes)"?)' "$c" 2>/dev/null \
+      && printf 'test-ratchet\t%s\tthe ratchet override is armed in CI — the ratchet can never block a skipped test\n' "${c#"$REPO"/}"
+  done
+}
+
+# ── the silence axis (information discarded without a signal) ─
+# The generalization of SCHEMA-LAX. A schema that silently strips unknown keys is
+# one instance of a wider defect class: code that throws information away and
+# says nothing. The failure is not that something broke — it is that nothing told
+# you. Two more instances, both deterministic:
+#
+#   ENV-UNDECLARED — the code reads a config var that nothing declares. Works on
+#                    your laptop (it's in your shell), dies in the runner.
+#   SWALLOW        — an exception handler with an empty body. The error happened;
+#                    nobody will ever know.
+_ENV_SKIP='^(HOME|PATH|USER|LOGNAME|PWD|SHELL|LANG|LC_ALL|TERM|TMPDIR|TMP|TEMP|HOSTNAME|EDITOR|VISUAL|CI|PYTHONPATH|VIRTUAL_ENV|GOPATH|GOROOT|NODE_ENV|NODE_OPTIONS|PORT|DISPLAY|SHLVL|OLDPWD|_)$'
+
+# Files that DECLARE config. The invariant only exists if the repo has the
+# discipline — no declaration file means no invariant to violate, so the scan
+# stays silent rather than inventing one (the drift-scan n/a trick).
+_env_decl_files() {
+  for f in .env.example .env.sample .env.template .env.defaults .env.dist env.example; do
+    [ -f "$REPO/$f" ] && printf '%s\n' "$REPO/$f"
+  done
+  for f in "$REPO"/docker-compose*.yml "$REPO"/docker-compose*.yaml "$REPO/Dockerfile" "$REPO/app.json" "$REPO/fly.toml"; do
+    [ -f "$f" ] && printf '%s\n' "$f"
+  done
+  _ci_files
+}
+
+# Every env var the SOURCE reads (tests excluded — they routinely set their own).
+_env_reads() {
+  # shellcheck disable=SC2086
+  grep -rhoE $_GEX \
+    "os\.environ\[[\"'][A-Z_][A-Z0-9_]*[\"']\]|os\.environ\.get\([\"'][A-Z_][A-Z0-9_]*[\"']|os\.getenv\([\"'][A-Z_][A-Z0-9_]*[\"']|process\.env\.[A-Z_][A-Z0-9_]*|process\.env\[[\"'][A-Z_][A-Z0-9_]*[\"']\]|os\.Getenv\([\"'][A-Z_][A-Z0-9_]*[\"']|ENV\[[\"'][A-Z_][A-Z0-9_]*[\"']\]" \
+    "$REPO" 2>/dev/null \
+    | grep -oE '[A-Z_][A-Z0-9_]{2,}' | grep -vE '^(OS|ENV|PROCESS|GET|GETENV|ENVIRON)$' \
+    | grep -vE "$_ENV_SKIP" | sort -u
+}
+
+# The file + line where a var is first read (for the finding's Where:).
+_env_read_site() {
+  # shellcheck disable=SC2086
+  grep -rnE $_GEX "(os\.environ|os\.getenv|os\.Getenv|process\.env|ENV)[\[\.\(][\"']?$1" "$REPO" 2>/dev/null \
+    | while IFS=: read -r f ln _; do
+        _is_testpath "$f" || { printf '%s\t%s\n' "${f#"$REPO"/}" "$ln"; break; }
+      done | head -1
+}
+
+_env_undeclared() {
+  _decl="$(_env_decl_files)"
+  [ -n "$_decl" ] || return 0          # no declaration discipline → no invariant
+  _env_reads | while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    # Declared anywhere the repo declares config? Then the invariant holds.
+    printf '%s\n' "$_decl" | while IFS= read -r d; do
+      [ -f "$d" ] && grep -qE "(^|[^A-Z0-9_])$v([^A-Z0-9_]|$)" "$d" 2>/dev/null && { printf 'FOUND'; break; }
+    done | grep -q FOUND && continue
+    _site="$(_env_read_site "$v")"
+    [ -n "$_site" ] || continue        # only read from a test → not a prod break
+    printf '%s\t%s\n' "$v" "$_site"
+  done
+}
+
+# _swallows → exception handlers with an EMPTY body. Precision is everything: a
+# handler that logs, re-raises, returns a fallback, or even leaves a comment
+# explaining itself is a DECISION, not a swallow. Only a truly empty body counts.
+_swallows() {
+  # shellcheck disable=SC2086
+  grep -rlE $_GEX '(except[^:]*:|catch)' "$REPO" 2>/dev/null | while IFS= read -r f; do
+    _is_testpath "$f" && continue
+    case "$f" in
+      *.py)
+        awk -v F="${f#"$REPO"/}" '
+          # a python handler is a swallow when its ONLY statement is `pass`.
+          /^[[:space:]]*except([[:space:]].*)?:[[:space:]]*$/ { exc = NR; ind = match($0, /[^ ]/); next }
+          exc && /^[[:space:]]*$/ { next }                     # blank lines inside
+          exc {
+            if ($0 ~ /^[[:space:]]*pass[[:space:]]*$/ && match($0, /[^ ]/) > ind) {
+              printf "%s\t%d\tbare except: pass — the error happened and nothing recorded it\n", F, exc
+            }
+            exc = 0
+          }
+        ' "$f"
+        ;;
+      *.ts|*.tsx|*.js|*.jsx)
+        # empty catch block, or a promise .catch() that discards the rejection.
+        grep -nE 'catch[[:space:]]*(\([^)]*\))?[[:space:]]*\{[[:space:]]*\}|\.catch\([[:space:]]*\([^)]*\)[[:space:]]*=>[[:space:]]*\{[[:space:]]*\}[[:space:]]*\)' "$f" 2>/dev/null \
+          | while IFS=: read -r ln _; do
+              printf '%s\t%s\tempty catch block — the error happened and nothing recorded it\n' "${f#"$REPO"/}" "$ln"
+            done
+        ;;
+    esac
+  done
 }
 
 # ── pipeline drift (the round-trip invariant) ─────────────────
@@ -1570,6 +1750,42 @@ EOF
     _rail_row test-ratchet        "$(_rail_ratchet_status "$tp")"
     _rail_row compound-memory     "$(_rail_compound_status)"
     _rail_row roundtrip-invariant "$(_roundtrip_status)"
+    # INERT: machinery that is PRESENT and cannot fail. Strictly worse than absent
+    # — it earns rails credit while enforcing nothing, and everyone downstream
+    # believes they are covered. Graded exactly like an absent rail.
+    _rail_inert | while IFS="$TAB" read -r nm path why; do
+      [ -n "${nm:-}" ] || continue
+      printf 'RAIL-INERT\t%s\t%s\t%s\tkey=inert-%s\n' "$nm" "$path" "$why" "$nm"
+    done
+    ;;
+
+  silence)
+    # THE SILENCE AXIS — information discarded without a signal. The generalization
+    # of SCHEMA-LAX: the defect is not that something broke, it is that NOTHING
+    # TOLD YOU. Deterministic, read-only, high-precision; each row is a specific
+    # place the code throws information away.
+    printf 'SILENCE-SCOPE\trepo\t%s\n' "$REPO"
+    # ENV-UNDECLARED — reads a config var nothing declares. The classic silent prod
+    # break: it's in your shell, so it works on your laptop and dies in the runner.
+    # Only fires when the repo HAS declaration files: no declaration discipline
+    # means no invariant to violate, and inventing one would be noise.
+    _nd=0
+    if [ -z "$(_env_decl_files)" ]; then
+      printf 'NOTE\tsilence\tno config-declaration file (.env.example, compose, Dockerfile, CI) — no declaration invariant to check\n'
+    else
+      _env_undeclared | while IFS="$TAB" read -r v f ln; do
+        [ -n "${v:-}" ] || continue
+        printf 'ENV-UNDECLARED\t%s\t%s\t%s\tread but declared nowhere — present in your shell, absent in the runner\tkey=declare-env-%s\n' \
+          "$v" "$f" "$ln" "$(_slug "$v")"
+      done
+    fi
+    # SWALLOW — an exception handler with an empty body. A handler that logs,
+    # re-raises, or returns a fallback is a DECISION; only a truly empty one is a
+    # swallow, and that is the same defect as a schema silently dropping a field.
+    _swallows | while IFS="$TAB" read -r f ln why; do
+      [ -n "${f:-}" ] || continue
+      printf 'SWALLOW\t%s\t%s\t%s\tkey=swallow-%s-%s\n' "$f" "$ln" "$why" "$(_relslug "$REPO/$f")" "$ln"
+    done
     ;;
 
   drift)
@@ -1773,6 +1989,12 @@ EOF
       }
       $1 == "GATE" && $3 == "absent"  { gates["project"]++ }       # the cooldown gate is a checked-in .npmrc
       $1 == "RAIL" && $3 == "absent"  { rails_absent["project"]++ } # determinism rails are repo guardrails
+      # A PRESENT rail that cannot fail (gate with `|| true`, CI continue-on-error,
+      # an armed ratchet override) earns NO credit. Presence of machinery is not
+      # coverage — the whole thesis of the drift/invariant work — and an inert gate
+      # is strictly worse than an absent one, because everyone believes they are
+      # covered. Graded identically to absent.
+      $1 == "RAIL-INERT"              { rails_absent["project"]++ }
       $1 == "TOOL" && $4 == "too-old" { toolold["local"]++ }       # the machine package-tool version is LOCAL
       END {
         split("project local", SC, " ")
@@ -1819,7 +2041,7 @@ EOF
             ((toolold[s] + 0) ? sprintf("%d package tool(s) too old to honor a cooldown gate", toolold[s]) : "package tooling current or n/a")
         if (s == "project")
           printf "%s\trails\t%s\t%s\n", axrow, d(raild[s]),
-            ((rails_absent[s] + 0) ? sprintf("%d determinism rail(s) absent", rails_absent[s]) : "determinism rails present or n/a")
+            ((rails_absent[s] + 0) ? sprintf("%d determinism rail(s) absent or inert", rails_absent[s]) : "determinism rails present or n/a")
         else
           printf "%s\trails\t0\tn/a — determinism rails are a repo property\n", axrow
         printf "%s\t%s\t%d\t100\n", grow, band(score[s]), score[s]
@@ -1828,11 +2050,11 @@ EOF
     ;;
 
   -h|--help)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|drift|grade|patterns|gate} [--repo DIR] ..."
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|drift|silence|grade|patterns|gate} [--repo DIR] ..."
     exit 0
     ;;
   *)
-    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|drift|grade|patterns|gate} [--repo DIR] ..." >&2
+    echo "Usage: header-audit {harness|deps|cost|waste|retro|rails|rail|drift|silence|grade|patterns|gate} [--repo DIR] ..." >&2
     exit 1
     ;;
 esac

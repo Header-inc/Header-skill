@@ -3,6 +3,49 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.40.0 — the silence axis: things that look like they work and don't
+
+`0.39.0` said *presence of machinery is not coverage*. This release turns that on the
+machinery **Header itself detects and recommends**, and generalizes the one finding inside
+it that was really about something bigger.
+
+`SCHEMA-LAX` (0.39.0) flagged a schema that silently strips unknown keys. But that is one
+instance of a wider defect class: **code that throws information away and says nothing.**
+The defect is never that something broke — it is that *nothing told you*, so it surfaces
+later, somewhere expensive. Three new findings, all deterministic, all computed in the bin.
+
+- **`RAIL-INERT` (in `rails`) — the guardrail that cannot fail.** A pre-commit gate whose
+  checks end in `|| true` (or that runs `set +e`), a CI job with `continue-on-error: true`,
+  a test ratchet whose override is armed in the committed environment. Each is **detected as
+  present**, earns rails credit, and enforces nothing. That is **strictly worse than an
+  absent gate**, because everyone downstream believes they are covered.
+  **This changes grades, deliberately:** an inert rail is now graded exactly like an absent
+  one, and the rails-axis note reads "absent or inert". A repo whose gate ends in `|| true`
+  will drop. That is the honest number — it was never covered.
+  The precedent was already in the bin: `TOOL npm too-old` is this same finding (a `.npmrc`
+  cooldown gate that is *present* and *silently ignored* because npm can't honor it). This
+  generalizes that lone row into a family, and the SKILL.md flow groups them.
+- **`ENV-UNDECLARED` (new `silence` scan) — read here, declared nowhere.** The code reads a
+  config var that no `.env.example` / compose file / Dockerfile / CI workflow declares. It's
+  in your shell, so it works on your laptop and dies in the runner. Pure set difference, no
+  heuristics. **Fires only when the repo already HAS declaration files** — no declaration
+  discipline means no invariant to violate, and inventing one would be noise (the same n/a
+  discipline that keeps `drift` quiet on repos with no pipeline). Ambient vars
+  (`HOME`/`PATH`/`CI`/…) and test-only reads are never findings.
+- **`SWALLOW` (new `silence` scan) — the empty handler.** `except ValueError: pass`, or
+  `catch (e) {}`. The error happened and nothing recorded it — the exact defect as a schema
+  quietly dropping a field you forgot to wire. **Precision is the entire product decision:** a
+  handler that logs, re-raises, or returns an explicit fallback is a **decision**, not a
+  swallow, and is never flagged. Only a truly empty body counts.
+
+The SKILL.md flow folds `ENV-UNDECLARED` + `SWALLOW` + `SCHEMA-LAX` into **one** "what fails
+quietly here" recommendation rather than scattering them, and ranks `RAIL-INERT` at the top
+when it fires — a gate that runs and cannot fail is the most misleading thing in a repo.
+
+Also fixed: `_rail_gate_scripts` de-duplicates. `scripts/pre-commit-gate.sh` matched both the
+explicit path and the `scripts/*pre-commit*` glob, so it was listed twice — which made
+`RAIL-INERT` report the same gate twice and **double-deduct it from the rails grade**.
+
 ## 0.39.0 — invariant coverage: does your machinery cover what your architecture depends on?
 
 Every scan Header shipped until now grades the **presence of machinery**: is there a gate?
