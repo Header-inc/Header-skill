@@ -3,6 +3,52 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.41.0 — eating the dogfood: the auditor's own silence, and its own context tax
+
+An outside review turned Header's two loudest theses back on Header itself, and both hit.
+This release fixes what it found.
+
+**1. The auditor's scans failed silently toward "all clear" — its own silence-axis defect.**
+
+- **`SCAN-DEGRADED` (new row, `waste` + `retro`).** Transcript parsing anchored on an exact
+  serialized key order (`"type":"tool_use","id":…,"name":…`) — a writer that reordered keys
+  would silently zero every count, and zero counts read as "low usage", not "broken parser".
+  Parsing is now **key-order tolerant** (forward + bounded backward window inside the block),
+  and any block whose id/name still can't be read is *counted* and surfaced in-band:
+  `SCAN-DEGRADED <scan> <n> of <m> tool_use block(s) unparseable`. A clean report and a
+  degraded one are never again indistinguishable. The final `exit 0` stays (it exists so
+  incidental grep statuses don't leak), but it is no longer a license to fail silently —
+  the comment now says so, and the row is the mechanism.
+- **Error attribution survives omitted `is_error:false`.** tool_result pairing was
+  positional (k-th id ↔ k-th flag), which misaligns the moment a writer omits the flag on
+  success — common. Each `is_error:true` now attributes to the **nearest `tool_use_id` by
+  byte offset**, correct under either field order, with or without omitted flags.
+- **`likely-present` (new RAIL/ROUNDTRIP status).** The test-ratchet check (a word-grep for
+  Header's own scaffold vocabulary) and the round-trip check (a test file merely containing
+  serialize+deserialize words) both claimed `present` on evidence that verifies nothing.
+  They now emit `likely-present` with the caveat in the evidence field — treated as present
+  for grading (no grade movement), but the scan no longer claims more confidence than a
+  word-match carries.
+- **Multi-line empty `catch` detected.** The `silence` scan's swallow check only matched
+  `catch {}` on one line — the *common* formatting (`catch (e) {` … `}`) was invisible. A
+  small awk state machine now catches it; a comment inside the block remains a DECISION,
+  not a swallow.
+
+**2. SKILL.md carried a ~26k-token always-loaded tax — from the tool that grades context tax.**
+
+Four sections that load on every invocation but are needed rarely moved to load-on-demand
+reference files, each leaving a short trigger stub: the full line-type catalog →
+`reference/audit-output.md` (read at Step 4, when interpreting output), the wrap-up/compound
+pinned flow → `reference/wrapup.md` (read when the command is invoked), the update flow →
+`reference/update.md` (read only when the preamble emits `UPDATE_CHECK`), and first-run
+onboarding → `reference/onboarding.md` (read at most once per install). SKILL.md drops from
+~106KB to ~68KB (~26k → ~17k tokens per invocation, −36%). Behavior is unchanged — the same
+text loads, later and only when needed.
+
+New tests: reordered tool_use keys still count; an unparseable block surfaces
+`SCAN-DEGRADED` (not a silent zero); an omitted `is_error:false` no longer charges the
+wrong tool; multi-line empty catch is a swallow while a comment-only catch is not.
+
 ## 0.40.0 — the silence axis: things that look like they work and don't
 
 `0.39.0` said *presence of machinery is not coverage*. This release turns that on the

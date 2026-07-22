@@ -85,6 +85,9 @@
 #         ERROR-RATE    <tool> <errors> <calls> <pct>  (>=10 calls and >=20% errors)
 #         COMPACTIONS   <count> <files>                (context-pressure signal)
 #         NOTE          waste <reason>                 (no transcripts / no input)
+#         SCAN-DEGRADED waste <detail>                 (tool_use blocks the parser could
+#                                                       not read — counts are an UNDERCOUNT,
+#                                                       never silent evidence of low usage)
 #         (the always-loaded SKILL-TAX / CONTEXT-TAX rows moved to `harness` — see above)
 #
 #   header-audit patterns          list the built-in (+ briefing-supplied) patterns
@@ -99,7 +102,9 @@
 #       value pipeline found in the source. Absence is an OPPORTUNITY the
 #       audit surfaces as [Apply with review] (opinionated). Output lines:
 #         RAIL-ENV   <key>  <value>  (ecosystem/ecosystem-all/git-remote/hooks-path/claude/tests)
-#         RAIL       <name>  <present|absent|n/a>  <evidence>
+#         RAIL       <name>  <present|likely-present|absent|n/a>  <evidence>
+#           (likely-present = word-match evidence only — e.g. the ratchet signature
+#           vocabulary — honest about being unverified)
 #         RAIL-INERT <name>  <path>  <why>   — machinery that is PRESENT and CANNOT
 #           FAIL: a gate whose checks end in `|| true` (or `set +e`), CI with
 #           continue-on-error, a ratchet whose override is armed in the committed
@@ -128,7 +133,8 @@
 #       without one is never nagged and its grade never moves. Output lines:
 #         DRIFT-ENV   <key>  <value>                   (ecosystem / tests)
 #         PIPELINE    <kind>  <n_files>  <example>     (schema | persist | serde)
-#         ROUNDTRIP   <present|absent|n/a>  <evidence> (the headline)
+#         ROUNDTRIP   <likely-present|absent|n/a>  <evidence> (the headline;
+#                     likely-present = word-match, not verified to round-trip a value)
 #         SCHEMA-LAX  <path>  <lineno>  <lib>  <why>   (parses unknown keys silently)
 #
 #   header-audit silence [--repo DIR]
@@ -658,9 +664,13 @@ _rail_precommit_status() {
 _rail_ratchet_status() {
   _tp="$1"
   [ "$_tp" = none ] && { printf 'n/a\tno test suite detected'; return; }
+  # Word-match only: the signature vocabulary is Header's own scaffold plus a few
+  # generics, so this cannot verify the ratchet actually blocks anything (and a
+  # differently-named ratchet reads as absent). The status says so — a scan must
+  # not claim more confidence than its evidence carries.
   for g in $(_rail_gate_scripts); do
     grep -qiE 'ratchet|net_removed|new_skips|RATCHET_OVERRIDE|xfail' "$g" 2>/dev/null \
-      && { printf 'present\t%s' "$g"; return; }
+      && { printf 'likely-present\t%s (word-match — verify the ratchet actually blocks)' "$g"; return; }
   done
   printf 'absent\ttests present but nothing blocks deleting/skipping a failing test'
 }
@@ -819,6 +829,18 @@ _swallows() {
           | while IFS=: read -r ln _; do
               printf '%s\t%s\tempty catch block — the error happened and nothing recorded it\n' "${f#"$REPO"/}" "$ln"
             done
+        # multi-line empty catch — the common formatting: `catch (e) {` at end of
+        # line, then only blank lines until `}`. A comment inside the block is a
+        # DECISION (per the doctrine above) and does not count as a swallow.
+        awk -v F="${f#"$REPO"/}" '
+          /catch[[:space:]]*(\([^)]*\))?[[:space:]]*\{[[:space:]]*$/ { c = NR; next }
+          c && /^[[:space:]]*$/ { next }
+          c && /^[[:space:]]*\}/ {
+            printf "%s\t%d\tempty catch block — the error happened and nothing recorded it\n", F, c
+            c = 0; next
+          }
+          c { c = 0 }
+        ' "$f"
         ;;
     esac
   done
@@ -935,7 +957,11 @@ _roundtrip_test() {
 _roundtrip_status() {
   _has_pipeline || { printf 'n/a\tno value pipeline detected (needs a schema hop + a persistence/serde hop)'; return; }
   _rt="$(_roundtrip_test | head -1)"
-  [ -n "$_rt" ] && { printf 'present\t%s' "${_rt#"$REPO"/}"; return; }
+  # Word-match only ("round-trip" string, or serialize+deserialize words in one
+  # test file) — it cannot verify the SAME value survives the pipeline, so the
+  # status is likely-present, not present. Absence of the words is still strong
+  # evidence of absence; presence of the words is weak evidence of coverage.
+  [ -n "$_rt" ] && { printf 'likely-present\t%s (word-match — not verified to round-trip the same value)' "${_rt#"$REPO"/}"; return; }
   printf 'absent\tpipeline across %s hop(s) and no test asserts what goes in comes back out' \
     "$(_pipeline_kinds | wc -w | tr -d ' ')"
 }
@@ -1345,12 +1371,14 @@ SIG
 "
     done
 
-    # One pass over the transcript stream. Field shapes verified against real
-    # transcripts: tool_use blocks serialize as "type":"tool_use","id":"…","name":"…";
-    # tool_result as "tool_use_id":"…","type":"tool_result",…,"is_error":bool (the
-    # id precedes its is_error; blocks pair positionally within a line). Escaped
-    # JSON inside content strings cannot match these patterns (the inner quotes
-    # are backslash-escaped), so plain matching is safe.
+    # One pass over the transcript stream. Escaped JSON inside content strings
+    # cannot match these patterns (the inner quotes are backslash-escaped), so
+    # plain matching is safe. Parsing is KEY-ORDER TOLERANT: blocks anchor on the
+    # "type":"tool_use" marker and read "id"/"name" from the rest of the block
+    # (cut at "input", whose keys are raw JSON and could shadow "name"), and any
+    # block whose id/name can't be found is counted and surfaced as SCAN-DEGRADED
+    # — a writer/serializer change must degrade VISIBLY, never silently zero the
+    # counts (the scan's own silence-axis contract).
     # The multi-line lists travel via ENVIRON, not -v: BSD awk (macOS) rejects a
     # newline in a -v value ("newline in string") — the header-cost idiom.
     eval "$stream_cmd" | HEADER_WASTE_MCP="$mcp_configured" HEADER_WASTE_SKILLS="$repo_skills" \
@@ -1367,40 +1395,58 @@ SIG
         }
         # tool_use blocks → per-tool call counts + id→name map (for error joins).
         line = $0
-        while (match(line, /"type":"tool_use","id":"[^"]*","name":"[^"]*"/)) {
-          blk = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
-          id = blk; sub(/.*"id":"/, "", id); sub(/".*/, "", id)
-          nm = blk; sub(/.*"name":"/, "", nm); sub(/"$/, "", nm)
+        while (match(line, /"type":"tool_use"/)) {
+          seg = substr(line, RSTART + RLENGTH, 500)
+          pre = (RSTART > 500) ? substr(line, RSTART - 500, 500) : substr(line, 1, RSTART - 1)
+          line = substr(line, RSTART + RLENGTH)
+          attempts++
+          # backward window: keys may precede "type" — scan back only to this
+          # block-opening brace so a neighboring block cannot leak its id/name in.
+          q = length(pre); while (q > 0 && substr(pre, q, 1) != "{") q--
+          pre = (q > 0) ? substr(pre, q) : ""
+          blkseg = seg
+          if ((p = index(blkseg, "\"input\"")) > 0) blkseg = substr(blkseg, 1, p - 1)
+          id = ""; nm = ""
+          if (match(blkseg, /"id":"[^"]*"/))            id = substr(blkseg, RSTART + 6, RLENGTH - 7)
+          if (id == "" && match(pre, /"id":"[^"]*"/))   id = substr(pre, RSTART + 6, RLENGTH - 7)
+          if (match(blkseg, /"name":"[^"]*"/))          nm = substr(blkseg, RSTART + 8, RLENGTH - 9)
+          if (nm == "" && match(pre, /"name":"[^"]*"/)) nm = substr(pre, RSTART + 8, RLENGTH - 9)
+          if (id == "" || nm == "") { unparsed++; continue }
           Name[id] = nm
           if (!(nm in Calls)) ToolKeys[++ntk] = nm
           Calls[nm]++
-          if (nm == "Skill") {
-            seg = substr($0, index($0, blk) + length(blk), 220)
-            if (match(seg, /"skill":"[^"]*"/)) {
-              sk = substr(seg, RSTART + 9, RLENGTH - 10)
-              if (!(sk in SkillUse)) SkillKeys[++nsk] = sk
-              SkillUse[sk]++
-            }
+          if (nm == "Skill" && match(seg, /"skill":"[^"]*"/)) {
+            sk = substr(seg, RSTART + 9, RLENGTH - 10)
+            if (!(sk in SkillUse)) SkillKeys[++nsk] = sk
+            SkillUse[sk]++
           }
         }
         # tool_result blocks → error attribution. Intra-block field order varies
-        # between writer versions (tool_use_id before OR after is_error), so pair
-        # POSITIONALLY: the k-th tool_use_id and the k-th is_error in a line
-        # belong to the k-th tool_result block — each block carries exactly one
-        # of each, and neither key appears outside tool_result blocks.
-        nid = 0; ner = 0
+        # between writer versions (tool_use_id before OR after is_error), and
+        # "is_error" may be OMITTED when false — so k-th-to-k-th positional
+        # pairing misaligns the moment one block skips the flag. Attribute each
+        # "is_error":true to the NEAREST "tool_use_id" by byte offset instead:
+        # blocks are contiguous, so the nearest id is that block-local id under
+        # either field order, with or without omitted-false flags.
+        nid = 0; ner = 0; off = 0
         line = $0
         while (match(line, /"tool_use_id":"[^"]*"/)) {
-          Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16)
-          line = substr(line, RSTART + RLENGTH)
+          Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16); IdPos[nid] = off + RSTART
+          off += RSTART + RLENGTH - 1; line = substr(line, RSTART + RLENGTH)
         }
-        line = $0
-        while (match(line, /"is_error":(true|false)/)) {
-          ErrFlag[++ner] = (substr(line, RSTART, RLENGTH) ~ /true/) ? 1 : 0
-          line = substr(line, RSTART + RLENGTH)
+        off = 0; line = $0
+        while (match(line, /"is_error":true/)) {
+          ErrPos[++ner] = off + RSTART
+          off += RSTART + RLENGTH - 1; line = substr(line, RSTART + RLENGTH)
         }
-        for (k = 1; k <= nid && k <= ner; k++)
-          if (ErrFlag[k] && (Ids[k] in Name)) Err[Name[Ids[k]]]++
+        for (k = 1; k <= ner; k++) {
+          bestd = -1; besti = 0
+          for (j = 1; j <= nid; j++) {
+            dd = ErrPos[k] - IdPos[j]; if (dd < 0) dd = -dd
+            if (bestd < 0 || dd < bestd) { bestd = dd; besti = j }
+          }
+          if (besti && (Ids[besti] in Name)) Err[Name[Ids[besti]]]++
+        }
         # Compaction markers: a compaction writes BOTH a summary message and a
         # boundary record — count each, report the max (not the sum).
         if ($0 ~ /"isCompactSummary":true/)        c_sum++
@@ -1447,6 +1493,11 @@ SIG
         }
         cmp = (c_sum > c_bnd) ? c_sum : c_bnd
         if (cmp > 0) printf "COMPACTIONS\t%d\t%d\n", cmp, nfiles
+        # Parse-failure canary: a transcript-format change must never read as
+        # "low usage". Any tool_use marker whose id/name could not be extracted
+        # degrades the scan VISIBLY.
+        if (unparsed > 0)
+          printf "SCAN-DEGRADED\twaste\t%d of %d tool_use block(s) unparseable — counts above are an undercount, not evidence of low usage\n", unparsed, attempts + 0
       }
     '
 
@@ -1465,7 +1516,9 @@ SIG
     # behavior to the practice that addresses it — worktrees for branch juggling, a
     # guardrail for repeated failures, compounding memory for ungathered pitfalls.
     # The SKILL.md coach flow ranks + narrates these; the host supplies per-gotcha
-    # detail from its own session context. Deterministic, read-only; nothing leaves.
+    # detail from its own session context. Read-only; nothing leaves. A tool_use
+    # block the parser cannot read emits SCAN-DEGRADED (see the waste scan) — the
+    # behavioral counts must degrade visibly, never read as a quiet week.
     set -- $args_rest
     SRC=""; SINCE=""; ALL_PROJECTS=""
     while [ $# -gt 0 ]; do
@@ -1530,20 +1583,31 @@ SIG
         if ($0 ~ /(npm (run )?test|pytest|go test|jest|vitest|cargo test|rspec|bats|make test|\.\/test|test\/run)/) s_test = 1
         line = $0
         # tool_use: count edits per file (thrash); map id->name for error joins.
-        while (match(line, /"type":"tool_use","id":"[^"]*","name":"[^"]*"/)) {
-          blk = substr(line, RSTART, RLENGTH); rest = substr(line, RSTART + RLENGTH)
-          id = blk; sub(/.*"id":"/, "", id); sub(/".*/, "", id)
-          nm = blk; sub(/.*"name":"/, "", nm); sub(/"$/, "", nm)
+        # Key-order tolerant, same contract as the waste scan: unparseable blocks
+        # are counted and surfaced as SCAN-DEGRADED, never silently dropped.
+        while (match(line, /"type":"tool_use"/)) {
+          seg = substr(line, RSTART + RLENGTH, 500)
+          pre = (RSTART > 500) ? substr(line, RSTART - 500, 500) : substr(line, 1, RSTART - 1)
+          line = substr(line, RSTART + RLENGTH)
+          attempts++
+          q = length(pre); while (q > 0 && substr(pre, q, 1) != "{") q--
+          pre = (q > 0) ? substr(pre, q) : ""
+          blkseg = seg
+          if ((p = index(blkseg, "\"input\"")) > 0) blkseg = substr(blkseg, 1, p - 1)
+          id = ""; nm = ""
+          if (match(blkseg, /"id":"[^"]*"/))            id = substr(blkseg, RSTART + 6, RLENGTH - 7)
+          if (id == "" && match(pre, /"id":"[^"]*"/))   id = substr(pre, RSTART + 6, RLENGTH - 7)
+          if (match(blkseg, /"name":"[^"]*"/))          nm = substr(blkseg, RSTART + 8, RLENGTH - 9)
+          if (nm == "" && match(pre, /"name":"[^"]*"/)) nm = substr(pre, RSTART + 8, RLENGTH - 9)
+          if (id == "" || nm == "") { unparsed++; continue }
           Name[id] = nm; if (!(nm in Calls)) ToolKeys[++ntk] = nm; Calls[nm]++; s_active = 1
           if (nm == "Edit" || nm == "Write" || nm == "NotebookEdit") {
             s_edit = 1
-            seg = substr(rest, 1, 400)
             if (match(seg, /"file_path":"[^"]*"/)) {
               fp = substr(seg, RSTART + 13, RLENGTH - 14); b = base(fp)
               if (!(b in Edits)) EditKeys[++nek] = b; Edits[b]++
             }
           }
-          line = rest
         }
         # git-workflow tells: count distinctive subcommands anywhere in the line
         # (they live in Bash command strings; counting is reliable even when the
@@ -1561,15 +1625,23 @@ SIG
             if (u ~ /^(no |no,|nope|actually|wait,|stop |revert|undo|instead|don.t )/ || u ~ /that.?s (wrong|not)|not what i|you (broke|misunderstood)/) corrections++
           }
         }
-        # tool_result error attribution — positional pairing (per the waste scan).
-        nid = 0; ner = 0; line = $0
-        while (match(line, /"tool_use_id":"[^"]*"/)) { Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16); line = substr(line, RSTART + RLENGTH) }
-        line = $0
-        while (match(line, /"is_error":(true|false)/)) { ErrFlag[++ner] = (substr(line, RSTART, RLENGTH) ~ /true/) ? 1 : 0; line = substr(line, RSTART + RLENGTH) }
-        for (k = 1; k <= nid && k <= ner; k++) if (ErrFlag[k] && (Ids[k] in Name)) { Err[Name[Ids[k]]]++; if (Name[Ids[k]] == "Bash") s_err++ }
+        # tool_result error attribution — nearest-id by byte offset (per the waste
+        # scan): field order varies and "is_error" may be omitted when false, so
+        # positional k-th-to-k-th pairing misaligns.
+        nid = 0; ner = 0; off = 0; line = $0
+        while (match(line, /"tool_use_id":"[^"]*"/)) { Ids[++nid] = substr(line, RSTART + 15, RLENGTH - 16); IdPos[nid] = off + RSTART; off += RSTART + RLENGTH - 1; line = substr(line, RSTART + RLENGTH) }
+        off = 0; line = $0
+        while (match(line, /"is_error":true/)) { ErrPos[++ner] = off + RSTART; off += RSTART + RLENGTH - 1; line = substr(line, RSTART + RLENGTH) }
+        for (k = 1; k <= ner; k++) {
+          bestd = -1; besti = 0
+          for (j = 1; j <= nid; j++) { dd = ErrPos[k] - IdPos[j]; if (dd < 0) dd = -dd; if (bestd < 0 || dd < bestd) { bestd = dd; besti = j } }
+          if (besti && (Ids[besti] in Name)) { Err[Name[Ids[besti]]]++; if (Name[Ids[besti]] == "Bash") s_err++ }
+        }
       }
       END {
         endsession()                                       # finalize the last session
+        if (unparsed > 0)
+          printf "SCAN-DEGRADED\tretro\t%d of %d tool_use block(s) unparseable — behavioral counts are an undercount\n", unparsed, attempts + 0
         printf "RETRO-PLAN\t%d\t%d\n", plan_n + 0, nsess + 0
         # THRASH: heavily re-edited files. Sort desc; surface those >= 5 edits.
         for (a = 1; a <= nek; a++) for (b = a + 1; b <= nek; b++)
@@ -2065,5 +2137,8 @@ esac
 # trailing pipeline returned non-zero). Without this, those incidental statuses
 # leak out as the script's exit code, and a caller that runs the auditor under a
 # tool wrapper sees a spurious "Error: Exit code 1" despite a complete audit.
-# Hard usage errors above exit 1 directly, before reaching here.
+# Hard usage errors above exit 1 directly, before reaching here. This exit-0 is
+# NOT a license to fail silently: a scan that could not read its own input says
+# so in-band with a SCAN-DEGRADED row (see waste/retro), so a clean report and a
+# degraded one are never indistinguishable.
 exit 0

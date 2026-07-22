@@ -108,6 +108,37 @@ assert_contains "$W" $'SKILL-UNUSED\tdeadskill\t'"$repo/.claude/skills/deadskill
 assert_not_contains "$(printf '%s\n' "$W" | grep '^TOOL-USE')" "key=" \
   "TOOL-USE rows are evidence, not recommendations — no key"
 
+# ── key-order tolerance + the SCAN-DEGRADED canary ────────────
+# A writer that reorders block keys must still be counted; a block whose id/name
+# cannot be found must degrade VISIBLY, never read as low usage.
+assert_not_contains "$W" "SCAN-DEGRADED" "a clean transcript emits no SCAN-DEGRADED row"
+sb3="$(make_sandbox)"; r3="$sb3/r3"; mkdir -p "$r3"
+key3="$(printf '%s' "$r3" | sed 's/[^A-Za-z0-9]/-/g')"
+tdir3="$sb3/home/.claude/projects/$key3"; mkdir -p "$tdir3"
+cat > "$tdir3/sess.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"name":"Grep","type":"tool_use","id":"toolu_r1","input":{"pattern":"x"}}]}}
+{"type":"user","message":{"content":[{"tool_use_id":"toolu_r1","type":"tool_result","content":"ok"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","opaque":"a serializer this parser has never seen"}]}}
+EOF
+R="$(HOME="$sb3/home" "$AU" waste --repo "$r3")"
+assert_contains "$R" $'TOOL-USE\tGrep\t1\t0' "a reordered tool_use block (name before type/id) is still counted"
+assert_contains "$R" $'SCAN-DEGRADED\twaste\t1 of 2' "an unparseable tool_use block surfaces SCAN-DEGRADED, not a silent zero"
+
+# ── omitted is_error:false must not misalign error attribution ──
+# Two results in one line: the FIRST omits is_error entirely (common when false),
+# the SECOND is an error. Positional k-th-to-k-th pairing would charge the error
+# to the first tool; nearest-offset attribution charges the right one.
+sb4="$(make_sandbox)"; r4="$sb4/r4"; mkdir -p "$r4"
+key4="$(printf '%s' "$r4" | sed 's/[^A-Za-z0-9]/-/g')"
+tdir4="$sb4/home/.claude/projects/$key4"; mkdir -p "$tdir4"
+cat > "$tdir4/sess.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_e1","name":"Read","input":{}},{"type":"tool_use","id":"toolu_e2","name":"Bash","input":{}}]}}
+{"type":"user","message":{"content":[{"tool_use_id":"toolu_e1","type":"tool_result","content":"ok"},{"tool_use_id":"toolu_e2","type":"tool_result","content":"boom","is_error":true}]}}
+EOF
+E="$(HOME="$sb4/home" "$AU" waste --repo "$r4")"
+assert_contains "$E" $'TOOL-USE\tBash\t1\t1' "the error lands on the erroring tool despite an omitted is_error:false before it"
+assert_contains "$E" $'TOOL-USE\tRead\t1\t0' "the clean tool is not charged the neighbor's error"
+
 # Exit-code hygiene: success paths exit 0.
 HOME="$sb/home" "$AU" waste --repo "$repo" >/dev/null 2>&1; rc=$?
 assert_exit 0 "$rc" "waste exits 0 on success"

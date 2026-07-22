@@ -61,10 +61,11 @@ mkdir -p "$repo/.githooks"; printf '#!/bin/sh\n' > "$repo/.githooks/pre-commit"
 assert_contains "$(HOME="$sb" "$AU" rails --repo "$repo")" $'RAIL\tprecommit-gate\tpresent\t.githooks/pre-commit' \
   "a committed .githooks/pre-commit → precommit-gate present"
 
-# ── a ratchet signature in the gate script → test-ratchet present ──
+# ── a ratchet signature in the gate script → test-ratchet likely-present ──
+# (word-match evidence only — the status must not claim more than the grep saw)
 printf '#!/bin/sh\n# RATCHET_OVERRIDE escape\n' > "$repo/.githooks/pre-commit"
-assert_contains "$(HOME="$sb" "$AU" rails --repo "$repo")" $'RAIL\ttest-ratchet\tpresent' \
-  "a gate carrying a ratchet signature → test-ratchet present"
+assert_contains "$(HOME="$sb" "$AU" rails --repo "$repo")" $'RAIL\ttest-ratchet\tlikely-present' \
+  "a gate carrying a ratchet signature → test-ratchet likely-present (word-match)"
 
 # ── PreToolUse gate hook (no git hook) → precommit-gate present ──
 sb2="$(make_sandbox)"; r2="$sb2/r"; _mkrepo "$r2"; mkdir -p "$r2/.claude"

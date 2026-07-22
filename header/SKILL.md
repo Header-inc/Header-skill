@@ -1,6 +1,6 @@
 ---
 name: header
-version: 0.40.0
+version: 0.41.0
 description: "Audit and optimize the AI coding agent's own setup — CLAUDE.md, model choice, dependencies, settings — for prompt-config debt and supply-chain risk, enriched by the latest agentic-coding briefing for your stack. '/header wrapup' (or 'compound') captures the session's learnings into committed .claude/memory/. Public access needs no auth; an API key unlocks custom, codebase-tuned briefings."
 when_to_use: "Use to audit and improve the agent's own setup. Triggers: audit, audit my setup or harness, optimize codebase, reduce token cost, supply-chain risk, dependency or model upgrade, CLAUDE.md or prompt debt, add guardrails / a pre-commit gate / test ratchet, compounding memory / capture learnings, latest best practices, what's new in agents/MCP/coding tools. Runs on /header or /header-audit. '/header wrapup' (or 'compound') at session end reviews the session and writes its pitfalls/learnings into committed .claude/memory/ — triggers: wrap up, capture learnings, what did we learn, note the pitfalls, remember this for next time. Pass a topic name/UUID/briefing URL to swap the enrichment topic. '/header fable-5' (or 'adopt' / 'opus-4.8') renders the engine-adoption card — a grounded 'should you move your harness to this model?' answer that hands off to header-experiment mine --adopt."
 argument-hint: "[topic-name-or-uuid-or-briefing-url]"
@@ -137,112 +137,11 @@ The echoed `DEFAULT_TOPIC` / `LANGUAGE` / `STALENESS_DAYS` already fold in **env
 
 ## Staying up to date
 
-Driven by the preamble's `UPDATE_CHECK` line. **This is the first thing handled after the preamble — before first-run onboarding and before the audit** (an out-of-date skill may not work against the API, so resolve the update before doing anything else). If there was no `UPDATE_CHECK` line, skip this section. Both branches use `<HEADER_BIN>`.
-
-### UPDATE_REQUIRED — non-optional
-
-`UPDATE_CHECK: UPDATE_REQUIRED <old> <min>` means the installed skill is older than the minimum the Header API still supports; calls may fail until it's updated.
-
-- **Interactive**: tell the user plainly and offer to update now → **Run the update**. If they decline, warn that the audit may fail, then continue.
-- **Non-interactive**: print one warning line ("Header skill v{old} is below the supported minimum v{min} — update soon") and continue. Never block a scheduled run.
-
-### UPDATE_AVAILABLE — optional
-
-`UPDATE_CHECK: UPDATE_AVAILABLE <old> <new>`. Skip entirely if `INTERACTIVE: no`.
-
-If `<HEADER_BIN> get auto_update` returns `true`: skip the prompt, say "Updating the Header skill v{old} → v{new}…", and go to **Run the update**.
-
-Otherwise ask (`AskUserQuestion` on Claude Code; numbered plain text elsewhere):
-
-> Header skill v{new} is available (you're on v{old}). Update now?
->
-> 1. **Yes, update now** (recommended)
-> 2. Always keep me up to date
-> 3. Not now
-> 4. Never ask again
-
-- **Yes** → **Run the update**.
-- **Always** → `<HEADER_BIN> set auto_update true`, then **Run the update**.
-- **Not now** → write an escalating snooze and continue:
-
-```bash
-_HH="${HEADER_HOME:-$HOME/.header}"; _NEW="<new>"; _LVL=1
-if [ -f "$_HH/update-snoozed" ]; then
-  read -r _v _l _ < "$_HH/update-snoozed" 2>/dev/null || true
-  if [ "${_v:-}" = "$_NEW" ]; then
-    case "${_l:-}" in [0-9]*) _LVL=$((_l + 1)); [ "$_LVL" -gt 3 ] && _LVL=3 ;; esac
-  fi
-fi
-printf '%s %s %s\n' "$_NEW" "$_LVL" "$(date +%s)" > "$_HH/update-snoozed"
-```
-
-- **Never ask again** → `<HEADER_BIN> set update_check false`; mention they can re-enable with `header-config set update_check true`.
-
-### Run the update
-
-1. Read "what's new" from the cached release info:
-
-```bash
-cat "${HEADER_HOME:-$HOME/.header}/version-info.json" 2>/dev/null
-```
-
-2. Re-run the installer — fetches the latest, swaps the install atomically, rolls back on failure:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Header-inc/Header-skill/main/install.sh | sh
-```
-
-(Working from a git clone? `git pull --ff-only && ./install.sh` instead.)
-
-3. Clear the update cache:
-
-```bash
-rm -f "${HEADER_HOME:-$HOME/.header}/last-update-check" "${HEADER_HOME:-$HOME/.header}/update-snoozed"
-```
-
-4. Tell the user "Updated to v{new}" plus the `message` (and `notes_url` if present), then continue with onboarding and the audit. If the installer reported a failure it restored the previous version — say so and suggest retrying.
-
-The update takes effect on the **next** session — the current session keeps the already-loaded `SKILL.md` in context until then.
+If the preamble emitted an `UPDATE_CHECK` line, **read `reference/update.md` now and follow it** — before onboarding and before the audit (an out-of-date skill may not work against the API). In brief: `UPDATE_REQUIRED` warns plainly (offer the update when interactive; never block a scheduled run); `UPDATE_AVAILABLE` asks once when interactive, honoring `auto_update` and an escalating snooze. No `UPDATE_CHECK` line → skip this section and do not load the reference.
 
 ## First-run onboarding
 
-Runs **only with `INTERACTIVE: yes`**, and **only after the update check above is resolved** (handle "Staying up to date" first). On a scheduled / non-interactive run (`INTERACTIVE: no`), skip this section — print nothing, ask nothing.
-
-**Claude Code only:** the choice below uses the `AskUserQuestion` tool. Other harnesses present the same options as a numbered list and ask the user to reply with a number.
-
-### Welcome — before the audit
-
-If `WELCOME_SEEN: no`, print this once, then continue:
-
-> 👋 **Header** — I optimize AI coding agents. Each run I audit your harness (`CLAUDE.md`, model, dependencies) for prompt-config debt and supply-chain gaps, and check it against what's new in agentic coding. No account needed to start.
-
-```bash
-touch "${HEADER_HOME:-$HOME/.header}/.welcome-seen"
-```
-
-### Language — before the audit
-
-If `LANGUAGE: English` (the built-in default) **and** `LANGUAGE_PROMPTED: no`, ask **once** which language to render output in:
-
-> **Which language should output be rendered in?**
->
-> Briefing content stays English on the wire; the agent translates the presentation for you. Translation quality varies by language; proper nouns, code identifiers, and URLs stay verbatim.
-
-Options (label English as recommended):
-
-1. **English** — recommended, no translation.
-2. **Spanish** — agent translates the presentation.
-3. **Turkish** — agent translates the presentation.
-4. **Other** — ask the user which language to use.
-
-Persist the choice and touch the marker (`<HEADER_BIN>` is the preamble's echoed path):
-
-```bash
-<HEADER_BIN> set language "Chosen"
-touch "${HEADER_HOME:-$HOME/.header}/.language-prompted"
-```
-
-Replace `Chosen` with the user's pick. Persisting `English` explicitly is harmless. Always touch the marker so the prompt never fires again. Skip the prompt entirely if `INTERACTIVE: no` or `LANGUAGE_PROMPTED: yes`.
+Runs **only with `INTERACTIVE: yes`**, and only after the update check above is resolved. If `WELCOME_SEEN: no` or `LANGUAGE_PROMPTED: no`, **read `reference/onboarding.md` and follow it** (a one-time welcome line, then a one-time output-language choice, each persisted via a marker so it never re-fires). Both markers already seen, or `INTERACTIVE: no` → skip this section and do not load the reference — print nothing, ask nothing.
 
 ## Configuration
 
@@ -339,7 +238,7 @@ Local, read-only — nothing leaves the machine. Run **all nine** scans. `<AUDIT
 
 **Briefing-supplied patterns (run before `harness`).** The 8 prompt-debt patterns are built in, but the briefing can ship new ones without a skill release. If the fetched briefing names additional cargo-cult / debt phrases (a `debt_patterns` field, or patterns called out in the `summary`), write them to `${HEADER_HOME:-$HOME/.header}/patterns.tsv` *before* running `harness` — one `id<TAB>regex<TAB>why` per line — and the scan picks them up as `HIT`s with your ids. **Proven rows:** when the briefing carries cross-customer evidence for a pattern (a measured effect from the proven-changes library), write a 6-field row instead — `id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` — and `harness` re-emits the evidence as a `PROVEN` line (a proven row may reuse a built-in id to attach evidence to it; the scan de-duplicates by id, first wins). Keep regexes conservative (`grep -iE`); malformed lines (not exactly 3 or 6 tab fields, or a non-integer `n_repos`) are skipped. This is how the distribution wedge feeds new hypotheses — and proven library results — into the deterministic scanner.
 
-What the scans emit — and how to read each line — is documented under **"What the audit scans"** below. Capture the output and the line types (`FILE`, `IMPORT`, `NESTED`, `ONDEMAND`, `MODEL`, `MODEL-STALE`, `MODEL-UPGRADE`, `HIT`, `STALE-REF`, `HOOK`, `SKILL`, `SECURITY`, `ECOSYSTEM`, `TOOL`, `GATE`, `COST-SCOPE`, `COST-INPUT`, `COST-HARNESS`, `COST-NOTE`, `SPEND`, `ROUTE-CANDIDATE`, `WASTE-SCOPE`, `WASTE-INPUT`, `TOOL-USE`, `MCP-SERVER`, `MCP-UNUSED`, `SKILL-USE`, `SKILL-UNUSED`, `ERROR-RATE`, `COMPACTIONS`, `SKILL-TAX`, `CONTEXT-TAX`, `RETRO-SCOPE`, `RETRO-INPUT`, `RETRO-WINDOW`, `RETRO-HARNESS`, `RETRO-THRASH`, `RETRO-FAILS`, `RETRO-GIT`, `RETRO-SHIP`, `RETRO-PEAK`, `RETRO-PLAN`, `RETRO-CORRECTION`, `RETRO-CORR`, `RETRO-GAP`, `RETRO-CAP`, `RETRO-COCHANGE`, `RETRO-DRIFT`, `DRIFT-ENV`, `PIPELINE`, `ROUNDTRIP`, `SCHEMA-LAX`, `RAIL-INERT`, `SILENCE-SCOPE`, `ENV-UNDECLARED`, `SWALLOW`, `GRADE`, `GRADE-AXIS`, `GRADE-LOCAL`, `GRADE-AXIS-LOCAL`); you'll join them with the briefing in the next step. Lines that can become recommendations end with a **`key=<canonical-key>`** field — the pre-minted recommendation-ledger key. Use it verbatim; never invent a different one (see "Recommendation ledger").
+Capture the scans' output. Every line type it can emit — fields, disposition (`[Apply now]` / `[Apply with review]` / `[Experiment]`), grouping rules, and grade semantics — is documented in **`reference/audit-output.md`**: **read that file before curating findings in Step 4.** Two contracts to honor even before reading it: lines that can become recommendations end with a **`key=<canonical-key>`** field — use it verbatim as the recommendation-ledger key, never invent one (see "Recommendation ledger") — and a `SCAN-DEGRADED` row means that scan could not fully read its input, so its counts are an undercount: say so, and never present a degraded scan as a clean one.
 
 ### Step 4 — Cross-reference and present
 
@@ -585,171 +484,9 @@ Telemetry stays off until the user opts in here; they can change it any time wit
 
 ## What the audit scans
 
-`bin/header-audit` is a deterministic, read-only scanner. The audit-led flow above calls it; this section documents the line types it emits so you can interpret them.
+`bin/header-audit` is a deterministic, read-only scanner behind the flow above — one subcommand per axis: `harness` (prompt-config debt, model staleness, hooks, Bash posture, context tax) · `deps` (ecosystems + install-cooldown gate) · `cost` / `waste` / `retro` (transcript-mined: measured spend, pay-for-vs-use accounting, behavioral coaching) · `rails` (determinism guardrails + inert machinery) · `drift` (invariant coverage over a detected value pipeline) · `silence` (undeclared config vars, swallowed errors) · `grade` (the two composite setup grades).
 
-**Canonical ledger keys (`key=`).** Any line that can become a recommendation ends with a final tab field `key=<canonical-key>`, derived deterministically from the line's own fields — `gate-<eco>` on an absent `GATE`, `rail-<name>` on an absent `RAIL`, `delete-<pattern-id>` on a `HIT`, `trim-<file>` on `FILE`/`NESTED`/`ONDEMAND`, `migrate-`/`adopt-<model>` on `MODEL-STALE`/`MODEL-UPGRADE`, `route-<model>` on `ROUTE-CANDIDATE`, `waste-mcp-<server>`/`waste-skill-<name>` on the unused rows, `stale-ref-<ref>`, `bash-allowlist`, `hook-<event>-<cmd>`, `review-skill-<name>`, `error-rate-<tool>`, `skill-context-tax-<scope>` / `registry-context-tax-<scope>` (scope = `repo`|`user`). Evidence/context lines (`IMPORT`, `MODEL`, `SPEND`, `TOOL-USE`, `RAIL-ENV`, present/`n/a` `GATE` and `RAIL` rows, …) carry none. The flow uses an emitted key verbatim as the recommendation-ledger key — see "Recommendation ledger".
-
-### `header-audit harness`
-
-The premise — *"prompts are technical debt too"*: harness instructions are written for a model and a moment, and they rot silently (workarounds for weaknesses newer models fixed, format-nagging, role puffery, all loaded every turn). Output lines (tab-separated):
-
-- `FILE <path> <bytes> <est_tokens>` — every always-loaded harness file found (`CLAUDE.md`, `AGENTS.md`, settings, MCP config, editor rules). `est_tokens` is `bytes/4`. Sum these — that cost is paid on **every turn**.
-- `IMPORT <parent> <imported-path>` — an `@import` edge. Claude Code (and AGENTS.md) load an `@path` line's target inline, every turn, so the auditor follows imports and emits the imported file as its own `FILE` row. **Include imported files in the always-loaded sum** — the previous scan undercounted by ignoring them.
-- `NESTED <path> <bytes> <est_tokens>` — a subdir `CLAUDE.md`/`AGENTS.md`. Loaded **on demand** when the agent works in that subtree, *not* every turn — so count it apart from the always-loaded total (it still rots; flag debt the same way).
-- `ONDEMAND <path> <bytes> <est_tokens>` — a slash-command (`.claude/commands/*.md`) or subagent (`.claude/agents/*.md`). Its **body loads only when the command/agent is invoked**, never every turn — so it is **not** an always-loaded file: never add `<est_tokens>` to the per-turn sum (counting these bodies as always-loaded was a real over-count that could pin the grade to F on a repo with many commands/agents). It is still scanned for prompt-debt `HIT`s and reported for trimming. The genuine per-turn cost of these files is only their registry frontmatter — the `CONTEXT-TAX registry` row.
-- `SKILL-TAX <name> <scope> <bytes> <est_tokens>` — one row per installed skill (scope `repo`|`user`); its frontmatter (name + description) is loaded each session, used or not. Names the heavy ones.
-- `CONTEXT-TAX <kind> <scope> <count> <bytes> <est_tokens>` — the aggregate always-loaded **frontmatter tax** of on-demand things, split two ways so the two scorecards stay scope-clean: `kind` is `skills` or `registry` (slash-commands + subagents), `scope` is `repo` or `user`. Their **bodies** are on-demand (`ONDEMAND`) — this frontmatter is their *only* per-turn cost. **`repo` scope → the 📦 project context row; `user` scope → the 💻 local context row.** Emitted here in `harness` (static config — shows on a fresh clone, transcript-independent). **Never graded, never folded into the `FILE` per-turn sum.**
-- `MODEL <value> <source>` — the model the harness runs, plus where it came from: `project` = pinned in committed `.claude/settings.json` (ships with the repo); `local` = a `settings.local.json` override or the most recent primary model in the user's transcripts (`~/.claude/projects`). So `MODEL` / `MODEL-STALE` / `MODEL-UPGRADE` fire even when nothing is pinned, and `grade` uses the source to put the model axis on the **project** grade (repo-pinned) or the **local** grade (what you run).
-- `MODEL-STALE <value> <why>` — the model id names a **superseded tier** (Claude 3.x/2.x/instant; early Opus 4.0/4.1). Pure hypothesis-generation: cross-reference the briefing for the current recommended tier and surface a model-migration `[Experiment]`. Conservative by design — current ids aren't flagged.
-- `MODEL-UPGRADE <value> <recommended> <why>` — a newer model has shipped above the current engine, **priced honestly**: pre-4.8 Opus tiers get the *same-price* move (Opus 4.5/4.6/4.7 → Opus 4.8); Opus 4.8 gets the tier above (→ Fable 5, **2× token price** — the `<why>` says so). An **opportunity, not debt** (distinct from `MODEL-STALE`): offer the **engine-adoption card** (`/header fable-5` / `/header opus-4.8`, matching the recommended model) for the grounded case + caveats, then `header-experiment mine --adopt` to prove it on the repo. Conservative — never fires on the top tier (Fable 5) or a superseded tier.
-- `HIT <path> <lineno> <pattern_id> <excerpt>` — a known cargo-cult pattern (built-in or briefing-supplied). Run `<AUDIT> patterns` to list the ids and why each is debt.
-- `PROVEN <pattern_id> <effect> <n_repos> <ci>` — cross-customer library evidence for a pattern (from a 6-field `patterns.tsv` row). When a `HIT`'s pattern id has a `PROVEN` line, **cite it with the finding** — "proven: median <effect> across <n_repos> repos (CI <ci>)" — and treat the deletion as `[Apply with review]` with the library as the evidence. Don't scaffold a local experiment to re-prove a change the library already measured at scale; that's the whole point of pooling.
-- `STALE-REF <path> <lineno> <ref> <why>` — the harness names a path/script or `@import`s a file that **doesn't exist** (moved, renamed, deleted). High-trust, low-risk: fix the reference or delete the dead instruction — usually `[Apply with review]`. (Deterministic and conservative — only path-shaped backtick tokens and unresolved imports; documentation placeholders like `path/to/x` are skipped.)
-- `HOOK <event> <command-excerpt> <file>` — a shell command wired to an agent event (`PreToolUse`, `Stop`, …) in Claude Code settings. The **biggest unguarded execution + supply-chain surface**, and one the Bash-posture check is blind to (a hook runs regardless of the Bash allow/deny list). Surface any unexpected or opaque hook command as a security finding; an attacker who can write settings owns the agent.
-- `SKILL <name> <path> <has-bin> <scope>` — an installed skill (`scope` = `repo` or `user`). Skills carry their own instructions and, when `has-bin yes`, executable scripts — a supply-chain surface (cf. `/cso`'s skill-supply-chain scan). Header is itself a skill, so this is dogfood-credible. Flag skills you don't recognize, especially user-scope ones with bin scripts.
-- `SECURITY bash <level> <file>` (+ `SECURITY-DETAIL allow|deny <pattern>`) — Bash-tool permission posture from Claude Code settings:
-  - `bypass` → **no permission gating** (`defaultMode: bypassPermissions`). Highest risk; if the agent can reach any production asset, recommend a command allow-list.
-  - `denylist` → blacklist, which is bypassable (an agent can script around a blocked command) — recommend an allow-list.
-  - `allowlist` → whitelist-leaning; affirm it, suggest tightening only if gaps.
-  - **no `SECURITY` line** → no explicit policy (interactive prompts only). Fine for local dev; recommend an allow-list anywhere the agent reaches production.
-
-Curate the hits — don't surface them blindly. When `MODEL` is known, cross-reference its model card / release notes to confirm the pattern is **still** debt on that model.
-
-**Briefing-supplied patterns.** Beyond the built-ins, `header-audit` appends extra patterns from `${HEADER_HOME:-$HOME/.header}/patterns.tsv` (override with `HEADER_PATTERNS_FILE`): `id<TAB>regex<TAB>why` rows (hypotheses) or `id<TAB>regex<TAB>why<TAB>effect<TAB>n_repos<TAB>ci` rows (**proven** — the cross-customer library has measured the change), `#` comments and blanks ignored, anything that isn't exactly 3 or 6 tab fields skipped, ids de-duplicated (first wins, so built-ins keep their regex). Writing the briefing's named debt patterns there (Step 3) lets new hypotheses ship without a skill release; `<AUDIT> patterns` lists them — annotating proven ids with their library evidence — and notes the source file.
-
-### `header-audit deps`
-
-Output lines:
-
-- `ECOSYSTEM <name> <manifest>` — detected ecosystems (npm is also detected one directory level deep, e.g. `frontend/package.json` in a monorepo).
-- `TOOL <name> <version|-> <ok|too-old|absent>` — package-manager version vs. the minimum that honors a cooldown gate (npm ≥ 11.10, pip ≥ 26.1). Emitted only for detected ecosystems.
-- `GATE <name> <present|absent|n/a> <path|->` — whether an install-cooldown / `min-release-age` configuration is in place. **`n/a` means the repo doesn't use that ecosystem — skip the row, exactly like the rails scan's `n/a`**; never recommend an npm/pip gate to a repo that installs through neither.
-
-Surface:
-
-- **Supply-chain cooldown.** `GATE npm absent` or `GATE pip absent` (never `n/a`) → recommend a `min-release-age` / `--uploaded-prior-to` gate so freshly-compromised releases (the chalk/debug, eslint-config-prettier class) are blocked until they're caught. This matters most where the install runs with secrets (CI runners). Get the exact snippet:
-
-  ```bash
-  <AUDIT> gate npm 7      # prints .npmrc content (min-release-age=7)
-  <AUDIT> gate pip 7      # prints pip cooldown guidance (--uploaded-prior-to P7D)
-  ```
-
-  `TOOL npm too-old` / `TOOL pip too-old` → the gate is **silently ignored** until the tool is bumped locally **and in CI**.
-- **Outdated / vulnerable deps.** Run the ecosystem's own tools (`npm outdated`, `npm audit`, `pip list --outdated`). Security patches → `[Apply now]`. Minor / patch upgrades with clean changelogs → `[Apply with review]` (one sanity replicate if you're nervous). Major upgrades where behavior may shift → `[Experiment]`.
-
-### `header-audit cost`
-
-Makes the audit **cost-aware** — it opens with where the tokens actually go. Defers all pricing to the sibling `header-cost` (single source of truth for the price table, cache-write split, and legacy-Opus handling); this scan just locates usage and reshapes `header-cost report --json` into audit rows.
-
-**Scoped to the current repo by default.** It reads only *this* repo's transcript dir — `$HOME/.claude/projects/<repo-key>`, where `<repo-key>` is the absolute git-root path with every non-alphanumeric char replaced by `-` (Claude Code's own convention; e.g. `/Users/me/forge` → `…/projects/-Users-me-forge`). If that dir doesn't exist it emits a `NOTE` and stops — it **never** silently aggregates every project (that over-attribution is exactly what produced a misleading cross-repo recommendation; HEA-435). `--all-projects` opts into the machine-wide aggregate (clearly labeled `global`); `--input F` prices an explicit usage JSONL; `--since T` scopes the window; `--harness NAME` overrides harness detection. Output lines:
-
-- `COST-SCOPE repo <repo>` — default: spend is this repo's transcripts only.
-- `COST-SCOPE global <dir> <n> project dirs` — `--all-projects`: machine-wide aggregate. Background context only, never a per-repo recommendation.
-- `COST-SCOPE input <path>` — `--input` was used.
-- `COST-INPUT <dir> <n> files` — the repo-scoped transcript dir actually priced.
-- `COST-HARNESS <harness> claude-transcripts` — whose usage this is. `header-cost` only parses Claude Code transcripts, so when `<harness>` is `codex` the spend is historical Claude usage, not the active engine.
-- `COST-NOTE harness-mismatch <why>` — active harness is Codex over Claude data; downgrade the recommendation (see Step 4).
-- `SPEND-TOTAL <usd> <calls> [<since>]` — total measured spend (API rates) over the window.
-- `SPEND <model> <calls> <usd> <share_pct>` — one per model, sorted by cost; `share_pct` is its slice of the total.
-- `ROUTE-CANDIDATE <model> <usd> <share_pct>` — the costliest model: the headline model-routing experiment candidate.
-- `NOTE cost <reason>` — no usage history for this repo, or `header-cost` not found. Degrade gracefully: skip the spend lead, mention it in one line (and that `--all-projects` exists).
-
-**Run the scope + harness sanity check before presenting any spend (Step 4).** Only when `COST-SCOPE` is `repo` and `COST-HARNESS` is `claude` should spend lead the scorecard and `ROUTE-CANDIDATE` become a ranked model-routing `[Experiment]`. A `global` scope or a Codex harness-mismatch is **background only**. When it does lead: surface the breakdown first (with `header-cost`'s price-source/freshness + billing-mode notes — see `reference/cost.md`), then convert `ROUTE-CANDIDATE` into the model-routing `[Experiment]`. It's a **candidate to prove, never a projected saving**: re-rating the same tokens on a cheaper model is a guess; the honest number comes from `header-experiment` (model-swap). This is the audit's most on-thesis upgrade — it grounds the model-migration hypothesis (the moat's first learning) in the user's real money.
-
-### `header-audit waste`
-
-Usage accounting over the same transcripts `cost` prices: what the harness **pays for vs what it uses**. Every row is deterministic evidence from the user's own sessions — no experiment needed, removing dead weight is the cleanest measured win. Scope discipline mirrors `cost` (this repo's transcripts by default; a missing dir is a `NOTE`; `--all-projects` is the explicit global opt-in; `--since T` windows it). Output lines:
-
-- `WASTE-SCOPE` / `WASTE-INPUT` — same semantics as the cost scan's scope rows. Apply the same sanity check before presenting: a `global` scope is background context, never a per-repo recommendation.
-- `TOOL-USE <tool> <calls> <errors>` — per-tool usage over the window, sorted by calls.
-- `MCP-SERVER <server> <calls> <errors>` — rollup of `mcp__<server>__*` calls per server.
-- `MCP-UNUSED <server> <config-file>` — configured in the repo's `.mcp.json`, **zero calls in the window**. Its tool schemas are loaded into context every turn for nothing — surface as `[Apply with review]`: remove the server entry (diff-faithful, trivially reversible). Ledger key `waste-mcp-<server>`.
-- `SKILL-USE <name> <n>` / `SKILL-UNUSED <name> <path>` — Skill invocations seen vs **repo-installed** skills never invoked here (`[Apply with review]`, ledger `waste-skill-<name>`). User-scope skills are never flagged unused — they serve other repos — but still appear in the harness `CONTEXT-TAX skills user` row.
-- `ERROR-RATE <tool> <errors> <calls> <pct>` — a tool failing ≥20% of ≥10 calls. A hypothesis generator, not a verdict: look at *what* keeps failing (a broken hook, a misconfigured MCP server, a permission gap) and surface the likely fix.
-- `COMPACTIONS <n> <files>` — context-pressure signal: the agent ran out of window <n> times across <files> session files.
-
-(The always-loaded `SKILL-TAX` / `CONTEXT-TAX` rows are emitted by **`harness`**, not `waste` — see the harness scan above.)
-
-### header-audit rails
-
-The **constructive** scan: where `harness`/`deps`/`cost` find debt to remove, `rails` finds guardrails to *add*. It detects whether the repo has the determinism rails that make AI-written code reliable, and reports the environment the delivery chooser needs. Read the line types here; the full pitch + install flow is in `reference/rails.md`. Output lines (tab-separated):
-
-- `RAIL-ENV <key> <value>` — context for adapting + delivering the scaffold:
-  - `ecosystem <python|npm|go|cargo|bundler|unknown>` — primary stack (precedence order), used to adapt the gate's checks. `ecosystem-all` lists every detected stack.
-  - `git-remote <yes|no>` — a configured remote means a shared repo, so team propagation matters (favor the PreToolUse delivery, or both).
-  - `hooks-path <value|unset>` — `core.hooksPath`.
-  - `claude <yes|no>` — a `.claude/` dir; the PreToolUse delivery is only available when `yes`.
-  - `tests <path|none>` — a detected test suite; `none` makes the ratchet `n/a`.
-- `RAIL-INERT <name> <path> <why>` — **machinery that is present and cannot fail**: a gate whose checks end in `|| true` (or `set +e`), CI with `continue-on-error: true`, a ratchet whose override is armed in the committed environment. **Strictly worse than an absent rail** — it earns rails credit while enforcing nothing, so everyone downstream believes they are covered. **Graded identically to absent.** Surface it *above* the absent-rails bundle and say plainly that the gate runs and cannot fail. (`TOOL npm too-old` from the `deps` scan is the same finding in the supply-chain axis — a cooldown gate that is present and silently ignored. Group them when both fire.) Key `inert-<name>`.
-- `RAIL <name> <present|absent|n/a> <evidence>` — one per rail (`precommit-gate`, `test-ratchet`, `compound-memory`, `roundtrip-invariant`). Detection is deliberately conservative — a false *present* (re-nagging a repo that already has a gate) is worse than a false *absent*. `n/a` means the rail doesn't apply (e.g. a test ratchet with no test suite, or `roundtrip-invariant` on a repo with no value pipeline) — skip it, don't surface it.
-
-**Scaffold printer (the `gate` analogue):**
-
-```bash
-<AUDIT> rail precommit-gate --ecosystem <eco> --delivery <git|pretooluse|both> [--ratchet on|off]
-<AUDIT> rail test-ratchet                 # the standalone ratchet block, to insert into an existing gate
-<AUDIT> rail compound-memory              # native /header wrapup pointer + a seed .claude/memory/MEMORY.md (standalone /compound skill optional)
-<AUDIT> rail roundtrip-invariant --ecosystem <eco>   # a stack-adapted round-trip test + the strict-parsing companion fix
-```
-
-Like `gate npm 7` prints the `.npmrc`, `rail <name>` prints the ready artifact — stack-adapted from the `header/scaffold/` templates, with the chosen delivery wiring appended. `precommit-gate` bundles the test ratchet by default (`--ratchet off` to omit); the correctness-critical bits (the `git commit` detector, the corrected skip/xfail regex) travel verbatim in the template. An unknown ecosystem still prints a usable gate with a `TODO` checks block. The SKILL.md flow writes the files; the bin only prints.
-
-### `header-audit drift`
-
-The **invariant-coverage** scan — the only one that asks whether the machinery covers what the *architecture* depends on, rather than whether machinery exists. Every other scan grades the presence of config; a repo can hold a pre-commit gate, a test ratchet, and a 100% green suite while silently dropping a field between hop 3 and hop 4 on every release.
-
-The target bug: a value pipeline built as a chain of hand-maintained hops — **wire schema → database column → import mapping → export query → serializer → UI**. A field must be added in *every* hop or none; nothing enforces that, so fields drift (a column with no wire field; a wire field the exporter hardcodes to a constant). It stays invisible for two compounding reasons — no test asserts that what goes in comes back out, **and** the schema silently strips unknown keys, so a config authored with the dropped field still parses clean and *looks* complete.
-
-Reads the **source** (not the harness files the `harness` scan greps). Deterministic, read-only, and deliberately high-precision: a repo with no pipeline emits a `NOTE` and nothing else, so it is never nagged and its grade never moves. Output lines:
-
-- `DRIFT-ENV <key> <value>` — `ecosystem` (adapts the scaffold) and `tests`.
-- `PIPELINE <kind> <n_files> <example>` — one per hop kind found: `schema` (pydantic / zod / marshmallow / protobuf / prisma / serde), `persist` (ORM models, migrations, DDL), `serde` (function *definitions* that move a value across a boundary — `to_dict`/`from_dict`, `serialize`/`deserialize`, `import_`/`export_`). A pipeline requires a `schema` hop **plus** a `persist` or `serde` hop — a schema alone is a type definition, not a pipeline.
-- `ROUNDTRIP <present|absent|n/a> <evidence>` — the headline. `present` when a test either names round-trip or structurally *is* one (a single test exercising both directions). `absent` = a field can be dropped in any hop and nothing in the repo will ever say so → `[Apply with review]`, key `rail-roundtrip-invariant` (the same finding also surfaces as a `RAIL` row; it is **one** recommendation, not two).
-- `SCHEMA-LAX <path> <lineno> <lib> <why>` — a schema whose parser silently accepts and discards unknown keys. This is what makes the drift *invisible* rather than merely present. `[Apply now]` — strict mode is one line (`extra="forbid"`, `.strict()`, `deny_unknown_fields`, `DisallowUnknownFields()`). Key `strict-schema-<file>`.
-
-### `header-audit silence`
-
-**The silence axis** — information discarded without a signal. This is the generalization of `SCHEMA-LAX`: a schema that silently strips unknown keys is *one instance* of a wider defect class — code that throws information away and says nothing. The defect is never that something broke; it's that **nothing told you**, so it surfaces later, somewhere expensive. Deterministic and read-only. Output lines:
-
-- `SILENCE-SCOPE repo <repo>` — scope marker.
-- `ENV-UNDECLARED <var> <path> <lineno> <why>` — the code reads a config var that **nothing declares**. The classic silent prod break: it's in your shell, so it works on your laptop and dies in the runner. `[Apply now]` — add it to `.env.example` (or whatever the repo declares config in). **Fires only when the repo already has declaration files** (`.env.example`, compose, `Dockerfile`, CI): no declaration discipline means no invariant to violate, and inventing one would be noise. Ambient vars (`HOME`/`PATH`/`CI`/…) and test-only reads are never findings. Key `declare-env-<var>`.
-- `SWALLOW <path> <lineno> <why>` — an exception handler with an **empty body**: the error happened and nothing recorded it. `[Apply with review]` — log it, re-raise it, or return an explicit fallback. Precision is the whole product decision here: a handler that logs, re-raises, or returns a fallback is a **decision**, not a swallow, and is never flagged; only a truly empty one counts. Anchors on the `except`/`catch` line. Key `swallow-<file>-<line>`.
-
-Present these **together with `SCHEMA-LAX`** when both fire — they are the same finding class ("what fails quietly here"), and grouping them is far stronger than three scattered entries. Not graded: the five scorecard axes are a stability contract, and these are findings rather than config posture.
-
-### `header-audit retro`
-
-The **coach** scan: behavioral mining of the user's OWN sessions — the signals the accounting scans (`cost`/`waste`) don't surface. Same repo-scope discipline (this repo's transcript dir by default; a missing dir is a `NOTE`; `--all-projects` is the global opt-in; `--since T` windows it; `--input F` reads an explicit JSONL). Read-only; nothing leaves. Output lines:
-
-- `RETRO-SCOPE` / `RETRO-INPUT` — same scope semantics as `cost`/`waste`; a `global` scope is background, never a per-repo claim.
-- `RETRO-WINDOW <n_sessions> [<since>]` — sessions in the window. `RETRO-HARNESS claude-transcripts` — the harness these read (see the harness note in the coach lead).
-- `RETRO-SHIP <commits> <loc+> <loc->` + `RETRO-PEAK <day> <commits>` — git activity over the window (repo scope, git repo only): the overview's "what shipped" + busiest day.
-- `RETRO-PLAN <n_planned> <n_sessions>` — sessions that opened plan mode → a low rate nudges plan-first. `RETRO-CORRECTION <n>` — user redirects → `feedback_` candidates for compound.
-- `RETRO-CORR plan-mode <avg_err_planned> <avg_err_unplanned>` — per-session correlation: avg Bash errors in plan vs no-plan sessions (emitted only with ≥2 of each). When `planned < unplanned`, it *quantifies* the plan-first nudge ("planned 0.2 vs 1.1 errors").
-- `RETRO-GAP <n_sessions> <total> key=cap-verify` — sessions with an edit + a "fixed/done" claim but **no test run** = a verification gap → a `pitfall` for compound; the `precommit-gate` rail addresses it.
-- `RETRO-THRASH <file> <edits>` — a file re-edited ≥5 times: a rework signal (the agent not landing it first pass), sorted desc. Heavy thrash on one file alongside a heavy always-loaded `FILE` + non-zero `COMPACTIONS` is the practical argument to split it.
-- `RETRO-FAILS <tool> <errors> <calls>` — failed-tool volume. **Bash errors are the gotcha/pitfall signal** — the count is precise (error attribution), but the *narrative* (what actually broke) you read from your own session context (a wrapup) or the recent transcript. 0 errors → a clean week; say so, don't invent gotchas to fill the section.
-- `RETRO-GIT <pattern> <count>` — git-workflow tells (`stash`, `branch-switch`, `worktree`, `reset-hard`, `force-push`). **Interpret, don't verdict** (à la `ERROR-RATE`): counts include git strings that appear in tool inputs (test fixtures, examples), so treat `reset-hard`/`force-push` as soft signals. The CAP derivations below key only off `stash`/`branch-switch`/`worktree` and precise error attribution.
-- `RETRO-COCHANGE <fileA> <fileB> <together> <commits> <pct>` / `RETRO-DRIFT <file> <expected-companion> <n_missing> <commits> key=cochange-<a>-<b>` — **co-change drift**, mined from git history alone (no knowledge of the stack). Files that almost always change together encode an invariant the repo never wrote down — *add the column → add the wire field → add the mapping*. `RETRO-DRIFT` names the commits that **broke** it: `<file>` changed `<n_missing>` times without `<expected-companion>`, which it otherwise moves with. This is the generalized shape of the hand-maintained-pipeline bug, and it is **counted, not inferred** — treat it as high-precision and lead the gotchas with it. Conservative by construction: bulk commits (>25 files) are dropped, a coupling needs ≥4 joint commits and ≥70% mutual co-change, and violations must be *exceptions* (≥75% directional) rather than the norm. When the pair sits in a pipeline the `drift` scan also flagged, it is the **same finding** — surface it once.
-- `RETRO-CAP <capability> <evidence> key=cap-<capability>` — the **derived** behavior→practice nudges, the ranked spine of the coach lead. Three, each emitted only when its threshold is met:
-  - `worktree` — ≥3 branch-juggling events (stash/switch) and **no** worktree use → recommend git worktrees.
-  - `guardrail` — ≥3 failed Bash calls → recommend the `precommit-gate` rail (cross-check `RAIL precommit-gate`; **affirm** it if already present).
-  - `compound` — ≥3 gotchas **and** no committed `.claude/memory/` → recommend `/header wrapup`.
-  Render only the caps that fired, in emission order (= order of demonstrated need). Each carries `key=cap-<name>` — use it verbatim in the ledger. A weak cap (low count) → rank it low and **say it's weak**; never hard-sell (the anti-upsell discipline that the engine-adoption upsell got wrong).
-
-### `header-audit grade`
-
-**TWO composite setup grades** — glanceable marks (e.g. `B+`) over the five scorecard axes, answering "how's my setup?" before the detail. The split is the point: **what you grade must be explicit.**
-
-- **📦 Project setup** grades the repo's **checked-in** agent config — `CLAUDE.md`, `AGENTS.md`, committed `.claude/settings.json`, `.claude/commands|agents`, `.mcp.json`, editor rules, the `.npmrc` cooldown gate, determinism rails. A property of the repo: it travels with the code, is reviewable in a PR, and grades **identically on any machine**. This is the headline (howsmyaicoding.com's "Setup grade B+").
-- **💻 Local harness** grades **your machine** — `~/.claude/CLAUDE.md` & `settings.json`, the `settings.local.json` override, the model *you* run (transcript/local), package-tool versions. Machine-dependent by design; reported alongside, **never folded into the project grade**.
-
-Re-runs `harness` + `deps` + `rails` internally (cheap, read-only) and **partitions each finding by scope** — a path under `~/.claude` (or a `settings.local.json`) is local, everything else under the repo is project; `MODEL` carries its own source. **Static-config only:** the transcript-mined scans (`cost` / `waste` / `retro`) are excluded, so the **project** grade is stable whether or not the repo has session history — and identical run-to-run, model-to-model, because it is **computed in the bin, never model-assigned**. Output lines:
-
-- `GRADE-AXIS <axis> <delta> <note>` / `GRADE <letter> <score> 100` — the **project** grade: per-axis deductions (five rows, fixed order: `context` / `model` / `security` / `deps` / `rails`) then the composite (start 100, deduct, clamp 0–100, map to an `A+`…`F` band). Render the **letter only** as the headline; the `<score>` stays in the line for the breakdown + tests.
-- `GRADE-AXIS-LOCAL <axis> <delta> <note>` / `GRADE-LOCAL <letter> <score> 100` — the **local harness** grade, same five axes and formulas applied to the local-scope findings. `rails` is always `n/a` here (a repo property). Collapse the whole local section to one line when it's clean (see the scorecard contract).
-
-**What each axis weighs** (a stability contract — same inputs always yield the same grade, so the bands/weights don't drift between runs): **context** = always-loaded tokens (tiered) + prompt-debt `HIT`s + `STALE-REF`s (project: repo files; local: `~/.claude`) · **model** = a `MODEL-STALE` superseded tier (a `MODEL-UPGRADE` *opportunity* is **not** penalized), graded on whichever scope owns the model (repo-pinned → project; the model you run → local) · **security** = a weak Bash posture (`bypass` / `denylist`; "no explicit policy" is fine and doesn't deduct), per scope's settings · **deps** = project docks an absent checked-in cooldown gate, local docks a package-tool too old to honor one (the machine-dependent half lives on the local grade — never the project one) · **rails** = absent determinism guardrails, weighed **light**; project-only. A clean, current, lean setup lands at `A`/`A+`; debt and risk pull it down.
+The full line-type catalog — every emitted row, its fields, and how to read it — is **`reference/audit-output.md`** (load-on-demand; Step 4 sends you there before curating findings). Cross-cutting contracts: recommendation-capable lines pre-mint their ledger `key=`; `SCAN-DEGRADED` rows mark a scan that could not fully read its input (undercount, never a clean report); `likely-present` statuses are word-match evidence and carry their caveat.
 
 ### Record findings
 
@@ -782,90 +519,10 @@ Both write to the repo's committed `.claude/memory/`, so a captured pitfall is
 one a *future* session — yours or a teammate's — won't re-hit. This is the
 compounding flywheel, adjacent to Header's own recommendation ledger.
 
-### The flow (pinned)
+### The flow
 
-1. **(`wrapup` only) Recap.** From your own session context, render 2–4 plain-
-   language lines: what the user set out to do, what actually shipped/changed,
-   and any notable rough patch. Then continue to capture.
+The pinned step-by-step flow — recap (`wrapup` only) → review for at most 3 learnings → locate/seed `.claude/memory/MEMORY.md` → de-duplicate → draft in the pinned format → **draft-then-ask** (one `AskUserQuestion`: team / just-me / show-first / skip) → write + index via Bash — is **`reference/wrapup.md`**. **Read that file when either command is invoked and follow it exactly**; never write to `.claude/memory/` without the ask step. When the audit's `compound-memory` rail is `absent`, it points here: recommend `/header wrapup` at session end (no separate skill), seeding the index per the reference.
 
-2. **Review the session for learnings.** Source is your own conversation context
-   — you lived this session. *(Run in a fresh session with no relevant context?
-   Fall back to the repo's most recent transcript under
-   `~/.claude/projects/<repo-key>/`.)* Pull **at most 3**, each in exactly one
-   category (the filename prefix):
-   - `feedback_` — a user correction or stated preference.
-   - `pattern_` — an approach that worked and should be repeated.
-   - `pitfall_` — something that broke, failed, or wasted time.
-   - `domain_` — a project fact discovered during the work.
-   Most sessions yield **0–2. Do not force it.** Nothing notable → print
-   `Compound: reviewed, nothing notable to capture` and stop. The review itself
-   is the work product. **Do not capture:** task status/progress, implementation
-   detail (→ code comments), anything already in `CLAUDE.md`/`AGENTS.md`, or
-   one-off debugging that won't recur.
-
-3. **Locate / seed the store.** Memory lives in `.claude/memory/` (committed). If
-   `.claude/memory/MEMORY.md` doesn't exist, seed it first (via Bash) with this
-   skeleton — it mirrors `scaffold/compound/MEMORY.md`:
-   ```
-   # Memory Index
-
-   Committed, compounding memory for this repo. Future sessions read this first.
-   Each entry is one file under `.claude/memory/`; `/header compound` adds them.
-
-   ## Feedback
-   ## Patterns
-   ## Pitfalls
-   ## Domain
-   ```
-
-4. **De-duplicate.** Read the existing `.claude/memory/MEMORY.md` + entry files.
-   A learning on the same topic as an existing entry → **update that file**, don't
-   create a near-duplicate.
-
-5. **Draft (don't write yet).** For each kept learning, draft a file at
-   `.claude/memory/{prefix}_{slug}.md` (`{slug}` = kebab-case of the topic, e.g.
-   `pitfall_git-from-repo-root.md`), 3–8 line body, in this **pinned** format:
-   ```markdown
-   ---
-   name: <short imperative name>
-   description: <one actionable line — starts with a verb or Never/Always; becomes the MEMORY.md index line>
-   type: feedback | pattern | pitfall | domain
-   date: <YYYY-MM-DD, from `date +%F`>
-   ---
-
-   <the learning, stated plainly>
-
-   **Context:** <when/why it matters — cite the moment it came from>
-   **Apply when:** <the specific condition a future session should recall this under>
-   ```
-
-6. **Draft-then-ask** *(locked: always ask before writing — a `header-config`
-   "just write, don't ask" opt-in comes later)*. Show a compact summary — one
-   bullet per draft, `{prefix}_{slug} — description` — then the line *"These live
-   in `.claude/memory/` (committed → teammates read them next session)."* Then
-   exactly **one** `AskUserQuestion`:
-   - **Question:** "Capture these N learning(s) to `.claude/memory/`?"
-   - **Options** (single-select; mark the **team** option *Recommended* when the
-     repo has a git remote, else the just-me option):
-     1. **Write + stage (team)** — write the files, `git add` them (committed
-        memory travels to teammates).
-     2. **Write, uncommitted (just me)** — write the files, no `git add`.
-     3. **Show me the full files first** — render the full drafts, then re-ask.
-     4. **Skip** — don't write; print `Compound: reviewed, chose not to capture`.
-   "Skip" ≠ "wrong" — the user may want them local-only, or not now.
-
-7. **Write + index** (Bash — the skill's only write path). For each confirmed
-   file: write it, then add its line `- [{prefix}_{slug}.md]({prefix}_{slug}.md) —
-   <description>` under the matching `## Section` in `.claude/memory/MEMORY.md`. If
-   the user chose **team**, `git add` the written files — do **not** commit unless
-   they ask. Close with one line: `Compound: captured N learning(s) — <slugs>`.
-
-### When the audit sends you here
-
-The `compound-memory` rail (when `absent`) points at this flow: the audit
-recommends running `/header wrapup` at session end rather than installing a
-separate skill. If the user takes it, seed `.claude/memory/MEMORY.md` (step 3) so
-the store is ready for the first capture.
 
 ## Engine-adoption card (`/header fable-5`)
 

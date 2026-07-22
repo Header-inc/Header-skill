@@ -100,7 +100,7 @@ assert_contains "$D1" "key=strict-schema-app-schema-py" "SCHEMA-LAX carries a pe
 # ── a round-trip test flips it to present ─────────────────────
 printf 'def test_roundtrip():\n    assert export_config(import_config({"a": 1})) == {"a": 1}\n' > "$p/tests/test_roundtrip.py"
 D2="$(HOME="$sb" "$AU" drift --repo "$p")"
-assert_contains "$D2" $'ROUNDTRIP\tpresent' "a test naming round-trip → present"
+assert_contains "$D2" $'ROUNDTRIP\tlikely-present' "a test naming round-trip → likely-present (word-match, honestly labeled)"
 assert_not_contains "$D2" "key=rail-roundtrip-invariant" "a present round-trip carries no ledger key (status only)"
 
 # ── strict mode clears SCHEMA-LAX ─────────────────────────────
@@ -122,7 +122,7 @@ printf 'from pydantic import BaseModel\n\nclass M(BaseModel):\n    a: int\n' > "
 printf 'def to_dict(m):\n    return {}\n\ndef from_dict(d):\n    return None\n' > "$p2/app/io.py"
 printf 'def test_both():\n    x = to_dict(1)\n    y = from_dict(x)\n    assert y == y\n' > "$p2/tests/test_io.py"
 D4="$(HOME="$sb" "$AU" drift --repo "$p2")"
-assert_contains "$D4" $'ROUNDTRIP\tpresent' "a test exercising to_dict AND from_dict is a round-trip test by structure"
+assert_contains "$D4" $'ROUNDTRIP\tlikely-present' "a test exercising to_dict AND from_dict is a structural round-trip candidate → likely-present"
 
 # ── zod / npm path ────────────────────────────────────────────
 z="$sb/zod"; _mkrepo "$z"; mkdir -p "$z/src"

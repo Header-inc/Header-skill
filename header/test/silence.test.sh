@@ -145,6 +145,25 @@ assert_not_contains "$W" $'SWALLOW\tapp/h.py\t22' "a handler that returns a FALL
 assert_eq "1" "$(printf '%s\n' "$W" | grep -c $'SWALLOW\tapp/h\.py')" "exactly ONE of the four python handlers is a swallow"
 assert_eq "1" "$(printf '%s\n' "$W" | grep -c $'SWALLOW\tapp/c\.ts')" "the logging catch on line 2 is not flagged"
 
+# ── multi-line empty catch — the common formatting ────────────
+# `catch (e) {` then only blank lines then `}` is the same swallow as `catch {}`
+# on one line; a comment inside the block is a DECISION and does not count.
+cat > "$w/app/m.ts" <<'EOF'
+try { go(); } catch (e) {
+}
+try { go(); } catch (e) {
+
+}
+try { go(); } catch (e) {
+  // deliberate: offline mode falls through
+}
+EOF
+M="$(HOME="$sb" "$AU" silence --repo "$w")"
+assert_contains "$M" $'SWALLOW\tapp/m.ts\t1' "multi-line empty catch (immediate close) → swallow"
+assert_contains "$M" $'SWALLOW\tapp/m.ts\t3' "multi-line empty catch (blank line inside) → swallow"
+assert_eq "2" "$(printf '%s\n' "$M" | grep -c $'SWALLOW\tapp/m\.ts')" \
+  "a catch containing only a comment is a decision, not a swallow"
+
 # ── exit codes: read-only emitters never leak an incidental status ──
 HOME="$sb" "$AU" silence --repo "$nd" >/dev/null 2>&1
 assert_eq "0" "$?" "silence with nothing to report exits 0"
