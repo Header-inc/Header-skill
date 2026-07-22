@@ -72,7 +72,9 @@ for base in $TARGETS; do
   cp -R "$SRC" "$staging"
   rm -rf "$staging/.git"
   chmod +x "$staging/bin/"* 2>/dev/null || true
-  [ -f "$staging/test/run.sh" ] && chmod +x "$staging/test/run.sh" 2>/dev/null || true
+  for _sh in run.sh ratchet.sh; do
+    [ -f "$staging/test/$_sh" ] && chmod +x "$staging/test/$_sh" 2>/dev/null || true
+  done
   if [ -d "$dest" ]; then
     backup="$dest.bak.$$"
     rm -rf "$backup"

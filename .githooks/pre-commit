@@ -4,4 +4,9 @@
 # Enable once per clone:   git config core.hooksPath .githooks
 # Bypass a single commit:  git commit --no-verify
 set -euo pipefail
-"$(git rev-parse --show-toplevel)/header/test/run.sh"
+_root="$(git rev-parse --show-toplevel)"
+"$_root/header/test/run.sh"
+# Ratchet: a green suite says nothing about tests deleted in the same commit.
+"$_root/header/test/ratchet.sh"
+# Release invariant: SKILL.md / VERSION / CHANGELOG.md move together.
+"$_root/.githooks/cochange.sh"

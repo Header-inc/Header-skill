@@ -3,6 +3,30 @@
 Notable changes to the Header skill. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); versions track the skill's `VERSION`.
 
+## 0.41.1 — the ratchet, and the release invariant the repo kept breaking
+
+Header's own audit ran against Header and named two findings; both are now closed in-repo.
+
+- **`rail-test-ratchet` — `header/test/ratchet.sh` (new) + a checked-in `header/test/RATCHET`
+  baseline.** A green suite proves the tests that *ran* passed; it says nothing about tests
+  deleted, renamed away, or commented out in the same commit. The ratchet compares suite and
+  assertion counts (counted statically at call sites, so no suite run is needed) against the
+  baseline and fails when either drops. It also fails when coverage *grows*, pointing at
+  `ratchet.sh --bump` — a baseline that silently falls behind is the same defect the
+  `RAIL-INERT` row exists to catch. Failures state what dropped, from what to what, and how
+  to accept it deliberately, rather than returning a bare exit code.
+
+- **`cochange-skill-md-version` — `.githooks/cochange.sh` (new).** `header/SKILL.md` and
+  `header/VERSION` moved together in 15 of 20 commits; `CHANGELOG.md` and `VERSION`, in 15
+  of 15. The five misses were the bug: a behavior change that ships without a version bump
+  is invisible to `bin/header-update-check` on every installed machine, so nobody pulls it.
+  The hook now fails a commit that stages `SKILL.md` without its companions, naming the
+  missing file. `git commit --no-verify` remains the deliberate exception.
+
+Both are wired into `.githooks/pre-commit`, which requires `git config core.hooksPath
+.githooks` in the clone. `install.sh` now marks `test/ratchet.sh` executable alongside
+`test/run.sh`.
+
 ## 0.41.0 — eating the dogfood: the auditor's own silence, and its own context tax
 
 An outside review turned Header's two loudest theses back on Header itself, and both hit.
